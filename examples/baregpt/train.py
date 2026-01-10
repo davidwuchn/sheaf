@@ -19,9 +19,9 @@ D_MODEL = 256
 N_LAYERS = 4
 N_HEADS = 4
 BATCH_SIZE = 32
-BLOCK_SIZE = 64
-EPOCHS = 700
-LEARNING_RATE = 0.25e-3
+BLOCK_SIZE = 128
+EPOCHS = 1000
+LEARNING_RATE = 1e-3
 
 WEIGHTS_PATH = os.path.join(current_dir, "out", "weights.pkl")
 
@@ -39,6 +39,8 @@ def load_or_train_params(shf, encoded_data, config):
         print(f"Loading weights from {WEIGHTS_PATH}...")
         with open(WEIGHTS_PATH, "rb") as f:
             params = pickle.load(f)
+
+        # params = run_training(shf, params, encoded_data, config)
         return jax.tree_util.tree_map(lambda x: jnp.array(x, dtype=jnp.float32), params)
 
     print("Weights not found. Initializing and training...")
@@ -51,6 +53,7 @@ def run_training(shf, params, encoded_data, config):
     # Adam states
     m = jax.tree_util.tree_map(jnp.zeros_like, params)
     v = jax.tree_util.tree_map(jnp.zeros_like, params)
+    t = jnp.array(0, dtype=jnp.int32)
     t = 0
 
     print(f"Starting training for {EPOCHS} epochs...")
@@ -86,7 +89,7 @@ def run_inference(
 
     for _ in range(length):
         # New short call: shf.generate_token
-        res = shf.generate_token(ids, params, config, key, 10, 0.8, trace="verbose")
+        res = shf.generate_token(ids, params, config, key, 10, 0.8, trace=trace)
         ids = jnp.roll(ids, -1).at[-1].set(int(res["next_id"]))
         key = res["key"]
         print(utils.decode([int(res["next_id"])], vocab), end="", flush=True)
@@ -112,10 +115,10 @@ def main():
     }
 
     params = load_or_train_params(shf, encoded_data, config)
-    # run_inference(shf, params, vocab, config)
+    run_inference(shf, params, vocab, config)
 
     # DEBUG - trace one token
-    run_inference(shf, params, vocab, config, length=1, prompt="ROMEO", trace=True)
+    # run_inference(shf, params, vocab, config, length=1, trace="normal")
 
 
 if __name__ == "__main__":
