@@ -119,6 +119,18 @@ class SheafErrorFormatter:
         error_type = type(error).__name__
         error_msg = str(error).lower()
 
+        # JAX TracerBoolConversionError - very common in JIT functions
+        if (
+            error_type == "TracerBoolConversionError"
+            or "boolean conversion of traced array" in error_msg
+        ):
+            return (
+                "Cannot use control flow (if/and/or) with traced values in JIT functions.\n"
+                "  = hint: Use 'where' instead of 'if' for differentiable branching:\n"
+                "         Replace: (if condition then-expr else-expr)\n"
+                "         With:    (where condition then-expr else-expr)"
+            )
+
         if error_type == "TypeError":
             if "not callable" in error_msg:
                 return "Make sure you're calling a function, not a value."
