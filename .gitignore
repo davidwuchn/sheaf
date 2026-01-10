@@ -29,7 +29,6 @@ bin/
 
 .*
 !.gitignore
-!.gitattributes
 
 *.jsonl
 *.log
