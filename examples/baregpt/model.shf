@@ -24,7 +24,7 @@
         emb-tensors (dict :token (* (random-normal (nth k_emb_split 0) (list V D)) 0.01)
                           :pos   (* (random-normal (nth k_emb_split 1) (list B D)) 0.01))
 
-        head-tensors (dict :w (* (xavier-init k_head (list D V)) 0.01)
+        head-tensors (dict :w (* (xavier-init k_head (list D V)))
                            :b (zeros (list V))))
 
     ;; Final params structure
@@ -120,7 +120,7 @@
     (list att_out att_probs)))
 
 
-(defn :jit mlp (x p)
+(defn mlp (x p)
   (with-params p
     (let (h (gelu (+ (@ x W1) b1)))
       (+ (@ h W2) b2))))
@@ -130,18 +130,18 @@
 (defn transformer-block-bad (x layer-p config)
   (let (ln1_x (layer-norm x (get layer-p :ln1) 1) ;; Wrong LN axis
         attn_out (first (multi-head-attention ln1_x layer-p config)))
-    (guard :no-nan attn_out)
+    ; (guard :no-nan attn_out)
     (let (x1 (+ x attn_out))
       (let (ln2_x1 (layer-norm x1 (get layer-p :ln2) 2)
             bad_input (* ln2_x1 100.0)) ;; Sabotage values
-        (guard :range [-10.0 10.0] bad_input)
+       ;  (guard :range [-10.0 10.0] bad_input)
         (let (mlp_out (mlp bad_input (get layer-p :mlp))
               x2 (+ x1 mlp_out))
-          (guard :shape [1 64 256] x2)
+         ; (guard :shape [1 64 256] x2)
           x2)))))
 
 
-(defn :jit transformer-block(x layer-p config)
+(defn transformer-block(x layer-p config)
   (let (;; Self-Attention
         ln1_x (layer-norm x (get layer-p :ln1) 2) ;; layernorm axis 2
         attn_out (first (multi-head-attention ln1_x layer-p config))
@@ -193,6 +193,7 @@
   (let (lr (get config :lr)
         loss-fn (lambda (p) (cross-entropy-loss (gpt-model inputs p config) targets))
         [loss grads] ((value-and-grad loss-fn) params)
+
         [new-params new-m new-v new-t] (adam-step params grads m v t lr 0.9 0.999 1e-8))
     ;; Return
     (dict :loss loss
@@ -208,7 +209,7 @@
         ;; Process last token
         vocab_size (static (get config :vocab_size))
         p-logits (last (reshape logits -1 vocab_size))
-        p-probs (if (!= temp 1.0)
+        p-probs (where (!= temp 1.0)
                     (softmax (/ p-logits temp) :axis -1)
                     (softmax p-logits :axis -1))
 
@@ -216,7 +217,7 @@
         [new-key subkey] (split key))
 
     (let (;; Sampling
-          next-id (if (and k (> k 0))
+          next-id (where (and k (> k 0))
                       (let ([top-p top-idx] (top_k p-probs (min k vocab_size)))
                         (get top-idx (choice subkey (len top-p) :p (normalize top-p))))
                       (choice subkey vocab_size :p p-probs)))
