@@ -1,3 +1,5 @@
+;; -*- mode: clojure -*-
+
 ;; A reference implementation of a generative Transformer in Sheaf.
 ;; Ported from BareGPT (https://github.com/dbrll/BareGPT)
 
