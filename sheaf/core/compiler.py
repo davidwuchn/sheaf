@@ -244,10 +244,24 @@ class Sheaf:
                     base_func = generated_func
 
                     def jitted_wrapper(*args, **kwargs):
+                        # Extract trace/log/scope kwargs BEFORE passing to jax.jit
+                        # These cannot be passed through JIT as they cause TracerBoolConversionError
+                        trace_kwarg = kwargs.pop("trace", False)
+                        kwargs.pop("log", None)  # Remove but ignore
+                        kwargs.pop("scope", None)  # Remove but ignore
+
+                        # Warn user if they try to trace a JIT function
+                        if trace_kwarg:
+                            print(
+                                f"Warning: Cannot trace JIT-compiled function '{name}'. Tracing disabled."
+                            )
+
                         new_args = list(args)
                         for idx in static_argnums:
                             if isinstance(new_args[idx], dict):
                                 new_args[idx] = HashableDict(new_args[idx])
+
+                        # Call JIT function WITHOUT trace kwargs
                         return jax.jit(base_func, static_argnums=tuple(static_argnums))(
                             *new_args, **kwargs
                         )
@@ -592,11 +606,6 @@ class Sheaf:
     def load(self, code, filename="<sheaf>"):
         # Store source code for better error messages
         set_source(code, filename)
-
-        # This needs to be done first
-        if "guard" in code:
-            shf_tracer.monitoring = True
-            shf_tracer.reset_ring_buffer()  # Clear previous context
 
         try:
             expressions = parse_full(code)  # Call global parser
