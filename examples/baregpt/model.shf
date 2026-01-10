@@ -1,0 +1,230 @@
+;; A reference implementation of a generative Transformer in Sheaf.
+;; Ported from BareGPT (https://github.com/dbrll/BareGPT)
+
+;; This file describes the model architecture
+
+(use optim)
+(use nn)
+
+
+(defn init-gpt-params (key config)
+  (let (;; Global config and keys
+        D (get config :d_model)
+        B (get config :block_size)
+        V (get config :vocab_size)
+        L (get config :n_layers)
+        keys (split key 4)
+        k_emb (nth keys 0)
+        k_layers (nth keys 1)
+        k_head (nth keys 2)
+        k_ln (nth keys 3)
+
+        ;; Sub-dictionaries preparation
+        k_emb_split (split k_emb 2)
+        emb-tensors (dict :token (* (random-normal (nth k_emb_split 0) (list V D)) 0.01)
+                          :pos   (* (random-normal (nth k_emb_split 1) (list B D)) 0.01))
+
+        head-tensors (dict :w (* (xavier-init k_head (list D V)) 0.01)
+                           :b (zeros (list V))))
+
+    ;; Final params structure
+    (dict
+      :emb      emb-tensors
+      :head     head-tensors
+      :final_ln (dict :gamma (ones (list 1 D))
+                      :beta  (zeros (list 1 D)))
+      :layers   (map (lambda (i)
+                       (let (k (nth (split k_layers L) i)
+                             k_attn (split k 4)
+                             k_mlp  (split k 2))
+                         (dict
+                           :attn (dict
+                                   :Wq (xavier-init (nth k_attn 0) (list D D))
+                                   :Wk (xavier-init (nth k_attn 1) (list D D))
+                                   :Wv (xavier-init (nth k_attn 2) (list D D))
+                                   :Wo (xavier-init (nth k_attn 3) (list D D)))
+                           :mlp (dict
+                                   :W1 (xavier-init (nth k_mlp 0) (list D (* 4 D)))
+                                   :b1 (zeros (list 1 (* 4 D)))
+                                   :W2 (xavier-init (nth k_mlp 1) (list (* 4 D) D))
+                                   :b2 (zeros (list 1 D)))
+                           :ln1 (dict :gamma (ones (list 1 D)) :beta (zeros (list 1 D)))
+                           :ln2 (dict :gamma (ones (list 1 D)) :beta (zeros (list 1 D))))))
+                     (range L)))))
+
+
+(defn :jit gpt-model (inputs params config)
+  (let (emb-tensors (get-in params [:emb :token])
+        pos-tensors (get-in params [:emb :pos])
+        T (get (shape inputs) -1)
+        D (static (get config :d_model)) ;; Explicitly get D for reshape
+
+        ;; Token embeddings [Batch, T, D]
+        tok_emb (get emb-tensors inputs)
+
+        ;; Position embeddings [T, D] -> [1, T, D]
+        ;; We force the shape to ensure correct broadcasting across Batch
+        pos_emb (reshape (get pos-tensors (range T)) (list 1 T D))
+
+        X (+ tok_emb pos_emb))
+
+    (let (hidden (reduce (lambda (h layer-p) (transformer-block h layer-p config))
+                         X
+                         (get params :layers)))
+
+      ;; Final head
+      (let (final-norm (layer-norm hidden (get-in params [:final_ln]) 2)
+            W-out (get-in params [:head :w])
+            b-out (get-in params [:head :b]))
+        (+ (@ final-norm W-out) b-out)))))
+
+
+(defn multi-head-attention (X layer-p config)
+  (let (;; shape extraction
+        T (get (shape X) -2)
+        D (static (get config :d_model))
+        H (static (get config :n_heads))
+        Hd (static (// D H))
+
+        Wq (get layer-p :attn :Wq)
+        Wk (get layer-p :attn :Wk)
+        Wv (get layer-p :attn :Wv)
+        Wo (get layer-p :attn :Wo)
+
+        Wq_multi (reshape Wq D H Hd)
+        Kh_multi (reshape Wk D H Hd)
+        Vh_multi (reshape Wv D H Hd)
+
+        ;; Qh, Kh, Vh [Batch, Heads, T, Hd]
+        Qh (einsum "... t d, d h k -> ... h t k" X Wq_multi)
+        Kh (einsum "... t d, d h k -> ... h t k" X Kh_multi)
+        Vh (einsum "... t d, d h k -> ... h t k" X Vh_multi)
+
+        Kh_T (swapaxes Kh -1 -2)
+        scores (/ (@ Qh Kh_T) (sqrt Hd))
+
+        ;; Causal masking
+        m_base (tril (ones (list T T)))
+        m_future (- (ones (list T T)) m_base)
+        mask_inf (reshape (* m_future -3e4) (list 1 1 T T))
+        scores_masked (+ scores mask_inf)
+
+        att_probs (softmax scores_masked :axis -1)
+
+        ;; Final projection
+        att_out (-> (@ att_probs Vh)
+                    (swapaxes -2 -3)
+                    (reshape (shape X))
+                    (@ Wo)))
+
+    (list att_out att_probs)))
+
+
+(defn :jit mlp (x p)
+  (with-params p
+    (let (h (gelu (+ (@ x W1) b1)))
+      (+ (@ h W2) b2))))
+
+
+;; Test guards with a malfunctionning function
+(defn transformer-block-bad (x layer-p config)
+  (let (ln1_x (layer-norm x (get layer-p :ln1) 1) ;; Wrong LN axis
+        attn_out (first (multi-head-attention ln1_x layer-p config)))
+    (guard :no-nan attn_out)
+    (let (x1 (+ x attn_out))
+      (let (ln2_x1 (layer-norm x1 (get layer-p :ln2) 2)
+            bad_input (* ln2_x1 100.0)) ;; Sabotage values
+        (guard :range [-10.0 10.0] bad_input)
+        (let (mlp_out (mlp bad_input (get layer-p :mlp))
+              x2 (+ x1 mlp_out))
+          (guard :shape [1 64 256] x2)
+          x2)))))
+
+
+(defn :jit transformer-block(x layer-p config)
+  (let (;; Self-Attention
+        ln1_x (layer-norm x (get layer-p :ln1) 2) ;; layernorm axis 2
+        attn_out (first (multi-head-attention ln1_x layer-p config))
+        x1 (+ x attn_out) ;; Residual 1
+
+        ;; MLP
+        ln2_x1 (layer-norm x1 (get layer-p :ln2) 2)
+        mlp_out (mlp ln2_x1 (get layer-p :mlp))
+        x2 (+ x1 mlp_out)) ;; Residual 2
+    ;; Return the final state
+    x2))
+
+
+;; Alternative syntax using the threading operator
+(defn transformer-block-as (x layer-p config)
+  (as-> x h
+    ;; 1. Self-Attention
+    (-> h
+        (local-layer-norm (get layer-p :ln1))
+        (multi-head-attention layer-p config)
+        (first) ;; Get the attention output, ignore weights
+        (+ h))  ;; Residual 1
+
+    ;; 2. MLP
+    (as-> h
+        (-> h
+            (local-layer-norm (get layer-p :ln2))
+            (mlp (get layer-p :mlp))
+            (+ h))))) ;; Residual 2
+
+
+(defn cross-entropy-loss (logits targets)
+  (let (;; Convert logits to log-probabilities [Batch*Time, Vocab]
+        log-probs (log-softmax (reshape logits -1 (get (shape logits) -1)))
+        V (get (shape log-probs) -1)
+        flat-targets (reshape targets -1)
+
+        target-mask (one-hot flat-targets V)
+
+        ;; Extract the log-probs for the correct characters
+        ;; Summing (* mask log-probs) acts as a selector
+        target-log-probs (sum (* log-probs target-mask) :axis -1))
+
+    ;; Return negative mean log-likelihood
+    (* (mean target-log-probs) -1.0 )))
+
+
+(defn train-step (params m v t inputs targets config)
+  (let (lr (get config :lr)
+        loss-fn (lambda (p) (cross-entropy-loss (gpt-model inputs p config) targets))
+        [loss grads] ((value-and-grad loss-fn) params)
+        [new-params new-m new-v new-t] (adam-step params grads m v t lr 0.9 0.999 1e-8))
+    ;; Return
+    (dict :loss loss
+          :params new-params
+          :m new-m
+          :v new-v
+          :t new-t)))
+
+
+(defn generate-token (ids params config key k temp)
+  (let (;; Forward pass
+        logits (gpt-model ids params config)
+        ;; Process last token
+        vocab_size (static (get config :vocab_size))
+        p-logits (last (reshape logits -1 vocab_size))
+        p-probs (if (!= temp 1.0)
+                    (softmax (/ p-logits temp) :axis -1)
+                    (softmax p-logits :axis -1))
+
+        ;; Random keys
+        [new-key subkey] (split key))
+
+    (let (;; Sampling
+          next-id (if (and k (> k 0))
+                      (let ([top-p top-idx] (top_k p-probs (min k vocab_size)))
+                        (get top-idx (choice subkey (len top-p) :p (normalize top-p))))
+                      (choice subkey vocab_size :p p-probs)))
+
+      ;; Output
+      (dict :next_id next-id
+            :key new-key))))
+
+;;    (let (Qh (-> (@ X Wq) (reshape B T H Hd) (transpose 0 2 1 3))
+;;          Kh (-> (@ X Wk) (reshape B T H Hd) (transpose 0 2 1 3))
+;;          Vh (-> (@ X Wv) (reshape B T H Hd) (transpose 0 2 1 3))
