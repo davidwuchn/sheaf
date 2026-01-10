@@ -1,8 +1,8 @@
 import inspect
 import os
 
-from .core.compiler import Sheaf as CoreSheaf
-from .core.error_handler import install_exception_handler
+from core.compiler import Sheaf as CoreSheaf
+from core.error_handler import install_exception_handler
 
 # Install error handler automatically when Sheaf is imported
 install_exception_handler()
