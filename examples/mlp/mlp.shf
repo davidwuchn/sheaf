@@ -1,0 +1,47 @@
+(use nn)
+(use optim)
+
+(defn init-params (key)
+  (let ([k1 k2] (split key 2))
+    ;; Initialize both layers with weights sampled from a normal distribution
+    ;; (shape [2, 4] and [4, 1])
+    (dict :l1 (dict :W (random-normal k1 (list 2 4))
+                    :b (zeros (list 4)))
+          :l2 (dict :W (random-normal k2 (list 4 1))
+                    :b (zeros (list 1))))))
+
+
+(defn forward (x p)
+  (as-> x h
+    (with-params (get p :l1)    ;; Hidden layer
+      (relu (+ (@ h W) b)))
+    (with-params (get p :l2)    ;; Output layer
+      (sigmoid (+ (@ h W) b)))))
+
+
+(defn mse-loss (p x y)
+  (let (preds (forward x p)
+        diff (- preds y))
+    (mean (** diff 2))))
+
+
+(defn train-n-steps (s x y lr n)
+  (reduce (lambda (state i)
+            (let (p (get state :p)
+                  m (get state :m)
+                  v (get state :v)
+                  t (get state :t)
+                  ;; Call original train-step or inline it
+                  res (train-step p m v t x y lr))
+              res))
+          s  ;; Start with the current state dict
+          (range n)))
+
+
+(defn train-step (p m v t x y lr)
+  ;; Define MSE
+  (let (loss-fn (lambda (params) (mse-loss params x y))
+        [loss grads] ((value-and-grad loss-fn) p))
+    ;; Update params
+    (let ([new-p new-m new-v new-t] (adam-step p grads m v t lr 0.9 0.999 1e-8))
+      (dict :p new-p :m new-m :v new-v :t new-t :loss loss))))
