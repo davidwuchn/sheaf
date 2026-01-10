@@ -1,0 +1,31 @@
+;; lib/nn.shf
+
+(defn cross-entropy-loss (logits targets)
+  (let (;; Using runtime log-softmax directly
+        log-p (log-softmax (reshape logits -1 (get (shape logits) -1)))
+        V (get (shape log-p) -1)
+        flat-targets (reshape targets -1)
+        target-mask (one-hot flat-targets V)
+        target-log-probs (sum (* log-p target-mask) :axis -1))
+    (* (mean target-log-probs) -1.0)))
+
+
+(defn layer-norm (x p axis)
+  (let (eps 1e-5
+        ;; if no axis is specified, use -1
+        m (mean x :axis axis :keepdims True)
+        v (var x :axis axis :keepdims True)
+        gamma (get p :gamma)
+        beta (get p :beta))
+    (+ (* (/ (- x m) (sqrt (+ v eps))) gamma) beta)))
+
+
+(defn linear (x w b)
+  (+ (@ x w) b))
+
+
+(defn xavier-init (key shape)
+  (let (fan-in  (first shape -2 1.0)
+        fan-out (second shape -1 1.0)
+        limit (sqrt (/ 6.0 (+ fan-in fan-out))))
+    (* (- (* (random-uniform key shape) 2.0) 1.0) limit)))

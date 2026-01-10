@@ -1,0 +1,44 @@
+;; Optimizers library for Sheaf
+
+(defn sgd-step (params grads lr)
+  ;; Pure gradient descent: p = p - lr * g
+  (tree-map (lambda (p g) (- p (* lr g))) params grads))
+
+
+(defn adam-step (params grads m v t lr b1 b2 eps)
+  (let (t (+ t 1)
+        nm (tree-map (lambda (md gd) (+ (* b1 md) (* (- 1 b1) gd))) m grads)
+        nv (tree-map (lambda (vd gd) (+ (* b2 vd) (* (- 1 b2) (** gd 2)))) v grads))
+
+    (let (m-hat (tree-map (lambda (md) (/ md (- 1 (** b1 t)))) nm)
+          v-hat (tree-map (lambda (vd) (/ vd (- 1 (** b2 t)))) nv))
+
+      (list (tree-map (lambda (p mh vh) (- p (/ (* lr mh) (+ (sqrt vh) eps))))
+                       params m-hat v-hat)
+             nm nv t))))
+
+
+(defn global-norm (pytree)
+  ;; Compute global L2 norm of a pytree of gradients
+  ;; Returns: scalar norm value
+  ;;
+  ;; For CLEVR params dict structure: color_embeddings, shape_embeddings, temps, thresholds
+  (let (squared-norms (tree-map (lambda (g) (sum (** g 2))) pytree))
+    (let (sum-sq (+ (get squared-norms :color_embeddings)
+                    (get squared-norms :shape_embeddings)
+                    (get-in squared-norms [:temps :filter])
+                    (get-in squared-norms [:temps :unique])
+                    (get-in squared-norms [:temps :leftmost])
+                    (get-in squared-norms [:temps :spatial])
+                    (get-in squared-norms [:thresholds :spatial])
+                    (get-in squared-norms [:thresholds :exists])))
+      (sqrt sum-sq))))
+
+
+(defn clip-by-global-norm (pytree max-norm)
+  ;; Clip gradients by global norm
+  ;; If global norm > max_norm, scale all gradients proportionally
+  ;; Returns: clipped pytree with same structure
+  (let (g-norm (global-norm pytree)
+        clip-factor (minimum 1.0 (/ max-norm (+ g-norm 1e-8))))
+    (tree-map (lambda (g) (* g clip-factor)) pytree)))
