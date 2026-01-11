@@ -22,6 +22,15 @@ def get_nn_env():
     return {
         "celu": jax.nn.celu,  # alpha (default 1.0)
         "gelu": jax.nn.gelu,
+        "init-kaiming-normal": init.kaiming_normal(),
+        "init-kaiming-uniform": init.kaiming_uniform(),
+        "init-lecun-normal": init.lecun_normal(),
+        "init-lecun-uniform": init.lecun_uniform(),
+        "init-ones": init.ones,
+        "init-orthogonal": init.orthogonal(),
+        "init-xavier-normal": init.xavier_normal(),
+        "init-xavier-uniform": init.xavier_uniform(),
+        "init-zeros": init.zeros,
         "leaky-relu": jax.nn.leaky_relu,  # alpha (default 0.01)
         "log-softmax": jax.nn.log_softmax,
         "relu": jax.nn.relu,
@@ -31,13 +40,4 @@ def get_nn_env():
         "softmax": jax.nn.softmax,
         "sparse-cross-entropy": sparse_cross_entropy,
         "value-and-grad": jax.value_and_grad,
-        "init-xavier-uniform": init.xavier_uniform(),
-        "init-xavier-normal": init.xavier_normal(),
-        "init-kaiming-uniform": init.kaiming_uniform(),
-        "init-kaiming-normal": init.kaiming_normal(),
-        "init-zeros": init.zeros,
-        "init-ones": init.ones,
-        "init-orthogonal": init.orthogonal(),
-        "init-lecun-uniform": init.lecun_uniform(),
-        "init-lecun-normal": init.lecun_normal(),
     }

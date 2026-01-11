@@ -32,6 +32,11 @@ def sheaf_append_and_roll(window, new_id):
     return jnp.concatenate([window[1:], new_id_arr])
 
 
+def sheaf_randint(key, shape, minval, maxval):
+    # JAX randint requires concrete shape and boundaries
+    return jax.random.randint(key, tuple(shape), minval, maxval)
+
+
 def sheaf_reshape(a, *shape_args):
     # Reshape tensor by flattening into a single dimension
     flat_shape = []
@@ -96,6 +101,16 @@ def sheaf_tree_map(f, *trees):
     return jax.tree_util.tree_map(safe_f, *trees)
 
 
+def sheaf_tree_map_zeros(tree):
+    """
+    Creates a new tree with the same structure as the input,
+    but with all leaf values set to zero.
+    Essential for initializing optimizer states (Adam).
+    """
+
+    return jax.tree_util.tree_map(jnp.zeros_like, tree)
+
+
 def get_jax_env():
     return {
         "append": sheaf_append,
@@ -111,6 +126,7 @@ def get_jax_env():
         "ones": jnp.ones,
         "product": jnp.prod,
         "random-normal": jax.random.normal,
+        "random-randint": sheaf_randint,
         "random-uniform": jax.random.uniform,
         "range": lambda *args: jnp.arange(*args),
         "reshape": sheaf_reshape,
@@ -123,8 +139,8 @@ def get_jax_env():
         "top_k": jax.lax.top_k,
         "transpose": sheaf_transpose,
         "tree-map": sheaf_tree_map,
+        "tree-map-zeros": sheaf_tree_map_zeros,
         "tril": jnp.tril,
-        "value-and-grad": lambda f: jax.value_and_grad(f),
         "var": jnp.var,
         "where": jnp.where,
         "zeros": jnp.zeros,
