@@ -10,11 +10,26 @@ import jax
 import jax.numpy as jnp
 
 
-def sheaf_transpose(tensor, *axes):
-    if not axes:
-        return jnp.transpose(tensor)
-    # If the user provides axes, we use them as a permutation
-    return jnp.transpose(tensor, axes=axes)
+def sheaf_append(lst, x):
+    """
+    Appends an element to a list or a JAX array.
+    Used for accumulating generated tokens.
+    """
+    if isinstance(lst, list):
+        return lst + [x]
+    # Fallback for JAX arrays (note: this creates a new array)
+    return jnp.append(lst, x)
+
+
+def sheaf_append_and_roll(window, new_id):
+    """
+    Efficiently updates a rolling context window for autoregressive inference.
+    Shifts the window to the left and adds the new ID at the end.
+    """
+    # Ensure new_id is an array to allow concatenation
+    new_id_arr = jnp.atleast_1d(jnp.array(new_id, dtype=jnp.int32))
+    # Concatenate the window (minus the first element) with the new ID
+    return jnp.concatenate([window[1:], new_id_arr])
 
 
 def sheaf_reshape(a, *shape_args):
@@ -49,6 +64,23 @@ def sheaf_shape(tensor, axis=None):
         )
 
 
+def sheaf_slice(x, start, length):
+    """
+    Wraps JAX dynamic_slice for simpler S-expression syntax.
+    Enables efficient batch sampling directly on device.
+    """
+    # We assume slicing on the first dimension for 1D data (sequences)
+    # or use dynamic_slice_in_dim for more flexibility
+    return jax.lax.dynamic_slice_in_dim(x, start, length, axis=0)
+
+
+def sheaf_transpose(tensor, *axes):
+    if not axes:
+        return jnp.transpose(tensor)
+    # If the user provides axes, we use them as a permutation
+    return jnp.transpose(tensor, axes=axes)
+
+
 def sheaf_tree_map(f, *trees):
     def safe_f(*args):
         # Check if any argument passed to the lambda is a module
@@ -66,11 +98,13 @@ def sheaf_tree_map(f, *trees):
 
 def get_jax_env():
     return {
+        "append": sheaf_append,
+        "append-and-roll": sheaf_append_and_roll,
         "arange": jnp.arange,
         "choice": jax.random.choice,
         "einsum": jnp.einsum,
-        "minimum": jnp.minimum,
         "maximum": jnp.maximum,
+        "minimum": jnp.minimum,
         "ndim": lambda x: x.ndim,
         "normalize": lambda x: x / (jnp.sum(x, axis=-1, keepdims=True) + 1e-12),
         "one-hot": jax.nn.one_hot,
@@ -82,12 +116,12 @@ def get_jax_env():
         "reshape": sheaf_reshape,
         "roll": jnp.roll,
         "shape": sheaf_shape,
+        "slice": sheaf_slice,
         "split": jax.random.split,
         "swapaxes": jnp.swapaxes,
         "tanh": jnp.tanh,
         "top_k": jax.lax.top_k,
         "transpose": sheaf_transpose,
-        # "tree-map": jax.tree_util.tree_map,
         "tree-map": sheaf_tree_map,
         "tril": jnp.tril,
         "value-and-grad": lambda f: jax.value_and_grad(f),
@@ -96,4 +130,5 @@ def get_jax_env():
         "zeros": jnp.zeros,
         # "reshape": lambda a, *shape: jnp.reshape(a, shape),
         # "transpose": lambda a, *axes: jnp.transpose(a, axes if axes else None),
+        # "tree-map": jax.tree_util.tree_map,
     }
