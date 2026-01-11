@@ -33,6 +33,7 @@ class Sheaf:
         self.registry = {}
         self.special_forms = special_forms
         self.macro_engine = create_macro_engine()  # Initialize macro engine
+        self.macro_engine.compiler = self  # Connect macro engine to compiler
         self.trace = False
 
     def _init_env(self):
