@@ -12,8 +12,9 @@ import types
 
 from ..runtime import core_ops, jax_ops, math_ops, nn_ops
 from .error_handler import format_error, set_source
+from .macro_engine import create_macro_engine
 from .parser import SheafRuntimeError, SheafSyntaxError, parse_full
-from .special_forms import SPECIAL_FORMS
+from .special_forms import special_forms
 from .tracer import sheaf_probe, shf_tracer
 
 
@@ -30,7 +31,8 @@ class Sheaf:
 
         self.env = self._init_env()
         self.registry = {}
-        self.special_forms = SPECIAL_FORMS
+        self.special_forms = special_forms
+        self.macro_engine = create_macro_engine()  # Initialize macro engine
         self.trace = False
 
     def _init_env(self):
@@ -49,9 +51,9 @@ class Sheaf:
                 "concat": lambda *args: "".join(map(str, args)),
                 "false": False,
                 "len": len,
+                "nil": None,
                 "probe": sheaf_probe,
                 "second": lambda x: x[1],
-                "sparse-cross-entropy": nn_ops.sparse_cross_entropy,
                 "str": str,
                 "true": True,
             }
@@ -63,47 +65,56 @@ class Sheaf:
         Compile a Sheaf S-expression into executable code.
 
         Pipeline:
-        1. Handle literals and symbols
-        2. Dispatch to special forms if applicable
-        3. Handle tensor literals
-        4. Execute standard function calls
+        1. Macro expansion
+        2. Handle literals and symbols
+        3. Dispatch to special forms if applicable
+        4. Handle tensor literals
+        5. Execute standard function calls
         """
         try:
             if local_vars is None:
                 local_vars = {}
 
-            # --- 1. Literals ---
+            # --- 1. Macros ---
+            # Expand macros before compilation
+            # Only expand if it's a list (potential macro call)
+            if isinstance(exp, list) and len(exp) > 0:
+                op = exp[0]
+                if isinstance(op, str) and op in self.macro_engine.macros:
+                    exp = self.macro_engine.expand(exp, recursive=True)
+
+            # --- 2. Literals ---
             if isinstance(exp, (int, float, bool)):
                 return exp
 
-            # --- 2. Symbol Resolution ---
+            # --- 3. Symbol Resolution ---
             if isinstance(exp, str):
                 return self._resolve_symbol(exp, local_vars)
 
-            # --- 3. Not a list? Return as-is ---
+            # --- 4. Not a list? Return as-is ---
             if not isinstance(exp, list):
                 return exp
 
-            # --- 4. Empty list ---
+            # --- 5. Empty list ---
             if len(exp) == 0:
                 return []
 
             op = exp[0]
             args = exp[1:]
 
-            # --- 5. Keyword list (e.g., [:key1 val1 :key2 val2]) ---
+            # --- 6. Keyword list, like [:key1 val1 :key2 val2] ---
             if isinstance(op, str) and op.startswith(":"):
                 return [self.compile(x, local_vars) for x in exp]
 
-            # --- 6. Tensor Literal ---
+            # --- 7. Tensor Literal ---
             if self._is_tensor_literal(exp):
                 return self._compile_tensor_literal(exp)
 
-            # --- 7. Special Forms Dispatch ---
+            # --- 8. Special Forms Dispatch ---
             if isinstance(op, str) and op in self.special_forms:
                 return self.special_forms[op].compile(self, args, local_vars)
 
-            # --- 8. Standard Function Call ---
+            # --- 9. Standard Function Call ---
             return self._compile_function_call(exp, op, args, local_vars)
 
         except Exception as e:
@@ -117,7 +128,7 @@ class Sheaf:
             raise error from None
 
     def _resolve_symbol(self, symbol, local_vars):
-        """Resolve a symbol to its value."""
+        # Resolve a symbol to its value
         # String literal
         if symbol.startswith('"') and symbol.endswith('"'):
             return symbol.strip('"')
@@ -142,7 +153,7 @@ class Sheaf:
         raise NameError(f"Symbol not found{line_info}: '{symbol}'")
 
     def _is_tensor_literal(self, exp):
-        """Check if expression is a tensor literal like [1 2 3]."""
+        # Check if expression is a tensor literal, like [1 2 3]
         if not isinstance(exp, list) or len(exp) == 0:
             return False
 
@@ -154,7 +165,7 @@ class Sheaf:
         return False
 
     def _compile_tensor_literal(self, exp):
-        """Compile a tensor literal to JAX array."""
+        # Compile a tensor literal to JAX array
         import jax.numpy as jnp
 
         def finalize_literal(item):
@@ -165,7 +176,7 @@ class Sheaf:
         return jnp.array(finalize_literal(exp))
 
     def _compile_function_call(self, exp, op, args, local_vars):
-        """Compile and execute a standard function call."""
+        # Compile and execute a standard function call
         try:
             func = self.compile(op, local_vars)
 
@@ -220,7 +231,7 @@ class Sheaf:
             raise error from None
 
     def _compile_arguments(self, args, local_vars, op, is_jit_func):
-        """Compile function arguments, handling both positional and keyword args."""
+        # Compile function arguments, handling both positional and keyword args
         real_args = []
         kwargs = {}
         i = 0
@@ -268,7 +279,7 @@ class Sheaf:
         return real_args, kwargs
 
     def load(self, code, filename="<sheaf>"):
-        """Load and compile Sheaf source code."""
+        # Load and compile Sheaf source code
         set_source(code, filename)
 
         try:
@@ -293,13 +304,12 @@ class Sheaf:
         return self.registry
 
     def load_file(self, path):
-        """Load a Sheaf source file."""
+        # Load a Sheaf source file
         with open(path, "r") as f:
             code = f.read()
         return self.load(code, filename=path)
 
     def __getattr__(self, name):
-        """Allow calling registered functions as methods: shf.forward(x)"""
         # Avoid infinite recursion on special attributes
         if name.startswith("_") or name in ("env", "registry", "special_forms"):
             raise AttributeError(

@@ -482,11 +482,49 @@ class WithParamsForm(SpecialForm):
         return res
 
 
+class DefmacroForm(SpecialForm):
+    """defmacro macro definition: (defmacro name [params] body)"""
+
+    def __init__(self):
+        super().__init__("defmacro")
+
+    def compile(self, compiler, args, local_vars):
+        """
+        Define a macro at compile-time.
+
+        Syntax: (defmacro name [params] body-template)
+
+        Example:
+            (defmacro when [cond body]
+              `(if ~cond ~body nil))
+        """
+        if len(args) < 3:
+            raise ValueError("defmacro requires name, params, and body")
+
+        name = args[0]
+        params = args[1]
+        body_template = args[2]  # Usually a quasiquoted expression
+
+        # Create an expander function
+        def expander(macro_args):
+            # Bind macro arguments to parameters
+            bindings = compiler.macro_engine._bind_params(params, macro_args)
+            # Substitute in the template
+            return compiler.macro_engine._substitute(body_template, bindings)
+
+        # Register the macro in the macro engine
+        compiler.macro_engine.defmacro_native(name, expander)
+
+        # defmacro doesn't return a runtime value
+        return None
+
+
 # Registry of all special forms
-SPECIAL_FORMS = {
+special_forms = {
     "->": ThreadFirstForm(),
     "as->": ThreadAsForm(),
     "case": CaseForm(),
+    "defmacro": DefmacroForm(),
     "defn": DefnForm(),
     "get": GetForm(),
     "guard": GuardForm(),
