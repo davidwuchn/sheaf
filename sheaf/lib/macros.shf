@@ -1,0 +1,20 @@
+;; -*- mode: clojure -*-
+;; Sheaf Standard Macro Library
+
+
+;; when: Execute body when condition is true, otherwise return nil
+;; Example: (when (> x 0) (print "positive"))
+(defmacro when [cond body]
+  `(if ~cond ~body nil))
+
+
+;; unless: Execute body when condition is false, otherwise return nil
+;; Example: (unless (> x 0) (print "not positive"))
+(defmacro unless [cond body]
+  `(if ~cond nil ~body))
+
+
+;; comment: allows to comment an entire function or code block
+;; Example: (comment (print "This won't execute") (+ 1 2))
+(defmacro comment [& body]
+  nil)
