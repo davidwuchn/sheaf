@@ -80,18 +80,91 @@ def generic_slice(obj, start, end=None):
     return obj[start:end]
 
 
+def cons(head, tail):
+    """
+    Construct a new list by prepending head to tail.
+
+    Examples:
+        (cons 1 [2 3])    -> [1 2 3]
+        (cons 'a [])      -> ['a]
+        (cons 'x ['y 'z]) -> ['x 'y 'z]
+
+    Args:
+        head: element to prepend
+        tail: list to prepend to
+
+    Returns:
+        new list with head prepended to tail
+    """
+    if not isinstance(tail, list):
+        raise TypeError(f"cons: second argument must be a list, got {type(tail)}")
+    return [head] + tail
+
+
+def count(lst):
+    """
+    Return the number of elements in a list.
+
+    Examples:
+        (count [1 2 3])  -> 3
+        (count [])       -> 0
+
+    Returns:
+        number of elements
+    """
+    return len(lst) if isinstance(lst, (list, tuple, str)) else 0
+
+
+def empty_q(lst):
+    """
+    Check if a list is empty.
+
+    Examples:
+        (empty? [])     -> True
+        (empty? [1 2])  -> False
+
+    Args:
+        lst: list to check
+
+    Returns:
+        True if list is empty, False otherwise
+    """
+    return len(lst) == 0 if isinstance(lst, (list, tuple)) else False
+
+
+def rest(lst):
+    """
+    Return all elements of a list except the first.
+
+    Examples:
+        (rest [1 2 3])  -> [2 3]
+        (rest ['a])     -> []
+        (rest [])       -> []
+
+    Returns:
+        list without the first element
+    """
+    if not isinstance(lst, (list, tuple)):
+        raise TypeError(f"rest: argument must be a list, got {type(lst)}")
+    return list(lst[1:]) if len(lst) > 0 else []
+
+
 def get_core_env():
     return {
         "apply": generic_apply,
+        "cons": cons,
+        "count": count,
         "dict": create_dict,
-        "first": lambda x: x[0],
+        "empty?": empty_q,
+        "first": lambda x: x[0] if x else None,
         # "get" is now a special form in compiler.py to avoid keyword argument issues
         # "get": lambda obj, *keys: obj[...],
         "get-in": _sheaf_get_in,
-        "last": lambda x: x[-1],
+        "last": lambda x: x[-1] if x else None,
         "list": lambda *args: list(args),
         "map": lambda f, lst: [f(x) for x in lst],
         "nth": lambda x, i: x[i],
         "reduce": lambda f, acc, lst: reduce(f, lst, acc),
+        "rest": rest,
         "slice": generic_slice,
     }
