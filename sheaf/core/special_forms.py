@@ -262,7 +262,17 @@ class GuardForm(SpecialForm):
 
         elif guard_type in (":shape", ":range"):
             # (guard :shape expected x) or (guard :range expected x)
-            expected = compiler.compile(args[1], local_vars)
+            # expected must be a literal list, not compiled (we need Python values, not JAX tracers)
+            expected_expr = args[1]
+            if not isinstance(expected_expr, list):
+                raise SheafRuntimeError(
+                    f"guard {guard_type} expects a literal list, got {expected_expr}",
+                    args,
+                )
+            # Convert to Python list of concrete values
+            expected = [
+                float(x) if isinstance(x, (int, float)) else x for x in expected_expr
+            ]
             val_expr = args[2]
             val = compiler.compile(val_expr, local_vars)
             return shf_tracer.trigger_guard(guard_type, val, expected)
@@ -425,12 +435,17 @@ class UseForm(SpecialForm):
         file_path = None
         extensions = ["", ".shf"]
 
-        # Search in load_path
-        search_roots = (
-            compiler.load_path
-            if not os.path.isabs(raw_name) and "/" not in raw_name
-            else [""]
-        )
+        # Build search roots: stdlib + cwd + current file's directory
+        search_roots = []
+        if not os.path.isabs(raw_name) and "/" not in raw_name:
+            search_roots = list(compiler.load_path)  # stdlib + cwd
+            # Add directory of current file being loaded
+            if compiler.current_file and compiler.current_file != "<sheaf>":
+                current_dir = os.path.dirname(os.path.abspath(compiler.current_file))
+                if current_dir not in search_roots:
+                    search_roots.append(current_dir)
+        else:
+            search_roots = [""]
 
         for root in search_roots:
             for ext in extensions:
