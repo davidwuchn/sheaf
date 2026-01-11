@@ -51,9 +51,9 @@ class SheafSymbol(str):
 def tokenize(chars):
     # Remove comments: both ;; and single ; until end of line
     chars = re.sub(r";.*", "", chars)
-    # Updated pattern to capture backtick (`) and tilde (~) as separate tokens
+    # Updated pattern to capture backtick (`), tilde (~), and quote (') as separate tokens
     # ~@ must be captured as a single token
-    token_pattern = r'"[^"]*"|~@|[()\[\]`~]|[^\s()\[\]`~]+'
+    token_pattern = r'"[^"]*"|~@|[()\[\]`~\']|[^\s()\[\]`~\']+'
     lines = chars.splitlines()
     tokens_with_meta = []
     for line_num, line in enumerate(lines, 1):
@@ -85,7 +85,12 @@ def parse(tokens, last_func=None):
     if token_text == "defn" and tokens:
         last_func = tokens[0][0]
 
-    # Reader macros: ` ~ ~@
+    # Reader macros: ' ` ~ ~@
+    if token_text == "'":
+        # Quote: prevent evaluation
+        # 'expr => (quote expr)
+        return SheafList(["quote", parse(tokens, last_func)], line=line_num)
+
     if token_text == "`":
         # Backtick: quasiquote
         # `expr => (quasiquote expr)

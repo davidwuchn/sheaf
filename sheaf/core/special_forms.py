@@ -158,7 +158,7 @@ class DefnForm(SpecialForm):
                 for expression in body:
                     res = compiler.compile(expression, context)
 
-                return tuple(res) if isinstance(res, list) else res
+                return res
 
             finally:
                 # 4. Clean up trace state
@@ -482,6 +482,30 @@ class WithParamsForm(SpecialForm):
         return res
 
 
+class QuoteForm(SpecialForm):
+    """quote: prevent evaluation and return data as-is"""
+
+    def __init__(self):
+        super().__init__("quote")
+
+    def compile(self, compiler, args, local_vars):
+        """
+        Return the argument without evaluating it.
+
+        Syntax: (quote expr) or 'expr
+
+        Example:
+            (quote (+ 1 2))  ; => (+ 1 2) (not evaluated)
+            '(+ 1 2)         ; => (+ 1 2) (same)
+            'symbol          ; => symbol (not looked up)
+        """
+        if len(args) != 1:
+            raise ValueError("quote requires exactly one argument")
+
+        # Return the expression as-is, without evaluation
+        return args[0]
+
+
 class DefmacroForm(SpecialForm):
     """defmacro macro definition: (defmacro name [params] body)"""
 
@@ -532,6 +556,7 @@ special_forms = {
     "lambda": LambdaForm(),
     "last": LastForm(),
     "let": LetForm(),
+    "quote": QuoteForm(),
     "repeat": RepeatForm(),
     "static": StaticForm(),
     "use": UseForm(),
