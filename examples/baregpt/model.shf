@@ -227,7 +227,3 @@
       ;; Output
       (dict :next_id next-id
             :key new-key))))
-
-;;    (let (Qh (-> (@ X Wq) (reshape B T H Hd) (transpose 0 2 1 3))
-;;          Kh (-> (@ X Wk) (reshape B T H Hd) (transpose 0 2 1 3))
-;;          Vh (-> (@ X Wv) (reshape B T H Hd) (transpose 0 2 1 3))
