@@ -8,7 +8,10 @@ import jax.numpy as jnp
 
 from sheaf import Sheaf
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
+try:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    current_dir = os.getcwd() 
 if current_dir not in sys.path:
     sys.path.append(current_dir)
 
@@ -97,6 +100,7 @@ def run_inference(
 
 
 def main():
+    
     shf = Sheaf()
     with open(os.path.join(current_dir, "model.shf"), "r") as f:
         shf.load(f.read())
