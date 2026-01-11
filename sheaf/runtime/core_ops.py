@@ -149,6 +149,44 @@ def rest(lst):
     return list(lst[1:]) if len(lst) > 0 else []
 
 
+def symbol_q(obj):
+    """
+    Check if object is a symbol.
+
+    In Sheaf, symbols are represented as strings.
+
+    Examples:
+        (symbol? 'foo)   -> True
+        (symbol? "foo")  -> True
+        (symbol? 42)     -> False
+
+    Returns:
+        True if object is a symbol/string, False otherwise
+    """
+    return isinstance(obj, str)
+
+
+def gensym(prefix="G__"):
+    """
+    Generate a unique symbol.
+
+    Useful for creating unique variable names in macros.
+
+    Examples:
+        (gensym)       -> "G__1"
+        (gensym "tmp") -> "tmp2"
+
+    Args:
+        prefix: prefix for the generated symbol
+
+    Returns:
+        unique symbol string
+    """
+    import uuid
+
+    return f"{prefix}{uuid.uuid4().hex[:8]}"
+
+
 def get_core_env():
     return {
         "apply": generic_apply,
@@ -157,6 +195,7 @@ def get_core_env():
         "dict": create_dict,
         "empty?": empty_q,
         "first": lambda x: x[0] if x else None,
+        "gensym": gensym,
         # "get" is now a special form in compiler.py to avoid keyword argument issues
         # "get": lambda obj, *keys: obj[...],
         "get-in": _sheaf_get_in,
@@ -167,4 +206,5 @@ def get_core_env():
         "reduce": lambda f, acc, lst: reduce(f, lst, acc),
         "rest": rest,
         "slice": generic_slice,
+        "symbol?": symbol_q,
     }
