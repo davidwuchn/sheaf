@@ -28,6 +28,7 @@ class Sheaf:
         self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.lib_dir = os.path.join(self.base_dir, "lib")
         self.load_path = [self.lib_dir, "."]
+        self.current_file = None  # Track current file being loaded
 
         self.env = self._init_env()
         self.registry = {}
@@ -283,6 +284,10 @@ class Sheaf:
         # Load and compile Sheaf source code
         set_source(code, filename)
 
+        # Save previous file and set current
+        prev_file = self.current_file
+        self.current_file = filename
+
         try:
             expressions = parse_full(code)
             for ast in expressions:
@@ -301,6 +306,9 @@ class Sheaf:
             error = SheafRuntimeError(formatted_msg, exp)
             error.original_error = e
             raise error from None
+        finally:
+            # Restore previous file
+            self.current_file = prev_file
 
         return self.registry
 
