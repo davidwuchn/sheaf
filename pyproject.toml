@@ -32,6 +32,9 @@ dependencies = [
     "jaxlib>=0.4.0",
 ]
 
+[project.scripts]
+sheaf = "sheaf.__main__:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
