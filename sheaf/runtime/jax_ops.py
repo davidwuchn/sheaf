@@ -137,6 +137,7 @@ def get_jax_env():
         "slice": sheaf_slice,
         "swapaxes": jnp.swapaxes,
         "tanh": jnp.tanh,
+        "tensor-split": jnp.split,
         "top_k": jax.lax.top_k,
         "transpose": sheaf_transpose,
         "tree-map": sheaf_tree_map,
