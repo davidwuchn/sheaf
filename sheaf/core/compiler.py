@@ -29,6 +29,7 @@ class Sheaf:
         self.lib_dir = os.path.join(self.base_dir, "lib")
         self.load_path = [self.lib_dir, "."]
         self.current_file = None  # Track current file being loaded
+        self.loaded_modules = set()  # Track loaded module paths to prevent re-loading
 
         self.env = self._init_env()
         self.registry = {}
@@ -124,7 +125,11 @@ class Sheaf:
                 raise e
 
             func_name = local_vars.get("__current_func__", "top-level")
-            formatted_msg = format_error(e, exp, func_name)
+            # Extract filename from expression if available
+            filename = (
+                getattr(exp, "filename", None) if hasattr(exp, "filename") else None
+            )
+            formatted_msg = format_error(e, exp, func_name, filename)
             error = SheafRuntimeError(formatted_msg, exp)
             error.original_error = e
             raise error from None
@@ -227,7 +232,11 @@ class Sheaf:
                 raise e
 
             func_name = local_vars.get("__current_func__", "top-level")
-            formatted_msg = format_error(e, exp, func_name)
+            # Extract filename from expression if available
+            filename = (
+                getattr(exp, "filename", None) if hasattr(exp, "filename") else None
+            )
+            formatted_msg = format_error(e, exp, func_name, filename)
             error = SheafRuntimeError(formatted_msg, exp)
             error.original_error = e
             raise error from None
@@ -289,20 +298,21 @@ class Sheaf:
         self.current_file = filename
 
         try:
-            expressions = parse_full(code)
+            expressions = parse_full(code, filename)
             for ast in expressions:
                 self.compile(ast, {})
         except SheafSyntaxError as e:
             # Create a fake expression with line info for the formatter
             class FakeSyntaxExp:
-                def __init__(self, line):
+                def __init__(self, line, filename):
                     self.line = line
+                    self.filename = filename
 
                 def __repr__(self):
                     return "<syntax error>"
 
-            exp = FakeSyntaxExp(e.line_num) if e.line_num else None
-            formatted_msg = format_error(e, exp, "parsing")
+            exp = FakeSyntaxExp(e.line_num, filename) if e.line_num else None
+            formatted_msg = format_error(e, exp, "parsing", filename)
             error = SheafRuntimeError(formatted_msg, exp)
             error.original_error = e
             raise error from None
@@ -314,6 +324,14 @@ class Sheaf:
 
     def load_file(self, path):
         # Load a Sheaf source file
+        import os
+
+        # Get absolute path to track loaded modules
+        abs_path = os.path.abspath(path)
+
+        # Mark as loaded to prevent duplicate loads via (use ...)
+        self.loaded_modules.add(abs_path)
+
         with open(path, "r") as f:
             code = f.read()
         return self.load(code, filename=path)
