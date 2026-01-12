@@ -15,14 +15,14 @@
         B (get config :block_size)
         V (get config :vocab_size)
         L (get config :n_layers)
-        keys (split key 4)
+        keys (random-split key 4)
         k_emb (nth keys 0)
         k_layers (nth keys 1)
         k_head (nth keys 2)
         k_ln (nth keys 3)
 
         ;; Sub-dictionaries preparation
-        k_emb_split (split k_emb 2)
+        k_emb_split (random-split k_emb 2)
         emb-tensors (dict :token (* (random-normal (nth k_emb_split 0) (list V D)) 0.01)
                           :pos   (* (random-normal (nth k_emb_split 1) (list B D)) 0.01))
 
@@ -36,9 +36,9 @@
       :final_ln (dict :gamma (ones (list 1 D))
                       :beta  (zeros (list 1 D)))
       :layers   (map (lambda (i)
-                       (let (k (nth (split k_layers L) i)
-                             k_attn (split k 4)
-                             k_mlp  (split k 2))
+                       (let (k (nth (random-split k_layers L) i)
+                             k_attn (random-split k 4)
+                             k_mlp  (random-split k 2))
                          (dict
                            :attn (dict
                                    :Wq (xavier-init (nth k_attn 0) (list D D))
@@ -55,7 +55,7 @@
                      (range L)))))
 
 
-(defn :jit gpt-model (inputs params config)
+(defn gpt-model (inputs params config)
   (let (emb-tensors (get-in params [:emb :token])
         pos-tensors (get-in params [:emb :pos])
         T (get (shape inputs) -1)
@@ -81,7 +81,56 @@
         (+ (@ final-norm W-out) b-out)))))
 
 
+
 (defn multi-head-attention (X layer-p config)
+  (let (;; 1. Extraction des dimensions
+        T (get (shape X) -2)
+        D (static (get config :d_model))
+        H (static (get config :n_heads))
+        Hd (static (// D H))
+
+        ;; Récupération des poids
+        Wq (get layer-p :attn :Wq)
+        Wk (get layer-p :attn :Wk)
+        Wv (get layer-p :attn :Wv)
+        Wo (get layer-p :attn :Wo)
+
+        ;; Préparation multi-têtes
+        Wq_multi (reshape Wq D H Hd)
+        Kh_multi (reshape Wk D H Hd)
+        Vh_multi (reshape Wv D H Hd)
+
+        ;; 2. Projections Q, K, V [Batch, Heads, T, Hd]
+        Qh (einsum "... t d, d h k -> ... h t k" X Wq_multi)
+        Kh (einsum "... t d, d h k -> ... h t k" X Kh_multi)
+        Vh (einsum "... t d, d h k -> ... h t k" X Vh_multi)
+
+        ;; Scores d'attention [Batch, Heads, T, T]
+        Kh_T (swapaxes Kh -1 -2)
+        scores (/ (@ Qh Kh_T) (sqrt Hd))
+
+        ;; 3. --- MASQUE CAUSAL VALIDE ---
+        ;; 'tril' crée une matrice [T, T].
+        ;; 'where' gère la diffusion sur [Batch, Heads] de manière robuste.
+        m_base (tril (ones (list T T)))
+        scores_masked (where (== m_base 1.0)
+                             scores
+                             -3e4)
+
+        att_probs (softmax scores_masked :axis -1)
+
+        ;; 4. Reconstitution et Projection finale
+        ;; On remet les têtes ensemble avant la projection Wo
+        att_out (as-> (@ att_probs Vh) h
+                  (swapaxes h -2 -3)   ;; [Batch, T, Heads, Hd]
+                  (reshape h (shape X)) ;; [Batch, T, D]
+                  (@ h Wo)))
+
+    (list att_out att_probs)))
+
+
+
+(defn multi-head-attention-previous (X layer-p config)
   (let (;; shape extraction
         T (get (shape X) -2)
         D (static (get config :d_model))
@@ -175,7 +224,7 @@
             (+ h))))) ;; Residual 2
 
 
-(defn cross-entropy-loss (logits targets)
+(defn cross-entropy-loss-not (logits targets)
   (let (;; Convert logits to log-probabilities [Batch*Time, Vocab]
         log-probs (log-softmax (reshape logits -1 (get (shape logits) -1)))
         V (get (shape log-probs) -1)
@@ -216,7 +265,7 @@
                     (softmax p-logits :axis -1))
 
         ;; Random keys
-        [new-key subkey] (split key))
+        [new-key subkey] (random-split key))
 
     (let (;; Sampling
           next-id (where (and k (> k 0))

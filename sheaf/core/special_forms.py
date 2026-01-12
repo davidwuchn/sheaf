@@ -676,6 +676,68 @@ class VmapForm(SpecialForm):
         return vmapped_func
 
 
+class ScanForm(SpecialForm):
+    """scan looping primitive: (scan f init xs)"""
+
+    def __init__(self):
+        super().__init__("scan")
+
+    def compile(self, compiler, args, local_vars):
+        """
+        Apply JAX scan for functional looping.
+
+        Syntax:
+            (scan f init xs)
+
+        Where:
+            f    : function (carry, x) -> (carry, y)
+            init : initial carry value
+            xs   : sequence tensor to iterate over
+
+        Returns: (final-carry, ys)
+
+        Example:
+            (defn step [state x]
+              (let (new-state (+ state x))
+                [new-state new-state]))
+
+            (scan step 0 [1 2 3 4])
+            ; => [10, [1 3 6 10]]
+        """
+        import jax
+
+        if len(args) != 3:
+            raise ValueError("scan requires exactly 3 arguments: (scan f init xs)")
+
+        # Get the function
+        func_expr = args[0]
+        func = compiler.compile(func_expr, local_vars)
+
+        # Get initial carry
+        init_expr = args[1]
+        init = compiler.compile(init_expr, local_vars)
+
+        # Get sequence to scan over
+        xs_expr = args[2]
+        xs = compiler.compile(xs_expr, local_vars)
+
+        # Wrap the Sheaf function to ensure it returns a tuple
+        def scan_func(carry, x):
+            result = func(carry, x)
+            # Ensure result is a tuple (carry, y)
+            if isinstance(result, (list, tuple)) and len(result) == 2:
+                return result
+            else:
+                # If function returns single value, use it as both carry and output
+                return (result, result)
+
+        # Apply jax.lax.scan
+        final_carry, ys = jax.lax.scan(scan_func, init, xs)
+
+        # Return as a list [final_carry, ys] for Sheaf consumption
+        return [final_carry, ys]
+
+
 class DefmacroForm(SpecialForm):
     """defmacro macro definition: (defmacro name [params] body)"""
 
@@ -728,6 +790,7 @@ special_forms = {
     "let": LetForm(),
     "quote": QuoteForm(),
     "repeat": RepeatForm(),
+    "scan": ScanForm(),
     "static": StaticForm(),
     "use": UseForm(),
     "vmap": VmapForm(),

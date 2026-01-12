@@ -1,3 +1,8 @@
+docs/
+tests/
+examples/clevr
+
+
 __pycache__/
 *.py[cod]
 *$py.class
