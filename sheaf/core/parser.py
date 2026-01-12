@@ -27,9 +27,10 @@ class SheafSyntaxError(SheafRuntimeError):
 
 
 class SheafList(list):
-    def __init__(self, *args, line=None):
+    def __init__(self, *args, line=None, filename="<sheaf>"):
         super().__init__(*args)
         self.line = line
+        self.filename = filename
 
     def __format__(self, format_spec):
         if "f" in format_spec:
@@ -42,9 +43,10 @@ class SheafList(list):
 
 
 class SheafSymbol(str):
-    def __new__(cls, content, line=None):
+    def __new__(cls, content, line=None, filename="<sheaf>"):
         obj = str.__new__(cls, content)
         obj.line = line
+        obj.filename = filename
         return obj
 
 
@@ -63,17 +65,17 @@ def tokenize(chars):
     return tokens_with_meta
 
 
-def atom(token, line_num):
+def atom(token, line_num, filename="<sheaf>"):
     try:
         return int(token)
     except ValueError:
         try:
             return float(token)
         except ValueError:
-            return SheafSymbol(token, line=line_num)
+            return SheafSymbol(token, line=line_num, filename=filename)
 
 
-def parse(tokens, last_func=None):
+def parse(tokens, last_func=None, filename="<sheaf>"):
     if not tokens:
         raise SheafSyntaxError(
             "Unexpected end of file - missing closing parenthesis or bracket"
@@ -89,28 +91,44 @@ def parse(tokens, last_func=None):
     if token_text == "'":
         # Quote: prevent evaluation
         # 'expr => (quote expr)
-        return SheafList(["quote", parse(tokens, last_func)], line=line_num)
+        return SheafList(
+            ["quote", parse(tokens, last_func, filename)],
+            line=line_num,
+            filename=filename,
+        )
 
     if token_text == "`":
         # Backtick: quasiquote
         # `expr => (quasiquote expr)
-        return SheafList(["quasiquote", parse(tokens, last_func)], line=line_num)
+        return SheafList(
+            ["quasiquote", parse(tokens, last_func, filename)],
+            line=line_num,
+            filename=filename,
+        )
 
     if token_text == "~":
         # Tilde: unquote
         # ~expr => (unquote expr)
-        return SheafList(["unquote", parse(tokens, last_func)], line=line_num)
+        return SheafList(
+            ["unquote", parse(tokens, last_func, filename)],
+            line=line_num,
+            filename=filename,
+        )
 
     if token_text == "~@":
         # Tilde-at: unquote-splicing
         # ~@expr => (unquote-splicing expr)
-        return SheafList(["unquote-splicing", parse(tokens, last_func)], line=line_num)
+        return SheafList(
+            ["unquote-splicing", parse(tokens, last_func, filename)],
+            line=line_num,
+            filename=filename,
+        )
 
     if token_text in ("(", "["):
-        L = SheafList(line=line_num)
+        L = SheafList(line=line_num, filename=filename)
         while tokens and tokens[0][0] not in (")", "]"):
             # Pass the function name down the recursion
-            L.append(parse(tokens, last_func=last_func))
+            L.append(parse(tokens, last_func=last_func, filename=filename))
 
         if not tokens:
             ctx = f" in function `{last_func}`" if last_func else ""
@@ -123,13 +141,13 @@ def parse(tokens, last_func=None):
             f"Unexpected closing character '{token_text}'{ctx}", line_num
         )
     else:
-        return atom(token_text, line_num)
+        return atom(token_text, line_num, filename)
 
 
-def parse_full(code):
+def parse_full(code, filename="<sheaf>"):
     """Takes raw code and returns a list of expressions (AST)."""
     tokens = tokenize(code)
     expressions = []
     while tokens:
-        expressions.append(parse(tokens))
+        expressions.append(parse(tokens, filename=filename))
     return expressions
