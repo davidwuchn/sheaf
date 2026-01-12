@@ -9,6 +9,7 @@ Each special form is a class that handles the compilation logic
 for a specific S-expression operator (defn, let, if, etc.).
 """
 
+from .error_handler import set_source
 from .parser import SheafRuntimeError
 from .tracer import shf_tracer
 
@@ -486,7 +487,10 @@ class UseForm(SpecialForm):
             with open(file_path, "r") as f:
                 module_code = f.read()
 
-            expressions = parse_full(module_code)
+            # Register source code for error formatting
+            set_source(module_code, file_path)
+
+            expressions = parse_full(module_code, file_path)
             for expr in expressions:
                 compiler.compile(expr, {})
 
