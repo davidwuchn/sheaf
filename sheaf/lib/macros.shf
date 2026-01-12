@@ -21,6 +21,24 @@
        ~@(map transform-layer layers))))
 
 
+;; defbatch: Define a function that auto-vectorizes over batch dimension
+;; The axes spec shows which args are batched (0) vs shared (nil)
+;; Example:
+;;   (defbatch linear-layer [x w b] [0 nil nil]
+;;     (+ (@ x w) b))
+;; Expands to:
+;;   (defn linear-layer [x w b]
+;;     ((vmap (lambda [x] (+ (@ x w) b)) [0 nil nil]) x w b))
+(defmacro defbatch [name params axes & body]
+  (let [; Find which params are batched (axis 0) vs shared (nil)
+        batched-params (list)
+        ; For simplicity, we pass all params to the inner lambda
+        ; and let vmap handle the axis selection
+        inner-fn `(lambda ~params ~@body)]
+    `(defn ~name ~params
+       ((vmap ~inner-fn ~axes) ~@params))))
+
+
 ;; when: Execute body when condition is true, otherwise return nil
 ;; Example: (when (> x 0) (print "positive"))
 (defmacro when [cond body]
