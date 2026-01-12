@@ -129,70 +129,13 @@
     (list att_out att_probs)))
 
 
-
-(defn multi-head-attention-previous (X layer-p config)
-  (let (;; shape extraction
-        T (get (shape X) -2)
-        D (static (get config :d_model))
-        H (static (get config :n_heads))
-        Hd (static (// D H))
-
-        Wq (get layer-p :attn :Wq)
-        Wk (get layer-p :attn :Wk)
-        Wv (get layer-p :attn :Wv)
-        Wo (get layer-p :attn :Wo)
-
-        Wq_multi (reshape Wq D H Hd)
-        Kh_multi (reshape Wk D H Hd)
-        Vh_multi (reshape Wv D H Hd)
-
-        ;; Qh, Kh, Vh [Batch, Heads, T, Hd]
-        Qh (einsum "... t d, d h k -> ... h t k" X Wq_multi)
-        Kh (einsum "... t d, d h k -> ... h t k" X Kh_multi)
-        Vh (einsum "... t d, d h k -> ... h t k" X Vh_multi)
-
-        Kh_T (swapaxes Kh -1 -2)
-        scores (/ (@ Qh Kh_T) (sqrt Hd))
-
-        ;; Causal masking
-        m_base (tril (ones (list T T)))
-        m_future (- (ones (list T T)) m_base)
-        mask_inf (reshape (* m_future -3e4) (list 1 1 T T))
-        scores_masked (+ scores mask_inf)
-
-        att_probs (softmax scores_masked :axis -1)
-
-        ;; Final projection
-        att_out (-> (@ att_probs Vh)
-                    (swapaxes -2 -3)
-                    (reshape (shape X))
-                    (@ Wo)))
-
-    (list att_out att_probs)))
-
-
 (defn mlp (x p)
   (with-params p
     (let (h (gelu (+ (@ x W1) b1)))
       (+ (@ h W2) b2))))
 
 
-;; Test guards with a malfunctionning function
-(defn transformer-block-bad (x layer-p config)
-  (let (ln1_x (layer-norm x (get layer-p :ln1) 1) ;; Wrong LN axis
-        attn_out (first (multi-head-attention ln1_x layer-p config)))
-    ; (guard :no-nan attn_out)
-    (let (x1 (+ x attn_out))
-      (let (ln2_x1 (layer-norm x1 (get layer-p :ln2) 2)
-            bad_input (* ln2_x1 100.0)) ;; Sabotage values
-       ;  (guard :range [-10.0 10.0] bad_input)
-        (let (mlp_out (mlp bad_input (get layer-p :mlp))
-              x2 (+ x1 mlp_out))
-         ; (guard :shape [1 64 256] x2)
-          x2)))))
-
-
-(defn transformer-block(x layer-p config)
+(defn transformer-block (x layer-p config)
   (let (;; Self-Attention
         ln1_x (layer-norm x (get layer-p :ln1) 2) ;; layernorm axis 2
         attn_out (first (multi-head-attention ln1_x layer-p config))
