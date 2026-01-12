@@ -212,7 +212,7 @@ class DefnForm(SpecialForm):
             location = "user code" if name in compiler.registry else "standard library"
 
             raise SheafRuntimeError(
-                f"Function '{name}' is already defined in {location}. "
+                f"Error:\nFunction '{name}' is already defined in {location}. "
                 f"Redefinition is not allowed to prevent shadowing bugs.",
                 args,
             )
@@ -475,6 +475,13 @@ class UseForm(SpecialForm):
                 args,
             )
 
+        # Get absolute path to avoid duplicate loads
+        abs_file_path = os.path.abspath(file_path)
+
+        # Skip if already loaded
+        if abs_file_path in compiler.loaded_modules:
+            return None
+
         try:
             with open(file_path, "r") as f:
                 module_code = f.read()
@@ -482,6 +489,9 @@ class UseForm(SpecialForm):
             expressions = parse_full(module_code)
             for expr in expressions:
                 compiler.compile(expr, {})
+
+            # Mark module as loaded
+            compiler.loaded_modules.add(abs_file_path)
 
             return None
         except Exception as e:
