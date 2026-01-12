@@ -204,6 +204,19 @@ class DefnForm(SpecialForm):
             generated_func = jitted_wrapper
             generated_func._sheaf_is_jit = True
 
+        # Check for redefinition
+        if name in compiler.registry or name in compiler.env:
+            from .parser import SheafRuntimeError
+
+            # Determine where it's defined
+            location = "user code" if name in compiler.registry else "standard library"
+
+            raise SheafRuntimeError(
+                f"Function '{name}' is already defined in {location}. "
+                f"Redefinition is not allowed to prevent shadowing bugs.",
+                args,
+            )
+
         # Register the function
         compiler.registry[name] = generated_func
         compiler.env[name] = generated_func
