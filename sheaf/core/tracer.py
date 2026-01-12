@@ -276,6 +276,10 @@ class Tracer:
             if self.already_traced:
                 return
 
+            # Auto-convert Python scalars to JAX arrays
+            if not isinstance(v, jnp.ndarray):
+                v = jnp.asarray(v)
+
             failed = False
             error_msg = ""
 
@@ -338,7 +342,7 @@ shf_tracer = Tracer()
 
 
 def sheaf_probe(label, x):
-    # Debug probe that prints value info at runtime
+    # Debug probe that prints value info at runtime"""
 
     def _print_probe(val):
         # Type check: If it's not a JAX array, don't use jnp.isfinite
