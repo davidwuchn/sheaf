@@ -1,6 +1,8 @@
 import inspect
 import os
 
+import jax.numpy as jnp
+
 from .core.compiler import Sheaf as CoreSheaf
 from .core.error_handler import install_exception_handler
 
@@ -47,6 +49,67 @@ class Sheaf(CoreSheaf):
         if lisp_name in self.registry:
             return self.registry[lisp_name]
         raise AttributeError(f"Sheaf: function '{lisp_name}' not found.")
+
+    def to_pytree(self, value):
+        """
+        Convert a Sheaf value to a JAX-compatible pytree.
+
+        Converts Sheaf internal states into pure pytrees containing only:
+        - dict
+        - list
+        - JAX arrays
+        - scalars (int, float, bool)
+
+        Args:
+            value: A Sheaf value (dict, list, tensor, or scalar)
+
+        Returns:
+            A JAX-compatible pytree
+
+        Raises:
+            TypeError: If value contains non-serializable types (functions, symbols, etc.)
+        """
+        if isinstance(value, dict):
+            return {k: self.to_pytree(v) for k, v in value.items()}
+        elif isinstance(value, (list, tuple)):
+            return [self.to_pytree(item) for item in value]
+        elif isinstance(value, jnp.ndarray):
+            return value
+        elif isinstance(value, (int, float, bool)) or value is None:
+            return value
+        else:
+            raise TypeError(
+                f"Cannot serialize type {type(value).__name__} to pytree. "
+                f"Only dict, list, JAX arrays, and scalars are allowed."
+            )
+
+    def from_pytree(self, tree):
+        """
+        Convert a JAX pytree back to a Sheaf value.
+
+        Reconstructs a Sheaf state from a pytree produced by to_pytree.
+        This is the inverse operation of to_pytree.
+
+        Args:
+            tree: A JAX-compatible pytree
+
+        Returns:
+            A Sheaf value (dict, list, tensor, or scalar)
+        """
+        if isinstance(tree, dict):
+            return {k: self.from_pytree(v) for k, v in tree.items()}
+        elif isinstance(tree, (list, tuple)):
+            return [self.from_pytree(item) for item in tree]
+        elif isinstance(tree, jnp.ndarray):
+            return tree
+        elif isinstance(tree, (int, float, bool)) or tree is None:
+            return tree
+        else:
+            # This should not happen if the pytree came from to_pytree
+            raise TypeError(
+                f"Unexpected type {type(tree).__name__} in pytree. "
+                f"Expected dict, list, JAX array, or scalar."
+            )
 
 
 __all__ = ["Sheaf"]
