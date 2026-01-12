@@ -98,11 +98,42 @@ class SheafErrorFormatter:
                             col = line_text.index(expr_str)
                             parts.append(f"    | {' ' * col}{'^' * len(expr_str)}")
                         else:
-                            parts.append(f"    | ^")
+                            # Expression not found literally - try to find first token (e.g., 'defmodel')
+                            # or point to the whole line if it's a list expression
+                            if isinstance(expression, list) and len(expression) > 0:
+                                first_token = str(expression[0])
+                                if first_token in line_text:
+                                    col = line_text.index(first_token)
+                                    parts.append(
+                                        f"    | {' ' * col}{'^' * len(first_token)}"
+                                    )
+                                else:
+                                    # Can't find anything - point to the whole non-whitespace part
+                                    stripped = line_text.lstrip()
+                                    indent = len(line_text) - len(stripped)
+                                    parts.append(
+                                        f"    | {' ' * indent}{'^' * len(stripped.rstrip())}"
+                                    )
+                            else:
+                                # Single symbol or can't parse - point to whole line
+                                stripped = line_text.lstrip()
+                                indent = len(line_text) - len(stripped)
+                                parts.append(
+                                    f"    | {' ' * indent}{'^' * len(stripped.rstrip())}"
+                                )
                     else:
                         parts.append(f"    | ^")
                 else:
                     parts.append(f"{i:3} | {line_text}")
+        else:
+            # No line number available - this is a runtime error
+            parts.append("  |")
+            parts.append(
+                "  = note: This error occurred at runtime (not during compilation)."
+            )
+            parts.append("  = note: The exact line number could not be determined.")
+            if func_name != "top-level":
+                parts.append(f"  = note: The error occurred in function `{func_name}`.")
 
         parts.append("  |")
 
