@@ -610,6 +610,72 @@ class QuoteForm(SpecialForm):
         return args[0]
 
 
+class VmapForm(SpecialForm):
+    """vmap vectorized mapping: (vmap f) or (vmap f in-axes)"""
+
+    def __init__(self):
+        super().__init__("vmap")
+
+    def compile(self, compiler, args, local_vars):
+        """
+        Apply JAX vmap to a function.
+
+        Syntax:
+            (vmap f)              ; vmap all args over axis 0
+            (vmap f 0)            ; vmap all args over specified axis
+            (vmap f [0 nil])      ; vmap 1st arg on axis 0, don't vmap 2nd
+            (vmap f [0 nil nil])  ; vmap 1st arg, keep 2nd and 3rd fixed
+
+        Returns a new function that applies f independently across batch dimension.
+
+        Examples:
+            (vmap square)           ; Batch all arguments
+            (vmap linear [0 nil nil])  ; Only batch first arg (X), keep W and b fixed
+        """
+        import jax
+
+        if len(args) < 1 or len(args) > 2:
+            raise ValueError(
+                "vmap requires 1 or 2 arguments: (vmap f) or (vmap f in-axes)"
+            )
+
+        # Get the function
+        func_expr = args[0]
+        func = compiler.compile(func_expr, local_vars)
+
+        # Get in_axes (default to 0 = vmap all args)
+        in_axes = 0
+        if len(args) == 2:
+            axes_expr = args[1]
+
+            # Handle list of axes: [0 nil] or [0 nil nil]
+            # Don't compile the list - process it directly to preserve 'nil' symbols
+            if isinstance(axes_expr, list):
+                processed_axes = []
+                for ax in axes_expr:
+                    if ax == "nil" or ax is None:
+                        processed_axes.append(None)
+                    else:
+                        # Compile numeric values
+                        compiled_ax = compiler.compile(ax, local_vars)
+                        if hasattr(compiled_ax, "item"):
+                            processed_axes.append(int(compiled_ax.item()))
+                        else:
+                            processed_axes.append(int(compiled_ax))
+                in_axes = tuple(processed_axes)
+            else:
+                # Single axis value
+                axes = compiler.compile(axes_expr, local_vars)
+                if hasattr(axes, "item"):
+                    in_axes = int(axes.item())
+                else:
+                    in_axes = int(axes)
+
+        # Apply vmap and return the vmapped function
+        vmapped_func = jax.vmap(func, in_axes=in_axes)
+        return vmapped_func
+
+
 class DefmacroForm(SpecialForm):
     """defmacro macro definition: (defmacro name [params] body)"""
 
@@ -664,5 +730,6 @@ special_forms = {
     "repeat": RepeatForm(),
     "static": StaticForm(),
     "use": UseForm(),
+    "vmap": VmapForm(),
     "with-params": WithParamsForm(),
 }
