@@ -46,6 +46,9 @@ class SheafCompleter:
             ":trace",
             ":scope",
             ":env",
+            ":registry",
+            ":reg",
+            ":show",
         ]
 
     def complete(self, text, state):
@@ -172,6 +175,8 @@ Commands:
   :scope <name>       Filter traces to functions matching <name>
   :scope off          Disable scope filtering
   :env                Show current environment (defined variables)
+  :registry, :reg     List user-defined functions
+  :show <name>        Show value of variable or function source
 
 Expression evaluation:
   Type any Sheaf expression and press Enter to evaluate it.
@@ -335,6 +340,51 @@ def run_repl():
                                 print(f"  {name}: {type(val).__name__}")
                     else:
                         print("  (empty)")
+                    continue
+
+                elif cmd in ("registry", "reg"):
+                    # List user-defined functions
+                    if compiler.registry:
+                        print("User-defined functions:")
+                        for name in sorted(compiler.registry.keys()):
+                            func = compiler.registry[name]
+                            if hasattr(func, "__sheaf_params__"):
+                                params = func.__sheaf_params__
+                                params_str = (
+                                    "[" + " ".join(str(p) for p in params) + "]"
+                                )
+                                print(f"  {name} {params_str}")
+                            else:
+                                print(f"  {name}")
+                    else:
+                        print("No user-defined functions yet.")
+                        print("Try: (defn square [x] (* x x))")
+                    continue
+
+                elif cmd == "show":
+                    # Show variable value or function source
+                    if not cmd_arg:
+                        print("Usage: :show <name>")
+                        continue
+
+                    # Check if it's in registry (user function)
+                    if cmd_arg in compiler.registry:
+                        func = compiler.registry[cmd_arg]
+                        if hasattr(func, "__sheaf_source__"):
+                            print(f"⇒ {func.__sheaf_source__}")
+                        else:
+                            print(f"⇒ <function {cmd_arg}>")
+                    # Check if it's in environment (variable or builtin)
+                    elif cmd_arg in compiler.env:
+                        val = compiler.env[cmd_arg]
+                        formatted = format_result(val)
+                        if formatted:
+                            print(f"⇒ {formatted}")
+                        else:
+                            print(f"⇒ {val}")
+                    else:
+                        print(f"Error: '{cmd_arg}' not found")
+                        print("Try :env to see all available names")
                     continue
 
                 else:

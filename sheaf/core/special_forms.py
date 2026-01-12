@@ -111,6 +111,58 @@ class DefnForm(SpecialForm):
     def __init__(self):
         super().__init__("defn")
 
+    def _expr_to_source(self, expr, indent=0):
+        """Convert a parsed expression back to readable source code."""
+        if isinstance(expr, list):
+            if not expr:
+                return "[]"
+
+            # Special handling for 'let' bindings
+            if len(expr) > 0 and expr[0] == "let":
+                # (let [bindings...] body...)
+                lines = ["(let ("]
+                bindings = expr[1]
+                # Group bindings in pairs
+                for i in range(0, len(bindings), 2):
+                    if i + 1 < len(bindings):
+                        var_name = bindings[i]
+                        var_val = self._expr_to_source(bindings[i + 1], indent + 4)
+                        lines.append(" " * (indent + 6) + f"{var_name} {var_val}")
+                lines.append(" " * (indent + 4) + ")")
+                # Body expressions
+                for body_expr in expr[2:]:
+                    lines.append(
+                        " " * (indent + 2) + self._expr_to_source(body_expr, indent + 2)
+                    )
+                lines.append(" " * indent + ")")
+                return "\n".join(lines)
+
+            # Format as multi-line if contains nested lists
+            has_nested = any(isinstance(e, list) for e in expr)
+            if has_nested and len(expr) > 2:
+                lines = ["("]
+                for i, e in enumerate(expr):
+                    if i == 0:
+                        lines[0] += self._expr_to_source(e, indent)
+                    else:
+                        lines.append(
+                            " " * (indent + 2) + self._expr_to_source(e, indent + 2)
+                        )
+                lines.append(" " * indent + ")")
+                return "\n".join(lines)
+            else:
+                # Simple one-liner
+                items = " ".join(self._expr_to_source(e, indent) for e in expr)
+                return f"({items})"
+        elif isinstance(expr, str):
+            # Keep strings as-is
+            if expr.startswith(":") or expr.startswith('"'):
+                return expr
+            return expr
+        else:
+            # Numbers, etc.
+            return str(expr)
+
     def compile(self, compiler, args, local_vars):
         is_jit = args[0] == ":jit"
         offset = 1 if is_jit else 0
@@ -217,6 +269,16 @@ class DefnForm(SpecialForm):
                 f"Redefinition is not allowed to prevent shadowing bugs.",
                 args,
             )
+
+        # Store source code for inspection in REPL
+        params_str = "[" + " ".join(str(p) for p in params) + "]"
+        source_lines = [f"(defn{' :jit' if is_jit else ''} {name} {params_str}"]
+        for expr in body:
+            source_lines.append("  " + self._expr_to_source(expr, 2))
+        source_lines.append(")")
+        generated_func.__sheaf_source__ = "\n".join(source_lines)
+        generated_func.__sheaf_name__ = name
+        generated_func.__sheaf_params__ = params
 
         # Register the function
         compiler.registry[name] = generated_func
