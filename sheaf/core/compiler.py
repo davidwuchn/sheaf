@@ -10,7 +10,7 @@ import builtins
 import os
 import types
 
-from ..runtime import core_ops, jax_ops, math_ops, nn_ops
+from ..runtime import core_ops, jax_ops, math_ops, nn_ops, string_ops
 from .error_handler import format_error, set_source
 from .macro_engine import create_macro_engine
 from .parser import SheafRuntimeError, SheafSyntaxError, parse_full
@@ -46,6 +46,7 @@ class Sheaf:
         env.update(jax_ops.get_jax_env())
         env.update(math_ops.get_math_env())
         env.update(nn_ops.get_nn_env())
+        env.update(string_ops.get_string_env())
 
         env.update(
             {

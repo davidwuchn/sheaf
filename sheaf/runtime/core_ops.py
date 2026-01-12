@@ -7,7 +7,6 @@ Provides fundamental data structure manipulation primitives.
 
 from functools import reduce
 
-
 def _sheaf_get_in(obj, path):
     """Navigate through nested dicts/lists using a path."""
     # If path is not a list (single level), convert it
@@ -201,7 +200,6 @@ def get_core_env():
         "get-in": _sheaf_get_in,
         "last": lambda x: x[-1] if x else None,
         "list": lambda *args: list(args),
-        "map": lambda f, lst: [f(x) for x in lst],
         "nth": lambda x, i: x[i],
         "reduce": lambda f, acc, lst: reduce(f, lst, acc),
         "rest": rest,
