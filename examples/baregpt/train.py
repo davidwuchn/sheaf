@@ -1,5 +1,4 @@
 import os
-import pickle
 import sys
 import time
 
@@ -11,7 +10,7 @@ from sheaf import Sheaf
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
 except NameError:
-    current_dir = os.getcwd() 
+    current_dir = os.getcwd()
 if current_dir not in sys.path:
     sys.path.append(current_dir)
 
@@ -23,7 +22,7 @@ N_LAYERS = 4
 N_HEADS = 4
 BATCH_SIZE = 32
 BLOCK_SIZE = 128
-EPOCHS = 1000
+EPOCHS = 500  # Sufficient for PoC, use 1200 for high-quality text
 LEARNING_RATE = 1e-3
 
 WEIGHTS_PATH = os.path.join(current_dir, "out", "weights.pkl")
@@ -37,17 +36,31 @@ def prepare_data(path):
     return text, encoded, vocab
 
 
+def save_checkpoint(shf, params, path):
+    """Save params using Sheaf pytree serialization."""
+    import pickle
+
+    tree = shf.to_pytree(params)
+    with open(path, "wb") as f:
+        pickle.dump(tree, f)
+
+
+def load_checkpoint(shf, path):
+    """Load params using Sheaf pytree serialization."""
+    import pickle
+
+    with open(path, "rb") as f:
+        tree = pickle.load(f)
+    return shf.from_pytree(tree)
+
+
 def load_or_train_params(shf, encoded_data, config):
     if os.path.exists(WEIGHTS_PATH):
         print(f"Loading weights from {WEIGHTS_PATH}...")
-        with open(WEIGHTS_PATH, "rb") as f:
-            params = pickle.load(f)
-
-        # params = run_training(shf, params, encoded_data, config)
+        params = load_checkpoint(shf, WEIGHTS_PATH)
         return jax.tree_util.tree_map(lambda x: jnp.array(x, dtype=jnp.float32), params)
 
     print("Weights not found. Initializing and training...")
-    # New short call: shf.init_params instead of shf.registry["init-gpt-params"]
     params = shf.init_gpt_params(jax.random.PRNGKey(42), config)
     return run_training(shf, params, encoded_data, config)
 
@@ -76,8 +89,7 @@ def run_training(shf, params, encoded_data, config):
             last_time = now
 
     os.makedirs(os.path.dirname(WEIGHTS_PATH), exist_ok=True)
-    with open(WEIGHTS_PATH, "wb") as f:
-        pickle.dump(params, f)
+    save_checkpoint(shf, params, WEIGHTS_PATH)
     return params
 
 
@@ -100,7 +112,6 @@ def run_inference(
 
 
 def main():
-    
     shf = Sheaf()
     with open(os.path.join(current_dir, "model.shf"), "r") as f:
         shf.load(f.read())
