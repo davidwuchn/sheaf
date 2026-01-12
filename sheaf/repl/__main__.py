@@ -318,45 +318,46 @@ def run_repl():
                     continue
 
                 elif cmd == "env":
-                    # Show environment (defined functions and variables)
+                    # Show environment using introspection API
+                    registry = compiler.get_registry()
+                    env = compiler.get_env()
+
                     print("Registry (functions):")
-                    if compiler.registry:
-                        for name in sorted(compiler.registry.keys()):
+                    if registry:
+                        for name in sorted(registry.keys()):
                             print(f"  {name}")
                     else:
                         print("  (empty)")
 
                     print("\nEnvironment (variables):")
-                    if compiler.env:
-                        for name in sorted(compiler.env.keys()):
-                            val = compiler.env[name]
-                            if callable(val):
+                    if env:
+                        for name in sorted(env.keys()):
+                            meta = env[name]
+                            if meta["type"] == "function":
                                 print(f"  {name}: <function>")
-                            elif isinstance(val, jnp.ndarray):
-                                shape_str = "x".join(str(d) for d in val.shape)
+                            elif "shape" in meta:
+                                shape_str = "x".join(str(d) for d in meta["shape"])
                                 dtype_str = (
-                                    str(val.dtype)
+                                    meta["dtype"]
                                     .replace("float32", "f32")
                                     .replace("int32", "i32")
                                 )
                                 print(f"  {name}: Tensor {dtype_str}[{shape_str}]")
                             else:
-                                print(f"  {name}: {type(val).__name__}")
+                                print(f"  {name}: {meta['type']}")
                     else:
                         print("  (empty)")
                     continue
 
                 elif cmd in ("registry", "reg"):
-                    # List user-defined functions
-                    if compiler.registry:
+                    # List user-defined functions using introspection API
+                    registry = compiler.get_registry()
+                    if registry:
                         print("User-defined functions:")
-                        for name in sorted(compiler.registry.keys()):
-                            func = compiler.registry[name]
-                            if hasattr(func, "__sheaf_params__"):
-                                params = func.__sheaf_params__
-                                params_str = (
-                                    "[" + " ".join(str(p) for p in params) + "]"
-                                )
+                        for name in sorted(registry.keys()):
+                            meta = registry[name]
+                            if meta["params"]:
+                                params_str = "[" + " ".join(meta["params"]) + "]"
                                 print(f"  {name} {params_str}")
                             else:
                                 print(f"  {name}")

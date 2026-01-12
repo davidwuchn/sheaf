@@ -111,5 +111,57 @@ class Sheaf(CoreSheaf):
                 f"Expected dict, list, JAX array, or scalar."
             )
 
+    def get_registry(self):
+        """
+        Get metadata about all user-defined functions.
+
+        Returns:
+            dict: Mapping from function name to metadata dict containing:
+                - params: list of parameter names
+                - source: source code string (if available)
+        """
+        result = {}
+        for name, func in self.registry.items():
+            meta = {"params": [], "source": None}
+            if hasattr(func, "__sheaf_params__"):
+                meta["params"] = list(func.__sheaf_params__)
+            if hasattr(func, "__sheaf_source__"):
+                meta["source"] = func.__sheaf_source__
+            result[name] = meta
+        return result
+
+    def get_env(self):
+        """
+        Get metadata about all variables in the environment.
+
+        Returns:
+            dict: Mapping from variable name to metadata dict containing:
+                - type: string describing the type
+                - shape: tuple (for tensors only)
+                - dtype: string (for tensors only)
+                - value: the actual value (for scalars only)
+        """
+        result = {}
+        for name, val in self.env.items():
+            meta = {"type": type(val).__name__}
+            if isinstance(val, jnp.ndarray):
+                meta["shape"] = tuple(val.shape)
+                meta["dtype"] = str(val.dtype)
+            elif callable(val):
+                meta["type"] = "function"
+            elif isinstance(val, (int, float, bool, str)):
+                meta["value"] = val
+            result[name] = meta
+        return result
+
+    def get_special_forms(self):
+        """
+        Get list of all special forms available in the language.
+
+        Returns:
+            list: Sorted list of special form names (defn, let, vmap, scan, etc.)
+        """
+        return sorted(self.special_forms.keys())
+
 
 __all__ = ["Sheaf"]
