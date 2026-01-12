@@ -70,6 +70,10 @@ class SheafCompleter:
                 if self.compiler.env:
                     all_names.extend(self.compiler.env.keys())
 
+                # Add special forms (vmap, scan, let, defn, etc.)
+                if self.compiler.special_forms:
+                    all_names.extend(self.compiler.special_forms.keys())
+
                 # Filter matches
                 self.matches = [name for name in all_names if name.startswith(text)]
                 self.matches = sorted(set(self.matches))  # Unique and sorted
