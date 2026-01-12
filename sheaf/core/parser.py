@@ -125,6 +125,7 @@ def parse(tokens, last_func=None, filename="<sheaf>"):
         )
 
     if token_text in ("(", "["):
+        is_vector = token_text == "["
         L = SheafList(line=line_num, filename=filename)
         while tokens and tokens[0][0] not in (")", "]"):
             # Pass the function name down the recursion
@@ -134,6 +135,16 @@ def parse(tokens, last_func=None, filename="<sheaf>"):
             ctx = f" in function `{last_func}`" if last_func else ""
             raise SheafSyntaxError(f"Unclosed parenthesis or bracket{ctx}", line_num)
         tokens.pop(0)
+
+        # Check for dtype keyword after vector closing bracket: [1 2 3] :f32
+        if is_vector and tokens and tokens[0][0].startswith(":"):
+            dtype_token = tokens[0][0]
+            valid_dtypes = {":f32", ":bf16", ":f64"}
+            if dtype_token in valid_dtypes:
+                tokens.pop(0)  # consume dtype keyword
+                # Store dtype as metadata on the list
+                L._dtype = dtype_token
+
         return L
     elif token_text in (")", "]"):
         ctx = f" in function `{last_func}`" if last_func else ""

@@ -738,6 +738,57 @@ class ScanForm(SpecialForm):
         return [final_carry, ys]
 
 
+class WithDtypeForm(SpecialForm):
+    """with-dtype dtype body - temporarily change tensor dtype"""
+
+    def __init__(self):
+        super().__init__("with-dtype")
+
+    def compile(self, compiler, args, local_vars):
+        """
+        Temporarily change dtype for all tensor creations in body.
+
+        Syntax:
+            (with-dtype :f32 body...)
+            (with-dtype :bf16 body...)
+            (with-dtype :f64 body...)
+        """
+        if len(args) < 2:
+            raise ValueError("with-dtype requires dtype and body expressions")
+
+        # Get dtype keyword
+        dtype_keyword = args[0]
+        if isinstance(dtype_keyword, str) and dtype_keyword.startswith(":"):
+            dtype_map = {
+                ":f32": "float32",
+                ":bf16": "bfloat16",
+                ":f64": "float64",
+            }
+            dtype = dtype_map.get(dtype_keyword)
+            if not dtype:
+                raise ValueError(
+                    f"Unknown dtype: {dtype_keyword}. Use :f32, :bf16, or :f64"
+                )
+        else:
+            raise ValueError(
+                f"dtype must be a keyword (:f32, :bf16, :f64), got {dtype_keyword}"
+            )
+
+        # Save current dtype
+        old_dtype = compiler.dtype
+        compiler.dtype = dtype
+
+        try:
+            # Execute body with new dtype
+            result = None
+            for expr in args[1:]:
+                result = compiler.compile(expr, local_vars)
+            return result
+        finally:
+            # Restore old dtype
+            compiler.dtype = old_dtype
+
+
 class DefmacroForm(SpecialForm):
     """defmacro macro definition: (defmacro name [params] body)"""
 

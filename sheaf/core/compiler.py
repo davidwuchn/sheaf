@@ -37,6 +37,7 @@ class Sheaf:
         self.macro_engine = create_macro_engine()  # Initialize macro engine
         self.macro_engine.compiler = self  # Connect macro engine to compiler
         self.trace = False
+        self.dtype = "float32"  # Default dtype (f32)
 
     def _init_env(self):
         """Initialize the global environment with runtime operations."""
@@ -172,7 +173,7 @@ class Sheaf:
         return False
 
     def _compile_tensor_literal(self, exp):
-        # Compile a tensor literal to JAX array
+        # Compile a tensor literal to JAX array with current dtype or explicit dtype
         import jax.numpy as jnp
 
         def finalize_literal(item):
@@ -180,7 +181,14 @@ class Sheaf:
                 return [finalize_literal(x) for x in item]
             return item
 
-        return jnp.array(finalize_literal(exp))
+        # Check for explicit dtype metadata from parser: [1 2 3] :f32
+        dtype = self.dtype
+        if hasattr(exp, "_dtype"):
+            dtype_keyword = exp._dtype
+            dtype_map = {":f32": "float32", ":bf16": "bfloat16", ":f64": "float64"}
+            dtype = dtype_map.get(dtype_keyword, self.dtype)
+
+        return jnp.array(finalize_literal(exp), dtype=dtype)
 
     def _compile_function_call(self, exp, op, args, local_vars):
         # Compile and execute a standard function call
