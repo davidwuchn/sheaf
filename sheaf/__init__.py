@@ -42,7 +42,9 @@ class Sheaf(CoreSheaf):
             raise FileNotFoundError(f"Sheaf file not found: {path}")
 
         with open(path, "r") as f:
-            self.load(f.read())
+            source = f.read()
+            self._loaded_source = source
+            self.load(source)
 
     def __getattr__(self, name):
         lisp_name = name.replace("_", "-")
@@ -162,6 +164,46 @@ class Sheaf(CoreSheaf):
             list: Sorted list of special form names (defn, let, vmap, scan, etc.)
         """
         return sorted(self.special_forms.keys())
+
+    def __repr__(self):
+        """Pretty representation showing loaded functions."""
+        n_funcs = len(self.registry)
+        if n_funcs == 0:
+            return f"<Sheaf (empty)>"
+
+        func_names = ", ".join(sorted(self.registry.keys())[:5])
+        if n_funcs > 5:
+            func_names += f", ... +{n_funcs - 5} more"
+
+        return (
+            f"<Sheaf: {n_funcs} function{'s' if n_funcs != 1 else ''}> [{func_names}]"
+        )
+
+    def show(self, name=None):
+        """
+        Display function source code or loaded code.
+
+        Args:
+            name: Optional function name to show. If None, shows all loaded code.
+        """
+        if name is None:
+            # Show all loaded source
+            if hasattr(self, "_loaded_source"):
+                print(self._loaded_source)
+            else:
+                print("No source available. Functions loaded:")
+                for fname in sorted(self.registry.keys()):
+                    print(f"  - {fname}")
+        else:
+            # Show specific function
+            if name in self.registry:
+                func = self.registry[name]
+                if hasattr(func, "__sheaf_source__"):
+                    print(func.__sheaf_source__)
+                else:
+                    print(f"No source available for '{name}'")
+            else:
+                print(f"Function '{name}' not found")
 
 
 __all__ = ["Sheaf"]
