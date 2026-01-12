@@ -11,15 +11,14 @@ from typing import Optional
 
 class SheafErrorFormatter:
     def __init__(self):
-        self.source_code = None
-        self.source_lines = []
-        self.filename = "<sheaf>"
+        self.sources = {}  # filename -> source_code
+        self.current_filename = "<sheaf>"
 
     def set_source(self, code: str, filename: str = "<sheaf>"):
         # Store the original Sheaf source code for error context
-        self.source_code = code
-        self.source_lines = code.splitlines()
-        self.filename = filename
+        # Keep a map of all loaded files
+        self.sources[filename] = code
+        self.current_filename = filename
 
     def get_code_context(self, line_num: int, context_lines: int = 2) -> str:
         # Get lines of code around the error with line numbers
@@ -38,12 +37,25 @@ class SheafErrorFormatter:
         return "\n".join(lines)
 
     def format_error(
-        self, error: Exception, expression=None, func_name: str = "top-level"
+        self,
+        error: Exception,
+        expression=None,
+        func_name: str = "top-level",
+        filename: str = None,
     ) -> str:
         # Extract line number if available
         line_num = None
         if hasattr(expression, "line"):
             line_num = expression.line
+
+        # Determine which source file to use
+        if filename is None:
+            filename = self.current_filename
+
+        # Get source lines for this file
+        source_lines = []
+        if filename in self.sources:
+            source_lines = self.sources[filename].splitlines()
 
         # Build the error message
         parts = []
@@ -67,7 +79,7 @@ class SheafErrorFormatter:
             error_msg = f"index out of range: {error_msg}"
 
         # Header with location
-        location = f"{self.filename}"
+        location = f"{filename}"
         if line_num:
             location += f":{line_num}"
         if func_name != "top-level":
@@ -77,17 +89,15 @@ class SheafErrorFormatter:
         parts.append(f" --> {location}")
 
         # Show code context if we have line number
-        if line_num and self.source_lines:
+        if line_num and source_lines:
             parts.append("  |")
             # Get context lines
             context_lines = 2
             start = max(1, line_num - context_lines)
-            end = min(len(self.source_lines), line_num + context_lines)
+            end = min(len(source_lines), line_num + context_lines)
 
             for i in range(start, end + 1):
-                line_text = (
-                    self.source_lines[i - 1] if i <= len(self.source_lines) else ""
-                )
+                line_text = source_lines[i - 1] if i <= len(source_lines) else ""
                 if i == line_num:
                     parts.append(f"{i:3} | {line_text}")
                     # Add caret line pointing to error
@@ -192,9 +202,12 @@ def set_source(code: str, filename: str = "<sheaf>"):
 
 
 def format_error(
-    error: Exception, expression=None, func_name: str = "top-level"
+    error: Exception,
+    expression=None,
+    func_name: str = "top-level",
+    filename: str = None,
 ) -> str:
-    return _formatter.format_error(error, expression, func_name)
+    return _formatter.format_error(error, expression, func_name, filename)
 
 
 def install_exception_handler():
