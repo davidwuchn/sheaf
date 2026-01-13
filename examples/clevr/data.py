@@ -113,3 +113,18 @@ def generate_query(scene, key):
     color = COLORS[0]
     exists = any(o["color"] == color for o in objects)
     return ["exists?", ["filter-color", f":{color}"]], exists
+
+
+def generate_batch(key, batch_size=32, n_objects=4):
+    """Generate a batch of (scenes, queries, answers)."""
+    keys = jax.random.split(key, batch_size * 2)
+
+    scenes, queries, answers = [], [], []
+    for i in range(batch_size):
+        scene = generate_scene(keys[i * 2], n_objects)
+        query, answer = generate_query(scene, keys[i * 2 + 1])
+        scenes.append(scene_to_tensor(scene))
+        queries.append(query)
+        answers.append(answer)
+
+    return jnp.stack(scenes), queries, answers
