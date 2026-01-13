@@ -95,3 +95,29 @@
 (defn query-color (obj)    (query-attribute obj 0 4))
 (defn query-shape (obj)    (query-attribute obj 4 7))
 (defn query-position (obj) (query-attribute obj 7 9))
+
+
+;; Query executor - the core of neuro-symbolic reasoning
+
+(defn execute-query (scene q params)
+  "Execute a symbolic S-expression query on a scene.
+   Recursively interprets the query as differentiable operations."
+  (let (op (first q)
+        arg1 (second q)
+        rec (lambda (subq) (execute-query scene subq params)))
+    (case op
+      "filter-color" (filter-color scene arg1 params)
+      "filter-shape" (filter-shape scene arg1 params)
+      "unique"       (unique (rec arg1) params)
+      "leftmost"     (leftmost (rec arg1) params)
+      "rightmost"    (rightmost (rec arg1) params)
+      "left-of"      (left-of scene (rec arg1) params)
+      "right-of"     (right-of scene (rec arg1) params)
+      "above"        (above scene (rec arg1) params)
+      "below"        (below scene (rec arg1) params)
+      "exists?"      (exists? (rec arg1) params)
+      "intersect"    (intersect (rec arg1) (rec (nth q 2)))
+      "query-color"    (query-color (rec arg1))
+      "query-shape"    (query-shape (rec arg1))
+      "query-position" (query-position (rec arg1))
+      scene)))
