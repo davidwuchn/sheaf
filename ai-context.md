@@ -514,20 +514,30 @@ Guards trigger an **Emergency Backtrace** (last 100 ops with shapes/stats) when 
 
 ```
 sheaf/
+├── __init__.py           # Main Sheaf class, to_pytree/from_pytree
+├── __main__.py           # CLI entry point
 ├── core/
-│   ├── compiler.py       # S-expr → JAX compiler
-│   ├── parser.py         # Lisp parser
-│   ├── trace.py          # Tracing & guards
-│   └── error_handler.py  # Error reporting
+│   ├── compiler.py       # S-expr → JAX compiler, HashableDict, special forms dispatch
+│   ├── parser.py         # Lisp tokenizer & parser, SheafList with metadata
+│   ├── macro_engine.py   # Macro expansion, quote/quasiquote, compile-time eval
+│   ├── special_forms.py  # Special forms: defn, let, if, defmacro, etc.
+│   ├── tracer.py         # Execution tracing, guards (:no-nan, :range, :shape)
+│   └── error_handler.py  # Error reporting & Emergency Backtrace
 ├── runtime/
-│   ├── core_ops.py       # defn, let, if, etc.
-│   ├── jax_ops.py        # einsum, reshape, etc.
-│   ├── math_ops.py       # +, -, *, /, @, etc.
-│   ├── nn_ops.py         # relu, softmax, etc.
-│   └── string_ops.py     # str, concat, etc.
+│   ├── core_ops.py       # defn, let, if, dict, list, get, with-params, etc.
+│   ├── jax_ops.py        # einsum, reshape, transpose, swapaxes, tensor-split, etc.
+│   ├── math_ops.py       # +, -, *, /, @, **, sum, mean, etc.
+│   ├── nn_ops.py         # relu, gelu, sigmoid, tanh, softmax, silu, layer-norm, etc.
+│   └── string_ops.py     # str, concat, symbol?, gensym
+├── repl/
+│   ├── __init__.py       # REPL session management
+│   ├── __main__.py       # REPL entry point (python -m sheaf.repl)
+│   └── help.py           # Interactive help & documentation
 └── lib/
-    ├── nn.shf            # Neural network stdlib
-    └── optim.shf         # Optimizers stdlib
+    ├── macros.shf        # Standard macros: when, unless, comment
+    ├── nn.shf            # Neural network stdlib: layer-norm, linear, cross-entropy-loss
+    ├── optim.shf         # Optimizers: sgd-step, adam-step, gradient clipping
+    └── repl.shf          # REPL-specific helpers
 ```
 
 ---
