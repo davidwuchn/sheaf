@@ -373,6 +373,35 @@ JAX uses explicit PRNG keys (not global state). Always create a key first, then 
 
 ## Observability & Debugging
 
+### Interactive REPL (Console)
+
+Launch the Sheaf interactive console for exploration and debugging:
+
+```bash
+python -m sheaf.repl
+```
+
+Features:
+
+- **Expression evaluation**: Test functions and inspect results
+- **Tensor statistics**: Automatic μ/min/max for large tensors
+- **Tracing control**: `:trace verbose`, `:scope function-name`
+- **Environment inspection**: `:env` to see all functions/variables
+- **Auto-completion**: Tab-complete commands, functions, and variables
+- **Command history**: Saved to `~/.sheaf_history`
+
+Example session:
+
+```sheaf
+sheaf> (defn double (x) (* x 2))
+sheaf> (double 21)
+⇒ Tensor i32[] = 42
+
+sheaf> :trace verbose
+sheaf> (reshape (arange 100) 10 10)
+⇒ Tensor i32[10x10] (μ=49.500 min=0.000 max=99.000)
+```
+
 ### Tracing
 
 Configure via `Sheaf` instance:
