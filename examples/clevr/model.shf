@@ -34,3 +34,64 @@
 
 (defn shape-idx (name)
   (case name "circle" 0 "square" 1 "triangle" 2 0))
+
+
+;; Filters - wrap utils with learned embeddings
+
+(defn filter-color (scene color-kw params)
+  (let (idx (color-idx (slice (str color-kw) 1))
+        query (get (get params :color_embeddings) idx))
+    (soft-filter scene query (get-in params [:temps :filter]))))
+
+(defn filter-shape (scene shape-kw params)
+  (let (idx (shape-idx (slice (str shape-kw) 1))
+        query (get (get params :shape_embeddings) idx))
+    (soft-filter scene query (get-in params [:temps :filter]))))
+
+
+;; Selection
+
+(defn unique (scene params)
+  (soft-unique scene (get-in params [:temps :unique])))
+
+(defn leftmost (scene params)
+  (soft-leftmost scene (get-in params [:temps :leftmost])))
+
+(defn rightmost (scene params)
+  (soft-rightmost scene (get-in params [:temps :leftmost])))
+
+
+;; Spatial relations
+
+(defn left-of (scene ref params)
+  (spatial-left-of scene ref
+    (get-in params [:thresholds :spatial])
+    (get-in params [:temps :spatial])))
+
+(defn right-of (scene ref params)
+  (spatial-right-of scene ref
+    (get-in params [:thresholds :spatial])
+    (get-in params [:temps :spatial])))
+
+(defn above (scene ref params)
+  (spatial-above scene ref
+    (get-in params [:thresholds :spatial])
+    (get-in params [:temps :spatial])))
+
+(defn below (scene ref params)
+  (spatial-below scene ref
+    (get-in params [:thresholds :spatial])
+    (get-in params [:temps :spatial])))
+
+
+;; Logic & attribute queries
+
+(defn exists? (scene params)
+  (exists-any scene (get-in params [:thresholds :exists])))
+
+(defn intersect (scene1 scene2)
+  (intersect-scenes scene1 scene2))
+
+(defn query-color (obj)    (query-attribute obj 0 4))
+(defn query-shape (obj)    (query-attribute obj 4 7))
+(defn query-position (obj) (query-attribute obj 7 9))
