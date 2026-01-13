@@ -14,3 +14,32 @@
   (let (scores (einsum "...nd,d->...n" scene query-vec)
         attention (sigmoid (/ scores temperature)))
     (* scene (reshape attention (list -1 1)))))
+
+
+;; Soft selection - uses softmax for mutual exclusion
+
+(defn soft-unique (scene temperature)
+  "Select single object via softmax over presence scores."
+  (let (objectness (sum (abs scene) :axis -1)
+        attention (softmax (/ objectness temperature) :axis -1))
+    (einsum "...n,...nd->...d" attention scene)))
+
+(defn soft-leftmost (scene temperature)
+  "Select leftmost object (smallest x) via softmax."
+  (let (x-coords (get scene ... 7)
+        objectness (sum (abs scene) :axis -1)
+        is-present (> objectness 1e-3)
+        scores (/ (* x-coords -1.0) temperature)
+        masked-scores (where is-present scores -1e10)
+        attention (softmax masked-scores :axis -1))
+    (einsum "...n,...nd->...d" attention scene)))
+
+(defn soft-rightmost (scene temperature)
+  "Select rightmost object (largest x) via softmax."
+  (let (x-coords (get scene ... 7)
+        objectness (sum (abs scene) :axis -1)
+        is-present (> objectness 1e-3)
+        scores (/ x-coords temperature)
+        masked-scores (where is-present scores -1e10)
+        attention (softmax masked-scores :axis -1))
+    (einsum "...n,...nd->...d" attention scene)))
