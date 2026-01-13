@@ -58,3 +58,58 @@ def scene_to_tensor(scene):
         features = features.at[i].set(vec)
 
     return features
+
+
+def generate_query(scene, key):
+    """
+    Generate a random query about the scene as an S-expression.
+
+    Query types:
+    - "What color is the leftmost [shape]?"
+    - "Is there a [color] [shape]?"
+    - "What shape is left of the [color] object?"
+
+    Returns (query_sexp, answer).
+    """
+    objects = scene["objects"]
+    query_type = int(jax.random.randint(key, (), 0, 3))
+
+    if query_type == 0:
+        # Query color of leftmost shape
+        shape = SHAPES[int(jax.random.randint(key, (), 0, len(SHAPES)))]
+        candidates = [o for o in objects if o["shape"] == shape]
+        if candidates:
+            leftmost = min(candidates, key=lambda o: o["x"])
+            return [
+                "query-color",
+                ["leftmost", ["filter-shape", f":{shape}"]],
+            ], leftmost["color"]
+
+    elif query_type == 1:
+        # Existence query
+        color = COLORS[int(jax.random.randint(key, (), 0, len(COLORS)))]
+        shape = SHAPES[int(jax.random.randint(key, (), 0, len(SHAPES)))]
+        exists = any(o["color"] == color and o["shape"] == shape for o in objects)
+        return [
+            "exists?",
+            ["intersect", ["filter-color", f":{color}"], ["filter-shape", f":{shape}"]],
+        ], exists
+
+    else:
+        # Spatial relation query
+        color = COLORS[int(jax.random.randint(key, (), 0, len(COLORS)))]
+        candidates = [o for o in objects if o["color"] == color]
+        if candidates:
+            ref = candidates[0]
+            left_objs = [o for o in objects if o["x"] < ref["x"] - 0.1]
+            if left_objs:
+                nearest = max(left_objs, key=lambda o: o["x"])
+                return [
+                    "query-shape",
+                    ["left-of", ["unique", ["filter-color", f":{color}"]]],
+                ], nearest["shape"]
+
+    # Fallback: simple existence
+    color = COLORS[0]
+    exists = any(o["color"] == color for o in objects)
+    return ["exists?", ["filter-color", f":{color}"]], exists
