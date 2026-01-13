@@ -13,8 +13,8 @@
 (defn layer-norm (x p axis)
   (let (eps 1e-5
         ;; if no axis is specified, use -1
-        m (mean x :axis axis :keepdims True)
-        v (var x :axis axis :keepdims True)
+        m (mean x :axis axis :keepdims true)
+        v (var x :axis axis :keepdims true)
         gamma (get p :gamma)
         beta (get p :beta))
     (+ (* (/ (- x m) (sqrt (+ v eps))) gamma) beta)))
