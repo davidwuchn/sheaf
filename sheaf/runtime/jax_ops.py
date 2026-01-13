@@ -69,13 +69,11 @@ def sheaf_shape(tensor, axis=None):
         )
 
 
-def sheaf_slice(x, start, length):
+def sheaf_dynamic_slice(x, start, length):
     """
-    Wraps JAX dynamic_slice for simpler S-expression syntax.
-    Enables efficient batch sampling directly on device.
+    JAX dynamic_slice on first axis. For JIT-compatible slicing with variable indices.
+    Use (slice x start end) for Python-style slicing on strings/lists/tensors.
     """
-    # We assume slicing on the first dimension for 1D data (sequences)
-    # or use dynamic_slice_in_dim for more flexibility
     return jax.lax.dynamic_slice_in_dim(x, start, length, axis=0)
 
 
@@ -134,7 +132,7 @@ def get_jax_env():
         "reshape": sheaf_reshape,
         "roll": jnp.roll,
         "shape": sheaf_shape,
-        "slice": sheaf_slice,
+        "dynamic-slice": sheaf_dynamic_slice,
         "swapaxes": jnp.swapaxes,
         "tanh": jnp.tanh,
         "tensor-split": jnp.split,
