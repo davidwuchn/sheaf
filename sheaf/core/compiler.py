@@ -51,8 +51,8 @@ class Sheaf:
         env.update(
             {
                 "...": Ellipsis,
-                "False": False,
-                "True": True,
+                # "False": False,
+                # "True": True,
                 "concat": lambda *args: "".join(map(str, args)),
                 "false": False,
                 "len": len,
