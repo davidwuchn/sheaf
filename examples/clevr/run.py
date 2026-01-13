@@ -6,6 +6,7 @@ as differentiable neural computations.
 """
 
 import os
+import pickle
 
 import data
 import jax
@@ -21,6 +22,22 @@ def load_model():
     with open(model_path) as f:
         shf.load(f.read())
     return shf
+
+
+def load_params(shf):
+    """Load trained parameters from params.pkl if it exists, otherwise initialize new ones."""
+    params_path = os.path.join(os.path.dirname(__file__), "params.pkl")
+
+    if os.path.exists(params_path):
+        print(f"Loading trained parameters from {params_path}")
+        with open(params_path, "rb") as f:
+            params = pickle.load(f)
+        return params
+    else:
+        print(f"No trained parameters found at {params_path}")
+        print("To train the model first, run: python train.py")
+        print("Using random parameters\n")
+        return shf.init_clevr_params(jax.random.PRNGKey(0))
 
 
 def test_query(shf, scene_dict, query, answer, params):
@@ -80,7 +97,7 @@ def main():
     shf = load_model()
     print(f"Loaded functions: {list(shf.registry.keys())}")
 
-    params = shf.init_clevr_params(jax.random.PRNGKey(0))
+    params = load_params(shf)
     run_tests(shf, params, num_tests=10)
 
 
