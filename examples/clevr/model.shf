@@ -1,0 +1,36 @@
+;; CLEVR Neuro-Symbolic Reasoning Model
+;;
+;; Differentiable visual reasoning: symbolic queries -> JAX computation.
+;; Scene tensor: [Batch, N_objects, 9] = [color(4), shape(3), x, y]
+
+(use nn)
+(use optim)
+(use ./utils.shf)
+
+
+;; Learnable parameters
+
+(defn init-clevr-params (key)
+  "Initialize embeddings and temperatures."
+  (let ([k1 k2 k3] (random-split key 3)
+        color-base [[1 0 0 0 0 0 0 0 0]    ;; red
+                    [0 1 0 0 0 0 0 0 0]    ;; green
+                    [0 0 1 0 0 0 0 0 0]    ;; blue
+                    [0 0 0 1 0 0 0 0 0]]   ;; yellow
+        shape-base [[0 0 0 0 1 0 0 0 0]    ;; circle
+                    [0 0 0 0 0 1 0 0 0]    ;; square
+                    [0 0 0 0 0 0 1 0 0]])  ;; triangle
+    (dict
+      :color_embeddings (+ color-base (* (random-normal k1 (list 4 9)) 0.05))
+      :shape_embeddings (+ shape-base (* (random-normal k2 (list 3 9)) 0.05))
+      :temps (dict :filter 1.0 :unique 0.8 :leftmost 1.0 :spatial 1.0)
+      :thresholds (dict :spatial 0.1 :exists 1.72))))
+
+
+;; Vocabulary mapping
+
+(defn color-idx (name)
+  (case name "red" 0 "green" 1 "blue" 2 "yellow" 3 0))
+
+(defn shape-idx (name)
+  (case name "circle" 0 "square" 1 "triangle" 2 0))
