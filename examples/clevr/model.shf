@@ -23,7 +23,7 @@
     (dict
       :color_embeddings (+ color-base (* (random-normal k1 (list 4 9)) 0.05))
       :shape_embeddings (+ shape-base (* (random-normal k2 (list 3 9)) 0.05))
-      :temps (dict :filter 1.0 :unique 0.8 :leftmost 1.0 :spatial 1.0)
+      :temps (dict :filter 0.2 :unique 0.8 :leftmost 1.0 :spatial 1.0)
       :thresholds (dict :spatial 0.1 :exists 1.72))))
 
 
@@ -146,14 +146,9 @@
 
 ;; Training step
 
-(defn train-step (params state scenes queries targets config)
-  ; Single training step with Adam and gradient clipping
+(defn train-step (params m v t scenes queries targets config)
+  ; Single training step with Adam
   (let (loss-fn (lambda (p) (batch-loss p scenes queries targets))
         [loss grads] ((value-and-grad loss-fn) params)
-        clipped (clip-by-global-norm grads (get config :max_grad_norm))
-        adam-result (adam-step params clipped state (get config :lr)))
-    (dict :loss loss
-          :params (get adam-result :p)
-          :m (get adam-result :m)
-          :v (get adam-result :v)
-          :t (get adam-result :t))))
+        [new-p new-m new-v new-t] (adam-step params grads m v t (get config :lr) 0.9 0.999 1e-8))
+    (dict :loss loss :params new-p :m new-m :v new-v :t new-t)))

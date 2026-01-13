@@ -12,7 +12,8 @@
 (defn soft-filter (scene query-vec temperature)
   "Filter objects by similarity to query vector."
   (let (scores (einsum "...nd,d->...n" scene query-vec)
-        attention (sigmoid (/ scores temperature)))
+        ;; Biais de -0.5 pour que score=0 donne attention~0, score=1 donne attention~1
+        attention (sigmoid (/ (- scores 0.5) temperature)))
     (* scene (reshape attention (list -1 1)))))
 
 
@@ -85,12 +86,8 @@
 ;; Attribute extraction
 
 (defn query-attribute (obj start end)
-  "Extract attribute slice and normalize to probability distribution."
+  "Extract attribute slice as logits (not normalized)."
   (let (aggregated (if (== (ndim obj) 3) (sum obj :axis -2) obj)
-        attribute (get aggregated ... (range start end))
-        attr-sum (sum attribute :axis -1 :keepdims true)
-        safe-sum (maximum attr-sum 1e-10)
-        normalized (/ attribute safe-sum)
-        n-classes (- end start)
-        is-empty (< attr-sum 1e-10))
-    (where is-empty (/ 1.0 n-classes) normalized)))
+        attribute (get aggregated ... (range start end)))
+    ;; Retourne les valeurs brutes comme logits pour cross-entropy
+    attribute))
