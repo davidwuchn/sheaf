@@ -312,6 +312,13 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 | `(empty? coll)`    | Check if empty                   | `(empty? (list))` → `True`    |
 | `(count coll)`     | Number of elements               | `(count (list 1 2))` → `2`    |
 
+### Symbol Manipulation
+
+| Function           | Description               | Example                    |
+| ------------------ | ------------------------- | -------------------------- |
+| `(symbol? obj)`    | Check if object is symbol | `(symbol? 'foo)` → `True`  |
+| `(gensym prefix?)` | Generate unique symbol    | `(gensym)` → `"G__abc123"` |
+
 ### Random Numbers (JAX PRNG)
 
 JAX uses explicit PRNG keys (not global state). Always create a key first, then split for independent samples.
