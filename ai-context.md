@@ -56,7 +56,7 @@ Neural network parameters are stored in nested HashableDicts:
       :l2 (dict :W weights :b biases))
 ```
 
-### 3. JAX Integration
+### 3. Python Integration
 
 ```python
 from sheaf import Sheaf
@@ -68,6 +68,80 @@ result = shf.add_five(10)  # Direct Python call
 # Access compiled JAX function
 jax_func = shf.registry["add-five"]
 ```
+
+### 4. Macro System
+
+Sheaf supports compile-time macros with quasiquote syntax:
+
+```sheaf
+(defmacro when [cond body]
+  `(if ~cond ~body nil))
+
+;; Usage:
+(when (> x 0)
+  (print "positive"))
+
+;; Expands to:
+(if (> x 0)
+  (print "positive")
+  nil)
+```
+
+**Quote and quasiquote operators:**
+
+- `'expr` or `(quote expr)` - quote: prevent evaluation, return data as-is
+- `` `expr `` - quasiquote: create template with selective evaluation
+- `~expr` - unquote: evaluate expression inside quasiquote
+- `~@expr` - unquote-splicing: splice list into quasiquote
+
+**Quote examples:**
+
+```sheaf
+'foo              ; => foo (symbol, not evaluated)
+'(+ 1 2)          ; => (+ 1 2) (list, not evaluated)
+`(+ 1 ~(* 2 3))   ; => (+ 1 6) (quasiquote with unquote)
+```
+
+**Standard macros** (from `lib/macros.shf`):
+
+- `when` - conditional execution (returns nil if false)
+- `unless` - inverse conditional
+- `comment` - comment out code blocks
+
+#### Advanced Macros: `defmodel`
+
+Sheaf macros can manipulate code at compile-time using Lisp functions. The `defmodel` macro (from `lib/defmodel.shf`) demonstrates this:
+
+```sheaf
+(use defmodel)
+
+(defmodel my-mlp [x]
+  (layer :l1 (linear 128) relu)
+  (layer :l2 (linear 10) softmax))
+```
+
+**Expands to:**
+
+```sheaf
+(defn my-mlp [x p]
+  (as-> x _
+    (with-params (get p :l1) (relu (+ (@ _ W) b)))
+    (with-params (get p :l2) (softmax (+ (@ _ W) b)))))
+```
+
+**How it works:**
+
+- The macro uses `map` and `transform-layer` to process each layer specification
+- Functions like `map`, `first`, `nth` operate on **S-expressions as data** at compile-time
+- The `~@` (unquote-splicing) operator injects the transformed layers into the template
+
+**Key insight:** Macros distinguish between:
+
+- **Symbols as data** (e.g., `'x'` remains a symbol in the AST)
+- **Functions as code** (e.g., `(first params)` executes `first` at macro expansion time)
+- **First-class functions** (e.g., `transform-layer` in `(map transform-layer layers)`)
+
+This allows powerful metaprogramming while maintaining code clarity.
 
 ---
 
