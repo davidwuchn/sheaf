@@ -11,7 +11,7 @@
 ;; Learnable parameters
 
 (defn init-clevr-params (key)
-  "Initialize embeddings and temperatures."
+  ; Initialize embeddings and temperatures
   (let ([k1 k2 k3] (random-split key 3)
         color-base [[1 0 0 0 0 0 0 0 0]    ;; red
                     [0 1 0 0 0 0 0 0 0]    ;; green
@@ -100,8 +100,7 @@
 ;; Query executor - the core of neuro-symbolic reasoning
 
 (defn execute-query (scene q params)
-  "Execute a symbolic S-expression query on a scene.
-   Recursively interprets the query as differentiable operations."
+ ; Execute a symbolic S-expression query on a scene
   (let (op (first q)
         arg1 (second q)
         rec (lambda (subq) (execute-query scene subq params)))
@@ -121,3 +120,40 @@
       "query-shape"    (query-shape (rec arg1))
       "query-position" (query-position (rec arg1))
       scene)))
+
+
+;; Loss functions
+
+(defn clevr-loss (params scene query target)
+  ; Cross-entropy loss for a single query
+  (let (pred (execute-query scene query params)
+        log-probs (log-softmax pred :axis -1)
+        target-vec (one-hot target (get (shape log-probs) -1)))
+    (* -1.0 (mean (sum (* log-probs target-vec) :axis -1)))))
+
+(defn batch-loss (params scenes queries targets)
+  ; Average loss over a batch
+  (let (n (get (shape scenes) 0))
+    (/ (reduce (lambda (acc i)
+                 (+ acc (clevr-loss params
+                          (reshape (get scenes i) 1 -1 9)
+                          (nth queries i)
+                          (get targets i))))
+               0.0
+               (range n))
+       n)))
+
+
+;; Training step
+
+(defn train-step (params state scenes queries targets config)
+  ; Single training step with Adam and gradient clipping
+  (let (loss-fn (lambda (p) (batch-loss p scenes queries targets))
+        [loss grads] ((value-and-grad loss-fn) params)
+        clipped (clip-by-global-norm grads (get config :max_grad_norm))
+        adam-result (adam-step params clipped state (get config :lr)))
+    (dict :loss loss
+          :params (get adam-result :p)
+          :m (get adam-result :m)
+          :v (get adam-result :v)
+          :t (get adam-result :t))))
