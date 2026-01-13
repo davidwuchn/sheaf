@@ -11,7 +11,8 @@ keywords: [sheaf, jax, lisp, neural-networks, ml, dsl, differentiable]
 > **Quick reference for AI assistants helping with Sheaf development.**
 >
 > Sheaf is a differentiable Lisp dialect for machine learning.
-> Philosophy: "Clojure for Tensors". It compiles pure S expressions into accelerated execution backends. The current backend targets JAX.
+> Philosophy: "Clojure for Tensors". It compiles pure S expressions into accelerated execution backends.
+> The current backend targets JAX.
 
 ---
 
@@ -598,6 +599,44 @@ import jax
 batched_forward = jax.vmap(shf.forward)
 fast_forward = jax.jit(shf.forward)
 ```
+
+### Training loop
+
+```python
+state = {"p": params, "m": m, "v": v, "t": 1}
+for epoch in range(epochs):
+    state = shf.train_step(state["p"], state["m"], state["v"],
+                           state["t"], X, y, lr)
+    print(f"Loss: {state['loss']}")
+```
+
+### Checkpointing with pytrees
+
+```python
+# Convert Sheaf state to pytree
+tree = shf.to_pytree(state)
+
+# Save (using Python, not Sheaf)
+import safetensors
+safetensors.save_file(tree, "checkpoint.safetensors")
+
+# Load and restore
+loaded_tree = safetensors.load_file("checkpoint.safetensors")
+restored_state = shf.from_pytree(loaded_tree)
+
+# Continue training
+state = shf.train_step(restored_state, data)
+```
+
+**Properties:**
+
+- `to_pytree` converts Sheaf values (dict, list, tensor, scalar) to JAX pytrees
+- `from_pytree` reconstructs Sheaf values from pytrees
+- Invertible: `from_pytree(to_pytree(x)) == x`
+- Compatible with `jax.tree_util` operations
+- Rejects non-serializable types (functions, symbols)
+
+---
 
 ## Version & Compatibility
 
