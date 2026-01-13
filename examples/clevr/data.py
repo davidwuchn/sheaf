@@ -34,3 +34,27 @@ def generate_scene(key, n_objects=4):
         objects.append({"shape": shape, "color": color, "x": x, "y": y})
 
     return {"objects": objects, "n_objects": n_objects}
+
+
+def scene_to_tensor(scene):
+    """
+    Convert scene dict to tensor [MAX_OBJECTS, FEATURE_DIM].
+
+    Each object encoded as: [color_onehot(4), shape_onehot(3), x, y]
+    Unused slots are zero-padded.
+    """
+    features = jnp.zeros((MAX_OBJECTS, FEATURE_DIM))
+
+    for i, obj in enumerate(scene["objects"]):
+        color_idx = COLORS.index(obj["color"])
+        shape_idx = SHAPES.index(obj["shape"])
+
+        vec = jnp.array(
+            [1.0 if j == color_idx else 0.0 for j in range(4)]
+            + [1.0 if j == shape_idx else 0.0 for j in range(3)]
+            + [obj["x"], obj["y"]]
+        )
+
+        features = features.at[i].set(vec)
+
+    return features
