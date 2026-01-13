@@ -1,0 +1,16 @@
+;; CLEVR Utility Functions - Soft Differentiable Operations
+;;
+;; Key insight: SIGMOID for filters (independent probabilities),
+;; SOFTMAX for selection (mutual exclusion).
+
+(use nn)
+
+
+;; Soft filtering - uses sigmoid for independent object selection
+
+(defn soft-filter (scene query-vec temperature)
+  "Filter objects by similarity to query vector.
+   Returns scene with attention weights applied."
+  (let (scores (einsum "...nd,d->...n" scene query-vec)
+        attention (sigmoid (/ scores temperature)))
+    (* scene (reshape attention (list -1 1)))))
