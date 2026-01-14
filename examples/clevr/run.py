@@ -1,8 +1,5 @@
 """
 CLEVR Neuro-Symbolic Reasoning Demo
-
-Demonstrates Sheaf's ability to execute symbolic queries
-as differentiable neural computations.
 """
 
 import os
@@ -16,7 +13,6 @@ from sheaf import Sheaf
 
 
 def load_model():
-    """Load and compile the CLEVR model."""
     shf = Sheaf()
     model_path = os.path.join(os.path.dirname(__file__), "model.shf")
     with open(model_path) as f:
@@ -25,11 +21,12 @@ def load_model():
 
 
 def load_params(shf):
-    """Load trained parameters from params.pkl if it exists, otherwise initialize new ones."""
-    params_path = os.path.join(os.path.dirname(__file__), "params.pkl")
+    params_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "weights.pkl")
+    )
 
     if os.path.exists(params_path):
-        print(f"Loading trained parameters from {params_path}")
+        print(f"Loading trained parameters from {params_path}\n")
         with open(params_path, "rb") as f:
             params = pickle.load(f)
         return params
@@ -41,7 +38,7 @@ def load_params(shf):
 
 
 def test_query(shf, scene_dict, query, answer, params):
-    """Test a single query and return success/failure."""
+    # Test a single query and return success/failure
     scene = jnp.expand_dims(data.scene_to_tensor(scene_dict), 0)
     result = shf.execute_query(scene, query, params)
 
@@ -67,7 +64,7 @@ def test_query(shf, scene_dict, query, answer, params):
 
 
 def run_tests(shf, params, num_tests=10):
-    """Run random tests and report accuracy."""
+    # Run random tests and report accuracy
     key = jax.random.PRNGKey(42)
     passed = 0
 
@@ -90,9 +87,7 @@ def run_tests(shf, params, num_tests=10):
 
 
 def main():
-    print("=" * 60)
-    print("CLEVR Neuro-Symbolic Reasoning")
-    print("=" * 60)
+    print("CLEVR Neuro-Symbolic Reasoning\n")
 
     shf = load_model()
     print(f"Loaded functions: {list(shf.registry.keys())}")
