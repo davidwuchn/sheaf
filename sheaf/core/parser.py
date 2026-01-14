@@ -139,11 +139,24 @@ def parse(tokens, last_func=None, filename="<sheaf>"):
         # Check for dtype keyword after vector closing bracket: [1 2 3] :f32
         if is_vector and tokens and tokens[0][0].startswith(":"):
             dtype_token = tokens[0][0]
-            valid_dtypes = {":f32", ":bf16", ":f64"}
+            valid_dtypes = {
+                ":f32",
+                ":f16",
+                ":bf16",
+                ":i32",
+                ":u32",
+                ":bool",
+            }
             if dtype_token in valid_dtypes:
                 tokens.pop(0)  # consume dtype keyword
                 # Store dtype as metadata on the list
                 L._dtype = dtype_token
+            else:
+                raise SheafSyntaxError(
+                    f"Invalid dtype '{dtype_token}' after vector. "
+                    f"Valid dtypes are: {', '.join(sorted(valid_dtypes))}",
+                    line_num,
+                )
 
         return L
     elif token_text in (")", "]"):

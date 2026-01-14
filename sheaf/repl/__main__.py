@@ -134,11 +134,15 @@ def is_balanced(text):
 
 
 def format_result(value):
-    """Pretty-print a Sheaf result value."""
     if isinstance(value, jnp.ndarray):
         # Format JAX arrays with shape and dtype info
         shape_str = "x".join(str(d) for d in value.shape)
-        dtype_str = str(value.dtype).replace("float32", "f32").replace("int32", "i32")
+        dtype_str = (
+            str(value.dtype)
+            .replace("bfloat16", "bf16")
+            .replace("float32", "f32")
+            .replace("int32", "i32")
+        )
 
         # Show actual values for small arrays
         if value.size <= 10:
@@ -188,7 +192,7 @@ Expression evaluation:
 Examples:
   (+ 1 2)
   (let (x [1 2 3]) (shape x))
-  [1 2 3 4]
+  [1 2 3 4] :bf16
 
 Tab: Completes the current command (or lists all commands if empty).
 

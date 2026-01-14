@@ -186,7 +186,14 @@ class Sheaf:
         dtype = self.dtype
         if hasattr(exp, "_dtype"):
             dtype_keyword = exp._dtype
-            dtype_map = {":f32": "float32", ":bf16": "bfloat16", ":f64": "float64"}
+            dtype_map = {
+                ":f16": "float16",
+                ":f32": "float32",
+                ":bf16": "bfloat16",
+                ":i32": "int32",
+                ":u32": "uint32",
+                ":bool": "bool",
+            }
             dtype = dtype_map.get(dtype_keyword, self.dtype)
 
         return jnp.array(finalize_literal(exp), dtype=dtype)
