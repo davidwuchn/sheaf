@@ -1,5 +1,5 @@
-# 2025 Damien Boureille | MIT License
-# Part of the Sheaf Language - https://github.com/sheaf/sheaf
+# Copyright (c) 2025 Damien Boureille
+# Licensed under the MIT License.
 
 """
 Implements real-time telemetry, numerical monitoring, and declarative guards
@@ -308,7 +308,7 @@ class Tracer:
                 self.emergency_mode = True
 
                 print(f"{self.RED}/!\\ Guard Breached: {guard_type}{self.RESET}")
-                print(f"Error: {error_msg}")
+                # print(f"Error: {error_msg}")
                 print(f"Value stats: {self._format_value(v, mode='verbose')}")
 
                 # Display ring buffer backtrace
