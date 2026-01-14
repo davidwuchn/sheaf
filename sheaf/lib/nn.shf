@@ -1,4 +1,4 @@
-;; lib/nn.shf
+;; Neural network library for Sheaf
 
 (defn cross-entropy-loss (logits targets)
   (let (;; Using runtime log-softmax directly
