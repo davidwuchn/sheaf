@@ -94,7 +94,14 @@ def run_training(shf, params, encoded_data, config):
 
 
 def run_inference(
-    shf, params, vocab, config, length=512, prompt="FIRST CITIZEN:", trace=False
+    shf,
+    params,
+    vocab,
+    config,
+    length=512,
+    prompt="FIRST CITIZEN:",
+    trace=False,
+    scope=None,
 ):
     print(f"\nGenerating text (Prompt: '{prompt}')...")
     initial_ids = utils.encode(prompt, vocab)
@@ -104,7 +111,9 @@ def run_inference(
 
     for _ in range(length):
         # New short call: shf.generate_token
-        res = shf.generate_token(ids, params, config, key, 10, 0.8, trace=trace)
+        res = shf.generate_token(
+            ids, params, config, key, 10, 0.8, trace=trace, scope=scope
+        )
         ids = jnp.roll(ids, -1).at[-1].set(int(res["next_id"]))
         key = res["key"]
         print(utils.decode([int(res["next_id"])], vocab), end="", flush=True)
