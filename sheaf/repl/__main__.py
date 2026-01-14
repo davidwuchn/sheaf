@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2025 Damien Boureille
 # Licensed under the MIT License.
-# See LICENSE file in the project root for full license information.
 
 """
 Sheaf Console - Interactive REPL for the Sheaf language.
@@ -171,7 +170,6 @@ def format_result(value):
 
 
 def print_help():
-    """Print REPL help message."""
     print("""
 Sheaf Console - Interactive REPL
 
@@ -233,7 +231,7 @@ def run_repl():
             # Linux/BSD use GNU readline
             readline.parse_and_bind("tab: complete")
 
-    print("Welcome to Sheaf Console")
+    print("Welcome to Sheaf Console v1.0.0")
     print("Type :help or :h for help, :quit or :q to exit")
     print()
 
@@ -322,9 +320,9 @@ def run_repl():
                     continue
 
                 elif cmd == "env":
-                    # Show environment using introspection API
-                    registry = compiler.get_registry()
-                    env = compiler.get_env()
+                    # Show environment
+                    registry = compiler.registry
+                    env = compiler.env
 
                     print("Registry (functions):")
                     if registry:
@@ -336,35 +334,30 @@ def run_repl():
                     print("\nEnvironment (variables):")
                     if env:
                         for name in sorted(env.keys()):
-                            meta = env[name]
-                            if meta["type"] == "function":
+                            val = env[name]
+                            if callable(val):
                                 print(f"  {name}: <function>")
-                            elif "shape" in meta:
-                                shape_str = "x".join(str(d) for d in meta["shape"])
+                            elif hasattr(val, "shape"):
+                                shape_str = "x".join(str(d) for d in val.shape)
                                 dtype_str = (
-                                    meta["dtype"]
+                                    str(val.dtype)
                                     .replace("float32", "f32")
                                     .replace("int32", "i32")
                                 )
                                 print(f"  {name}: Tensor {dtype_str}[{shape_str}]")
                             else:
-                                print(f"  {name}: {meta['type']}")
+                                print(f"  {name}: {type(val).__name__}")
                     else:
                         print("  (empty)")
                     continue
 
                 elif cmd in ("registry", "reg"):
-                    # List user-defined functions using introspection API
-                    registry = compiler.get_registry()
+                    # List user-defined functions
+                    registry = compiler.registry
                     if registry:
                         print("User-defined functions:")
                         for name in sorted(registry.keys()):
-                            meta = registry[name]
-                            if meta["params"]:
-                                params_str = "[" + " ".join(meta["params"]) + "]"
-                                print(f"  {name} {params_str}")
-                            else:
-                                print(f"  {name}")
+                            print(f"  {name}")
                     else:
                         print("No user-defined functions yet.")
                         print("Try: (defn square [x] (* x x))")
