@@ -90,7 +90,7 @@ class SheafErrorFormatter:
 
         # Show code context if we have line number
         if line_num and source_lines:
-            parts.append("  |")
+            parts.append("    |")
             # Get context lines
             context_lines = 2
             start = max(1, line_num - context_lines)
@@ -137,7 +137,7 @@ class SheafErrorFormatter:
                     parts.append(f"{i:3} | {line_text}")
         else:
             # No line number available - this is a runtime error
-            parts.append("  |")
+            parts.append("    |")
             parts.append(
                 "  = note: This error occurred at runtime (not during compilation)."
             )
@@ -145,7 +145,7 @@ class SheafErrorFormatter:
             if func_name != "top-level":
                 parts.append(f"  = note: The error occurred in function `{func_name}`.")
 
-        parts.append("  |")
+        parts.append("    |")
 
         # Suggestions if we have some...
         suggestion = self.get_suggestion(error, expression)
