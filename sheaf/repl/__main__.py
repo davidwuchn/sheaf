@@ -16,6 +16,7 @@ import sys
 
 import jax.numpy as jnp
 
+from sheaf import __version__
 from sheaf.core.compiler import Sheaf
 from sheaf.core.error_handler import install_exception_handler
 from sheaf.core.tracer import shf_tracer
@@ -231,7 +232,7 @@ def run_repl():
             # Linux/BSD use GNU readline
             readline.parse_and_bind("tab: complete")
 
-    print("Welcome to Sheaf Console v1.0.0")
+    print(f"Welcome to Sheaf Console v{__version__}")
     print("Type :help or :h for help, :quit or :q to exit")
     print()
 

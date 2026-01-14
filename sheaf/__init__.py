@@ -6,6 +6,8 @@ import jax.numpy as jnp
 from .core.compiler import Sheaf as CoreSheaf
 from .core.error_handler import install_exception_handler
 
+__version__ = "1.0.0"
+
 # Install error handler automatically when Sheaf is imported
 install_exception_handler()
 
