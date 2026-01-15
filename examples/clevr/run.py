@@ -4,19 +4,37 @@ CLEVR Neuro-Symbolic Reasoning Demo
 
 import os
 import pickle
+import sys
 
-import data
 import jax
 import jax.numpy as jnp
 
 from sheaf import Sheaf
 
+try:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    current_dir = os.getcwd()
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+import data
+
 
 def load_model():
     shf = Sheaf()
-    model_path = os.path.join(os.path.dirname(__file__), "model.shf")
-    with open(model_path) as f:
-        shf.load(f.read())
+    model_dir = os.path.abspath(os.path.dirname(__file__))
+    model_path = os.path.join(model_dir, "model.shf")
+
+    # Change to model directory so relative imports (use ./utils.shf) work
+    old_cwd = os.getcwd()
+    os.chdir(model_dir)
+    try:
+        with open(model_path) as f:
+            shf.load(f.read())
+    finally:
+        os.chdir(old_cwd)
+
     return shf
 
 
