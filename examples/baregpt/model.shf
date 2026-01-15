@@ -3,8 +3,6 @@
 ;; A reference implementation of a generative Transformer in Sheaf.
 ;; Ported from BareGPT (https://github.com/dbrll/BareGPT)
 
-;; This file describes the model architecture
-
 (use optim)
 (use nn)
 
@@ -81,37 +79,34 @@
         (+ (@ final-norm W-out) b-out)))))
 
 
-
 (defn multi-head-attention (X layer-p config)
-  (let (;; 1. Extraction des dimensions
+  (let (;; Dimension extraction
         T (get (shape X) -2)
         D (static (get config :d_model))
         H (static (get config :n_heads))
         Hd (static (// D H))
 
-        ;; Récupération des poids
+        ;; Weight retrieval
         Wq (get layer-p :attn :Wq)
         Wk (get layer-p :attn :Wk)
         Wv (get layer-p :attn :Wv)
         Wo (get layer-p :attn :Wo)
 
-        ;; Préparation multi-têtes
+        ;; Multi-head preparation (reshaping weights)
         Wq_multi (reshape Wq D H Hd)
         Kh_multi (reshape Wk D H Hd)
         Vh_multi (reshape Wv D H Hd)
 
-        ;; 2. Projections Q, K, V [Batch, Heads, T, Hd]
+        ;; Q, K, V Projections [Batch, Heads, T, Hd]
         Qh (einsum "... t d, d h k -> ... h t k" X Wq_multi)
         Kh (einsum "... t d, d h k -> ... h t k" X Kh_multi)
         Vh (einsum "... t d, d h k -> ... h t k" X Vh_multi)
 
-        ;; Scores d'attention [Batch, Heads, T, T]
+        ;; Attention scores [Batch, Heads, T, T]
         Kh_T (swapaxes Kh -1 -2)
         scores (/ (@ Qh Kh_T) (sqrt Hd))
 
-        ;; 3. --- MASQUE CAUSAL VALIDE ---
-        ;; 'tril' crée une matrice [T, T].
-        ;; 'where' gère la diffusion sur [Batch, Heads] de manière robuste.
+        ;; Causal masking
         m_base (tril (ones (list T T)))
         scores_masked (where (== m_base 1.0)
                              scores
@@ -119,10 +114,10 @@
 
         att_probs (softmax scores_masked :axis -1)
 
-        ;; 4. Reconstitution et Projection finale
-        ;; On remet les têtes ensemble avant la projection Wo
+        ;; Concatenation and Final Projection
+        ;; Merge heads back together before applying Wo projection
         att_out (as-> (@ att_probs Vh) h
-                  (swapaxes h -2 -3)   ;; [Batch, T, Heads, Hd]
+                  (swapaxes h -2 -3)    ;; [Batch, T, Heads, Hd]
                   (reshape h (shape X)) ;; [Batch, T, D]
                   (@ h Wo)))
 
