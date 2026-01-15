@@ -33,7 +33,7 @@
       :head     head-tensors
       :final_ln (dict :gamma (ones (list 1 D))
                       :beta  (zeros (list 1 D)))
-      :layers   (map (lambda (i)
+      :layers   (map (fn (i)
                        (let (k (nth (random-split k_layers L) i)
                              k_attn (random-split k 4)
                              k_mlp  (random-split k 2))
@@ -68,7 +68,7 @@
 
         X (+ tok_emb pos_emb))
 
-    (let (hidden (reduce (lambda (h layer-p) (transformer-block h layer-p config))
+    (let (hidden (reduce (fn (h layer-p) (transformer-block h layer-p config))
                          X
                          (get params :layers)))
 
@@ -180,7 +180,7 @@
 
 (defn train-step (params m v t inputs targets config)
   (let (lr (get config :lr)
-        loss-fn (lambda (p) (cross-entropy-loss (gpt-model inputs p config) targets))
+        loss-fn (fn (p) (cross-entropy-loss (gpt-model inputs p config) targets))
         [loss grads] ((value-and-grad loss-fn) params)
 
         [new-params new-m new-v new-t] (adam-step params grads m v t lr 0.9 0.999 1e-8))

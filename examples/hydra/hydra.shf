@@ -3,17 +3,19 @@
 (use optim)
 
 ;; Recursivity by design: "forward" can accept any number of layers
-(defn forward (x params)
-  (let (layers (get params "layers")
-          head   (get params "head"))
-    ;; Apply all hidden layers in sequence
+(defn forward [x params]
+  (let (layers (get params :layers)
+        head   (get params :head))
     (as-> x h
-      (reduce (lambda (h_in layer_p)
-                (relu (linear h_in (get layer_p :W) (get layer_p :b))))
+      ;; The reduction acts as a dynamic sequence of layers
+      (reduce (fn [h_in layer_p]
+                (with-params layer_p
+                  (relu (linear h_in W b)))) ;; W and b are auto-bound
               h
               layers)
-      ;; Final projection
-      (linear h (get head :W) (get head :b)))))
+      ;; Final projection using the same pattern
+      (with-params head
+        (linear h W b)))))
 
 
 ;; Evolution logic
@@ -41,7 +43,7 @@
 
 (defn train-step (p x y lr)
   (let (
-        loss-fn (lambda (params) (mse-loss y (forward x params)))
+        loss-fn (fn (params) (mse-loss y (forward x params)))
         [l g] ((value-and-grad loss-fn) p))
     (dict "loss" l
           "p" (sgd-step p g lr))))

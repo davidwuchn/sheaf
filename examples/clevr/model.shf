@@ -103,7 +103,7 @@
  ; Execute a symbolic S-expression query on a scene
   (let (op (first q)
         arg1 (second q)
-        rec (lambda (subq) (execute-query scene subq params)))
+        rec (fn (subq) (execute-query scene subq params)))
     (case op
       "filter-color" (filter-color scene arg1 params)
       "filter-shape" (filter-shape scene arg1 params)
@@ -134,7 +134,7 @@
 (defn batch-loss (params scenes queries targets)
   ; Average loss over a batch
   (let (n (get (shape scenes) 0))
-    (/ (reduce (lambda (acc i)
+    (/ (reduce (fn (acc i)
                  (+ acc (clevr-loss params
                           (reshape (get scenes i) 1 -1 9)
                           (nth queries i)
@@ -148,7 +148,7 @@
 
 (defn train-step (params m v t scenes queries targets config)
   ; Single training step with Adam
-  (let (loss-fn (lambda (p) (batch-loss p scenes queries targets))
+  (let (loss-fn (fn (p) (batch-loss p scenes queries targets))
         [loss grads] ((value-and-grad loss-fn) params)
         [new-p new-m new-v new-t] (adam-step params grads m v t (get config :lr) 0.9 0.999 1e-8))
     (dict :loss loss :params new-p :m new-m :v new-v :t new-t)))
