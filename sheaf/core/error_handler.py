@@ -1,5 +1,5 @@
-# 2025 Damien Boureille | MIT License
-# Part of the Sheaf Language - https://github.com/sheaf/sheaf
+# Copyright (c) 2025 Damien Boureille
+# Licensed under the MIT License.
 
 """
 Sheaf's error formatting logic
@@ -104,8 +104,13 @@ class SheafErrorFormatter:
                     if expression and str(expression) != "<syntax error>":
                         # Try to find the expression in the line
                         expr_str = str(expression)
-                        if expr_str in line_text:
-                            col = line_text.index(expr_str)
+                        # Strip comments before searching
+                        code_part = (
+                            line_text.split(";")[0] if ";" in line_text else line_text
+                        )
+                        if expr_str in code_part:
+                            # Use rfind to get the last occurrence in code (usually the actual error)
+                            col = code_part.rfind(expr_str)
                             parts.append(f"    | {' ' * col}{'^' * len(expr_str)}")
                         else:
                             # Expression not found literally - try to find first token (e.g., 'defmodel')
