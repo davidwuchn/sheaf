@@ -85,7 +85,7 @@ class SheafErrorFormatter:
         if func_name != "top-level":
             location += f" in `{func_name}`"
 
-        parts.append(f"\nerror: {error_msg}")
+        parts.append(f"error: {error_msg}")
         parts.append(f" --> {location}")
 
         # Show code context if we have line number
