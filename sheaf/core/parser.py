@@ -1,5 +1,5 @@
-# 2025 Damien Boureille | MIT License
-# Part of the Sheaf Language - https://github.com/sheaf/sheaf
+# Copyright (c) 2025 Damien Boureille
+# Licensed under the MIT License.
 
 """
 Transform S-expressions into executable abstract syntax trees (AST) for the Sheaf compiler.
