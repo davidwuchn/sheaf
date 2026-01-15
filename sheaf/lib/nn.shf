@@ -29,3 +29,12 @@
         fan-out (second shape)
         limit (sqrt (/ 6.0 (+ fan-in fan-out))))
     (* (- (* (random-uniform key shape) 2.0) 1.0) limit)))
+
+(defn mse-loss (y-pred y-true)
+  ;; MSE = mean((y-pred - y-true)^2)
+  (let (diff (- y-pred y-true))
+    (mean (* diff diff))))
+
+(defn mae-loss (y-pred y-true)
+  ;; MAE = mean(abs(y-pred - y-true))
+  (mean (abs (- y-pred y-true))))
