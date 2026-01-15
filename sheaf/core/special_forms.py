@@ -832,6 +832,7 @@ special_forms = {
     "case": CaseForm(),
     "defmacro": DefmacroForm(),
     "defn": DefnForm(),
+    "fn": LambdaForm(),
     "get": GetForm(),
     "guard": GuardForm(),
     "if": IfForm(),
