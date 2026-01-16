@@ -673,12 +673,32 @@ class QuoteForm(SpecialForm):
             (quote (+ 1 2))  ; => (+ 1 2) (not evaluated)
             '(+ 1 2)         ; => (+ 1 2) (same)
             'symbol          ; => symbol (not looked up)
+            '[1 2 3]         ; => (1, 2, 3) (raw tuple for shapes)
         """
         if len(args) != 1:
             raise ValueError("quote requires exactly one argument")
 
-        # Return the expression as-is, without evaluation
-        return args[0]
+        expr = args[0]
+
+        # For vectors, return as raw Python tuple (useful for shapes)
+        if isinstance(expr, SheafVector):
+            return self._vector_to_tuple(expr)
+
+        # For other expressions, return as-is
+        return expr
+
+    def _vector_to_tuple(self, vec):
+        """Convert a SheafVector to a raw Python tuple, recursively."""
+        result = []
+        for item in vec:
+            if isinstance(item, SheafVector):
+                result.append(self._vector_to_tuple(item))
+            elif isinstance(item, str):
+                # Keep symbols as strings for now
+                result.append(item)
+            else:
+                result.append(item)
+        return tuple(result)
 
 
 class VmapForm(SpecialForm):
