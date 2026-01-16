@@ -8,7 +8,7 @@ Each special form is a class that handles the compilation logic
 for a specific S-expression operator (defn, let, if, etc.).
 """
 
-import warnings
+import sys
 
 from .error_handler import set_source
 from .parser import SheafRuntimeError
@@ -21,12 +21,11 @@ def _warn_parens_in_binding(context_name, expr):
         line_info = (
             f" (line {expr.line})" if hasattr(expr, "line") and expr.line else ""
         )
-        warnings.warn(
+        msg = (
             f"Syntax warning{line_info}: Use [] instead of () for {context_name}. "
-            f"Example: (defn foo [x y] ...) or (let [a 1 b 2] ...)",
-            SyntaxWarning,
-            stacklevel=4,
+            f"Example: (defn foo [x y] ...) or (let [a 1 b 2] ...)"
         )
+        print(msg, file=sys.stderr)
 
 
 class SpecialForm:
