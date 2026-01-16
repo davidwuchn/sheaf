@@ -12,9 +12,7 @@ Clevr is a neuro-symbolic model. It uses a neural network to understand and reco
 
 ### Hydra
 
-Hydra is a self-evolving model.
-
-It starts training on the XOR problem without a hidden layer, which is linearly inseparable.
+Hydra is a self-evolving model. It starts training on the XOR problem without a hidden layer, which is linearly inseparable.
 After detecting a loss plateau, it dynamically inserts a hidden layer at runtime without interrupting the training loop, enabling learning to resume and converge.
 
 ### XOR MLP

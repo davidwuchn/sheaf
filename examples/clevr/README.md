@@ -1,24 +1,23 @@
-# CLEVR: Neuro-Symbolic Visual Reasoning
+## CLEVR: Neuro-Symbolic Visual Reasoning
 
-## What is Neuro-Symbolic AI?
+Traditional approaches in AI have complementary strengths and weaknesses.
 
-Traditional approaches in AI have complementary strengths and weaknesses:
+Neural networks are good at perception and pattern recognition but opaque "black boxes" with unexplainable decisions.
 
-- **Neural networks**: Good at perception and pattern recognition but opaque "black boxes" with unexplainable decisions
-- **Symbolic systems**: Good at logical reasoning and explicit rule-based inference but brittle when handling noisy or uncertain data
+Symbolic systems are good at logical reasoning and explicit rule-based inference but brittle when handling noisy or uncertain data.
 
 Neuro-symbolic AI combines both approaches:
 
 - Neural networks handle perception: extracting objects, colors, shapes and positions from images
 - Symbolic logic handles reasoning: filtering, selection, composition of operations
 
-## How this example works
+### How this example works
 
 Unlike a transformer that predicts answers based on statistical patterns, this model uses neural networks only for perception (identifying colors and shapes) while the query dictates which neural operations to call and in what order.
 
 This model cannot hallucinate. A Transformer might guess an answer because it saw similar training data, but a neuro-symbolic model cannot answer "red" unless the query function extracts that specific logit from the selected object.
 
-### Process
+#### Process
 
 Input (visual scene) -> Query (symbolic) -> Neural Network
 
@@ -47,15 +46,15 @@ Each symbolic operation (like "filter-shape") computes a mask that narrows the n
     Answer (Argmax)
    ```
 
-## What does Sheaf have to do with this?
+### What does Sheaf have to do with this?
 
-Sheaf queries are data structures (S-expressions) that map 1:1 to the model's call stack. Sheaf can then transform a symbolic tree into a JAX computational graph through simple recursion, without the overhead of an intermediate parser or the limitations of Python’s fixed syntax.
+Sheaf queries are data structures (S-expressions) that map 1:1 to the model's call stack. Sheaf can then transform a symbolic tree into a JAX computational graph through simple recursion.
 
-## Files
+### Files
 
-- `data.py`: Generates random scenes (4 colors, 3 shapes, up to 5 objects) and questions (filter, select, spatial relations, attribute queries)
-- `model.shf`: Core model with soft filters, selections, spatial relations, and attribute extraction
-- `utils.shf`: Differentiable operations for filtering, selection, intersection, existence checking
-- `train.py`: Training loop (100 epochs, Adam optimizer, cross-entropy loss)
+- `data.py`: Generates random scenes and questions
+- `model.shf`: Core model with soft filters, selections, attribute extraction...
+- `utils.shf`: Differentiable operations (filtering, selection, intersection, existence checking)
+- `train.py`: Training loop
 - `run.py`: Evaluation on 10 random test cases
 - `dashboard/app.py`: Interactive visualization

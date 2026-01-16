@@ -1,13 +1,6 @@
 # Copyright (c) 2026 Damien Boureille
 # Licensed under the MIT License.
 
-"""
-Macro expansion engine for Sheaf.
-
-Macros transform S-expressions before compilation, enabling powerful
-syntactic abstractions like (defmodel ...).
-"""
-
 
 class Macro:
     # Represents a compiled macro
@@ -114,15 +107,16 @@ class MacroEngine:
             for x in exp:
                 expanded = self.expand(x, recursive=True)
                 result.append(expanded)
-            
+
             # Preserve SheafVector structure for proper compilation
             # This ensures vectors remain evaluable expressions, not function calls
-            if hasattr(exp, '_is_vector'):
+            if hasattr(exp, "_is_vector"):
                 from .parser import SheafVector
+
                 vector_result = SheafVector()
                 vector_result.extend(result)
                 return vector_result
-            
+
             return result
 
         return exp
@@ -192,16 +186,17 @@ class MacroEngine:
 
         if isinstance(template, list):
             # Check if this is a SheafVector (vector literal)
-            if hasattr(template, '_is_vector'):
+            if hasattr(template, "_is_vector"):
                 # Preserve vector structure but substitute elements
                 # Create a new SheafVector to maintain vector semantics
                 from .parser import SheafVector
+
                 result = SheafVector()
                 for item in template:
                     substituted = self._substitute(item, bindings)
                     result.append(substituted)
                 return result
-            
+
             # Regular list: recursively substitute in list
             result = []
             for item in template:
@@ -294,15 +289,16 @@ class MacroEngine:
                         raise ValueError(f"Cannot splice non-list value: {splice_val}")
                 else:
                     result.append(expanded)
-            
+
             # Check if original template was a SheafVector
-            if hasattr(template, '_is_vector'):
+            if hasattr(template, "_is_vector"):
                 # Preserve as SheafVector to maintain vector semantics
                 from .parser import SheafVector
+
                 vector_result = SheafVector()
                 vector_result.extend(result)
                 return vector_result
-            
+
             return result
 
         # Simple symbol or literal
