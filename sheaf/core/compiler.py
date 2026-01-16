@@ -79,7 +79,7 @@ class Sheaf:
             if local_vars is None:
                 local_vars = {}
 
-            # --- 1. Macros ---
+            # --- Macros ---
             # Expand macros before compilation
             # Only expand if it's a list (potential macro call)
             if isinstance(exp, list) and len(exp) > 0:
@@ -87,43 +87,43 @@ class Sheaf:
                 if isinstance(op, str) and op in self.macro_engine.macros:
                     exp = self.macro_engine.expand(exp, recursive=True)
 
-            # --- 2. Literals ---
+            # --- Literals ---
             if isinstance(exp, (int, float, bool)):
                 return exp
 
-            # --- 3. Symbol Resolution ---
+            # --- Symbol Resolution ---
             if isinstance(exp, str):
                 return self._resolve_symbol(exp, local_vars)
 
-            # --- 4. Vector Literal (from [] syntax) ---
+            # --- Vector Literal (from [] syntax) ---
             # In expression context, evaluate as a list/tuple of values
             if isinstance(exp, SheafVector):
                 return self._compile_vector_literal(exp, local_vars)
 
-            # --- 5. Not a list? Return as-is ---
+            # --- Not a list? Return as-is ---
             if not isinstance(exp, list):
                 return exp
 
-            # --- 5. Empty list ---
+            # --- Empty list ---
             if len(exp) == 0:
                 return []
 
             op = exp[0]
             args = exp[1:]
 
-            # --- 6. Keyword list, like [:key1 val1 :key2 val2] ---
+            # --- Keyword list, like [:key1 val1 :key2 val2] ---
             if isinstance(op, str) and op.startswith(":"):
                 return [self.compile(x, local_vars) for x in exp]
 
-            # --- 7. Tensor Literal ---
+            # --- Tensor Literal ---
             if self._is_tensor_literal(exp):
                 return self._compile_tensor_literal(exp)
 
-            # --- 8. Special Forms Dispatch ---
+            # --- Special Forms Dispatch ---
             if isinstance(op, str) and op in self.special_forms:
                 return self.special_forms[op].compile(self, args, local_vars)
 
-            # --- 9. Standard Function Call ---
+            # --- Standard Function Call ---
             return self._compile_function_call(exp, op, args, local_vars)
 
         except Exception as e:
@@ -178,17 +178,23 @@ class Sheaf:
         return False
 
     def _compile_vector_literal(self, exp, local_vars):
-        """Compile a vector literal [...] to a Python tuple.
+        """Compile a vector literal [...].
 
-        In expression context, [a b c] is now always treated as a dynamic list constructor,
-        equivalent to (list a b c). Each element is evaluated at runtime.
-
-        This removes the need for quote ' in shapes like (zeros [D]) and makes
-        [in_dim D] equivalent to (list in_dim D) in the generated code.
+        In expression context:
+        - If all elements are numeric literals → JAX array (e.g., [1 2 3])
+        - If contains symbols/vars → tuple (e.g., [D H] for shapes)
+        - If contains function calls → tuple (e.g., [(+ 1 2) x])
         """
+        import jax.numpy as jnp
 
-        # Always treat as dynamic list constructor in expression context
-        # Evaluate each element at runtime to get its actual value
+        # Check if all elements are pure numeric literals (no symbols or expressions)
+        all_numeric = all(isinstance(x, (int, float)) for x in exp)
+
+        if all_numeric:
+            # Pure numeric literal - create JAX array
+            return jnp.array(list(exp), dtype=self.dtype)
+
+        # Mixed or contains symbols/vars - return as tuple for shape arguments
         evaluated = tuple(self.compile(x, local_vars) for x in exp)
         return evaluated
 
