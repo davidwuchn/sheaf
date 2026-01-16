@@ -55,7 +55,8 @@ def tokenize(chars):
     chars = re.sub(r";.*", "", chars)
     # Updated pattern to capture backtick (`), tilde (~), and quote (') as separate tokens
     # ~@ must be captured as a single token
-    token_pattern = r'"[^"]*"|~@|[()\[\]`~\']|[^\s()\[\]`~\']+'
+    # {} added for dict literals
+    token_pattern = r'"[^"]*"|~@|[()\[\]{}`~\']|[^\s()\[\]{}`~\']+'
     lines = chars.splitlines()
     tokens_with_meta = []
     for line_num, line in enumerate(lines, 1):
@@ -124,9 +125,23 @@ def parse(tokens, last_func=None, filename="<sheaf>"):
             filename=filename,
         )
 
+    if token_text == "{":
+        # Dict literal: {:key1 val1 :key2 val2}
+        L = SheafList(["dict"], line=line_num, filename=filename)
+        while tokens and tokens[0][0] != "}":
+            L.append(parse(tokens, last_func=last_func, filename=filename))
+
+        if not tokens:
+            ctx = f" in function `{last_func}`" if last_func else ""
+            raise SheafSyntaxError(f"Unclosed brace in dict literal{ctx}", line_num)
+        tokens.pop(0)  # consume }
+
+        return L
+
     if token_text in ("(", "["):
         is_vector = token_text == "["
         L = SheafList(line=line_num, filename=filename)
+        L._bracket_type = "[" if is_vector else "("
         while tokens and tokens[0][0] not in (")", "]"):
             # Pass the function name down the recursion
             L.append(parse(tokens, last_func=last_func, filename=filename))
@@ -159,7 +174,7 @@ def parse(tokens, last_func=None, filename="<sheaf>"):
                 )
 
         return L
-    elif token_text in (")", "]"):
+    elif token_text in (")", "]", "}"):
         ctx = f" in function `{last_func}`" if last_func else ""
         raise SheafSyntaxError(
             f"Unexpected closing character '{token_text}'{ctx}", line_num

@@ -8,9 +8,25 @@ Each special form is a class that handles the compilation logic
 for a specific S-expression operator (defn, let, if, etc.).
 """
 
+import warnings
+
 from .error_handler import set_source
 from .parser import SheafRuntimeError
 from .tracer import shf_tracer
+
+
+def _warn_parens_in_binding(context_name, expr):
+    """Emit a warning if parentheses () are used instead of brackets [] in binding context."""
+    if hasattr(expr, "_bracket_type") and expr._bracket_type == "(":
+        line_info = (
+            f" (line {expr.line})" if hasattr(expr, "line") and expr.line else ""
+        )
+        warnings.warn(
+            f"Syntax warning{line_info}: Use [] instead of () for {context_name}. "
+            f"Example: (defn foo [x y] ...) or (let [a 1 b 2] ...)",
+            SyntaxWarning,
+            stacklevel=4,
+        )
 
 
 class SpecialForm:
@@ -169,6 +185,9 @@ class DefnForm(SpecialForm):
         name = args[offset]
         params = args[offset + 1]
         body = args[offset + 2 :]
+
+        # Warn if using () instead of [] for parameters
+        _warn_parens_in_binding("function parameters", params)
 
         def generated_func(*input_args, **kwargs):
             # 1. Check if 'trace' was passed in this specific call
@@ -380,6 +399,9 @@ class LambdaForm(SpecialForm):
         # Format: (lambda [params] body)
         l_params, *l_body = args
 
+        # Warn if using () instead of [] for parameters
+        _warn_parens_in_binding("lambda parameters", l_params)
+
         # Capture the current local_vars at definition time
         def anonymous_func(*l_args, closure_env=dict(local_vars)):
             # Merge closure_env with current lambda arguments
@@ -414,6 +436,9 @@ class LetForm(SpecialForm):
         # args is [bindings_list, body_exp1, body_exp2, ...]
         bindings, *body = args
 
+        # Warn if using () instead of [] for bindings
+        _warn_parens_in_binding("let bindings", bindings)
+
         # Copy context to avoid polluting parent scope
         current_context = dict(local_vars)
 
@@ -445,10 +470,15 @@ class RepeatForm(SpecialForm):
     def compile(self, compiler, args, local_vars):
         # Syntax: (repeat [i 6] [acc_name init_val] body)
         binding_iter = args[0]  # [i, 6]
+        binding_acc = args[1]  # [h, x]
+
+        # Warn if using () instead of [] for bindings
+        _warn_parens_in_binding("repeat iterator binding", binding_iter)
+        _warn_parens_in_binding("repeat accumulator binding", binding_acc)
+
         idx_name, count_expr = binding_iter[0], binding_iter[1]
         count = compiler.compile(count_expr, local_vars)
 
-        binding_acc = args[1]  # [h, x]
         acc_name, init_expr = binding_acc[0], binding_acc[1]
         current_val = compiler.compile(init_expr, local_vars)
 
