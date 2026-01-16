@@ -162,22 +162,6 @@
             (+ h))))) ;; Residual 2
 
 
-(defn cross-entropy-loss-not [logits targets]
-  (let [;; Convert logits to log-probabilities [Batch*Time, Vocab]
-        log-probs (log-softmax (reshape logits -1 (get (shape logits) -1)))
-        V (get (shape log-probs) -1)
-        flat-targets (reshape targets -1)
-
-        target-mask (one-hot flat-targets V)
-
-        ;; Extract the log-probs for the correct characters
-        ;; Summing (* mask log-probs) acts as a selector
-        target-log-probs (sum (* log-probs target-mask) :axis -1)]
-
-    ;; Return negative mean log-likelihood
-    (* (mean target-log-probs) -1.0)))
-
-
 (defn train-step [params m v t inputs targets config]
   (let [lr (get config :lr)
         loss-fn (fn [p] (cross-entropy-loss (gpt-model inputs p config) targets))
