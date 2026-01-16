@@ -322,9 +322,20 @@ class DictForm(SpecialForm):
             key = args[i]
             val = args[i + 1]
 
-            # Strip ':' prefix from keyword keys
-            if isinstance(key, str) and key.startswith(":"):
-                key = key[1:]
+            # Keys are literal strings or keywords, don't compile them
+            if isinstance(key, str):
+                # Handle keyword keys (:key -> "key")
+                if key.startswith(":"):
+                    key = key[1:]
+                # Handle string keys ("key" -> key)
+                elif key.startswith('"') and key.endswith('"'):
+                    key = key[1:-1]
+                # key is now a string literal
+            else:
+                # Non-string keys are not supported
+                raise SheafSyntaxError(
+                    f"dict keys must be strings or keywords, got {type(key).__name__}: {key}"
+                )
 
             compiled_val = compiler.compile(val, local_vars)
             result[key] = compiled_val
