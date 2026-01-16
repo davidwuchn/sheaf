@@ -304,6 +304,35 @@ class DefnForm(SpecialForm):
         return generated_func
 
 
+class DictForm(SpecialForm):
+    """dict literal: {:key1 val1 :key2 val2} or (dict :key1 val1 ...)"""
+
+    def __init__(self):
+        super().__init__("dict")
+
+    def compile(self, compiler, args, local_vars):
+        # (dict :key1 val1 :key2 val2 ...)
+        # Args come in pairs: key, value, key, value, ...
+        if len(args) % 2 != 0:
+            raise SheafSyntaxError(
+                "dict requires an even number of arguments (key-value pairs)"
+            )
+
+        result = {}
+        for i in range(0, len(args), 2):
+            key = args[i]
+            val = args[i + 1]
+
+            # Strip ':' prefix from keyword keys
+            if isinstance(key, str) and key.startswith(":"):
+                key = key[1:]
+
+            compiled_val = compiler.compile(val, local_vars)
+            result[key] = compiled_val
+
+        return result
+
+
 class GetForm(SpecialForm):
     """get indexing: (get obj key1 key2 ...)"""
 
@@ -862,6 +891,7 @@ special_forms = {
     "case": CaseForm(),
     "defmacro": DefmacroForm(),
     "defn": DefnForm(),
+    "dict": DictForm(),
     "fn": LambdaForm(),
     "get": GetForm(),
     "guard": GuardForm(),
