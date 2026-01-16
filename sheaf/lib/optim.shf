@@ -30,7 +30,7 @@
                           (- p (/ (* lr mh bias-correction-m)
                                   (+ (sqrt (* vh bias-correction-v)) eps))))
                         params new-m new-v)]
-    (list new-p new-m new-v new-t)))
+    [new-p new-m new-v new-t]))
 
 
 (defn global-norm [pytree]
