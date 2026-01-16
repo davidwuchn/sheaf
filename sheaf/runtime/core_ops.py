@@ -192,7 +192,7 @@ def get_core_env():
         "apply": generic_apply,
         "cons": cons,
         "count": count,
-        "dict": create_dict,
+        # "dict": create_dict,
         "empty?": empty_q,
         "first": lambda x: x[0] if x else None,
         "gensym": gensym,
