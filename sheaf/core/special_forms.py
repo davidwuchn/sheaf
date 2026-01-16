@@ -11,12 +11,15 @@ for a specific S-expression operator (defn, let, if, etc.).
 import sys
 
 from .error_handler import set_source
-from .parser import SheafRuntimeError
+from .parser import SheafRuntimeError, SheafVector
 from .tracer import shf_tracer
 
 
 def _warn_parens_in_binding(context_name, expr):
     """Emit a warning if parentheses () are used instead of brackets [] in binding context."""
+    # SheafVector is correct, SheafList with _bracket_type="(" is wrong
+    if isinstance(expr, SheafVector):
+        return  # Correct syntax
     if hasattr(expr, "_bracket_type") and expr._bracket_type == "(":
         line_info = (
             f" (line {expr.line})" if hasattr(expr, "line") and expr.line else ""

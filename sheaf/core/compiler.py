@@ -12,7 +12,7 @@ import types
 from ..runtime import core_ops, jax_ops, math_ops, nn_ops, string_ops
 from .error_handler import format_error, set_source
 from .macro_engine import create_macro_engine
-from .parser import SheafRuntimeError, SheafSyntaxError, parse_full
+from .parser import SheafRuntimeError, SheafSyntaxError, SheafVector, parse_full
 from .special_forms import special_forms
 from .tracer import sheaf_probe, shf_tracer
 
@@ -95,7 +95,12 @@ class Sheaf:
             if isinstance(exp, str):
                 return self._resolve_symbol(exp, local_vars)
 
-            # --- 4. Not a list? Return as-is ---
+            # --- 4. Vector Literal (from [] syntax) ---
+            # In expression context, evaluate as a list/tuple of values
+            if isinstance(exp, SheafVector):
+                return self._compile_vector_literal(exp, local_vars)
+
+            # --- 5. Not a list? Return as-is ---
             if not isinstance(exp, list):
                 return exp
 
@@ -172,12 +177,46 @@ class Sheaf:
             return True
         return False
 
+    def _compile_vector_literal(self, exp, local_vars):
+        """Compile a vector literal [...] to a Python tuple.
+
+        In expression context, [D D] becomes (D_value, D_value).
+        If all elements are numeric literals, create a JAX array instead.
+        """
+        import jax.numpy as jnp
+
+        # Check if all elements are numeric literals (no symbols to evaluate)
+        all_numeric = all(isinstance(x, (int, float)) for x in exp)
+
+        # Check for nested vectors (like [[1 2] [3 4]])
+        has_nested = any(isinstance(x, (list, SheafVector)) for x in exp)
+
+        if all_numeric or (has_nested and self._is_all_numeric_nested(exp)):
+            # Pure numeric literal - create JAX array
+            return self._compile_tensor_literal(exp)
+
+        # Evaluate each element
+        evaluated = tuple(self.compile(x, local_vars) for x in exp)
+        return evaluated
+
+    def _is_all_numeric_nested(self, exp):
+        """Check if a nested structure contains only numeric literals."""
+        for x in exp:
+            if isinstance(x, (int, float)):
+                continue
+            elif isinstance(x, (list, SheafVector)):
+                if not self._is_all_numeric_nested(x):
+                    return False
+            else:
+                return False
+        return True
+
     def _compile_tensor_literal(self, exp):
         # Compile a tensor literal to JAX array with current dtype or explicit dtype
         import jax.numpy as jnp
 
         def finalize_literal(item):
-            if isinstance(item, list):
+            if isinstance(item, (list, SheafVector)):
                 return [finalize_literal(x) for x in item]
             return item
 

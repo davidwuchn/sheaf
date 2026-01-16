@@ -50,6 +50,20 @@ class SheafSymbol(str):
         return obj
 
 
+class SheafVector(list):
+    """A vector/list literal created with [...] syntax.
+
+    In expression context, this is evaluated as a data literal (like Python list).
+    In binding context (first arg to defn, let, fn), it's used for destructuring.
+    """
+
+    def __init__(self, *args, line=None, filename="<sheaf>"):
+        super().__init__(*args)
+        self.line = line
+        self.filename = filename
+        self._is_vector = True  # Mark as vector literal
+
+
 def tokenize(chars):
     # Remove comments: both ;; and single ; until end of line
     chars = re.sub(r";.*", "", chars)
@@ -138,21 +152,19 @@ def parse(tokens, last_func=None, filename="<sheaf>"):
 
         return L
 
-    if token_text in ("(", "["):
-        is_vector = token_text == "["
-        L = SheafList(line=line_num, filename=filename)
-        L._bracket_type = "[" if is_vector else "("
-        while tokens and tokens[0][0] not in (")", "]"):
-            # Pass the function name down the recursion
-            L.append(parse(tokens, last_func=last_func, filename=filename))
+    if token_text == "[":
+        # Vector/list literal: [1 2 3] or [D D] for shapes
+        V = SheafVector(line=line_num, filename=filename)
+        while tokens and tokens[0][0] != "]":
+            V.append(parse(tokens, last_func=last_func, filename=filename))
 
         if not tokens:
             ctx = f" in function `{last_func}`" if last_func else ""
-            raise SheafSyntaxError(f"Unclosed parenthesis or bracket{ctx}", line_num)
-        tokens.pop(0)
+            raise SheafSyntaxError(f"Unclosed bracket{ctx}", line_num)
+        tokens.pop(0)  # consume ]
 
         # Check for dtype keyword after vector closing bracket: [1 2 3] :f32
-        if is_vector and tokens and tokens[0][0].startswith(":"):
+        if tokens and tokens[0][0].startswith(":"):
             dtype_token = tokens[0][0]
             valid_dtypes = {
                 ":f32",
@@ -164,14 +176,22 @@ def parse(tokens, last_func=None, filename="<sheaf>"):
             }
             if dtype_token in valid_dtypes:
                 tokens.pop(0)  # consume dtype keyword
-                # Store dtype as metadata on the list
-                L._dtype = dtype_token
-            else:
-                raise SheafSyntaxError(
-                    f"Invalid dtype '{dtype_token}' after vector. "
-                    f"Valid dtypes are: {', '.join(sorted(valid_dtypes))}",
-                    line_num,
-                )
+                V._dtype = dtype_token
+            # else: it's a keyword argument, not a dtype - don't consume
+
+        return V
+
+    if token_text == "(":
+        # S-expression: (op arg1 arg2 ...)
+        L = SheafList(line=line_num, filename=filename)
+        L._bracket_type = "("
+        while tokens and tokens[0][0] != ")":
+            L.append(parse(tokens, last_func=last_func, filename=filename))
+
+        if not tokens:
+            ctx = f" in function `{last_func}`" if last_func else ""
+            raise SheafSyntaxError(f"Unclosed parenthesis{ctx}", line_num)
+        tokens.pop(0)  # consume )
 
         return L
     elif token_text in (")", "]", "}"):
