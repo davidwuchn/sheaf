@@ -32,10 +32,10 @@
         k2      (get keys 1)
 
         ; Reconstruct the parameter tree with the new layer appended
-        new-layer {"W" (random-normal k1 (list in_dim D))
-                   "b" (zeros (list D))}
-        new-head  {"W" (random-normal k2 (list D 1))
-                   "b" (zeros (list 1))}]
+        new-layer {"W" (random-normal k1 [in_dim D])
+                   "b" (zeros [D])}
+        new-head  {"W" (random-normal k2 [D 1])
+                   "b" (zeros '[1])}]
     ; Return
     {"head"   new-head
      "layers" (append (get params "layers") new-layer)}))

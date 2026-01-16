@@ -21,33 +21,36 @@
 
         ;; Sub-dictionaries preparation
         k_emb_split (random-split k_emb 2)
-        emb-tensors  {:token (* (random-normal (nth k_emb_split 0) (list V D)) 0.01)
-                      :pos   (* (random-normal (nth k_emb_split 1) (list B D)) 0.01)}
+        emb-tensors  {:token (* (random-normal (nth k_emb_split 0) [V D]) 0.01)
+                      :pos   (* (random-normal (nth k_emb_split 1) [B D]) 0.01)}
 
-        head-tensors {:w (* (xavier-init k_head (list D V)))
-                      :b (zeros (list V))}]
+        head-tensors {:w (* (xavier-init k_head [D V]))
+                      :b (zeros [V])}]
 
     ;; Final params structure
     {
       :emb      emb-tensors
       :head     head-tensors
-      :final_ln {:gamma (ones (list 1 D))
-                 :beta  (zeros (list 1 D))}
+      :final_ln {:gamma (ones [1 D])
+                 :beta  (zeros [1 D])}
       :layers   (map (fn [i]
                        (let [k (nth (random-split k_layers L) i)
                              k_attn (random-split k 4)
                              k_mlp  (random-split k 2)]
-                         {:attn {:Wq (xavier-init (nth k_attn 0) (list D D))
-                                 :Wk (xavier-init (nth k_attn 1) (list D D))
-                                 :Wv (xavier-init (nth k_attn 2) (list D D))
-                                 :Wo (xavier-init (nth k_attn 3) (list D D))}
-                          :mlp {:W1 (xavier-init (nth k_mlp 0) (list D (* 4 D)))
-                                :b1 (zeros (list 1 (* 4 D)))
-                                :W2 (xavier-init (nth k_mlp 1) (list (* 4 D) D))
-                                :b2 (zeros (list 1 D))}
-                          :ln1 {:gamma (ones (list 1 D)) :beta (zeros (list 1 D))}
-                          :ln2 {:gamma (ones (list 1 D)) :beta (zeros (list 1 D))}}))
-                     (range L))}])
+
+                         {:attn {:Wq (xavier-init (nth k_attn 0) [D D])
+                                 :Wk (xavier-init (nth k_attn 1) [D D])
+                                 :Wv (xavier-init (nth k_attn 2) [D D])
+                                 :Wo (xavier-init (nth k_attn 3) [D D])}
+
+                          :mlp  {:W1 (xavier-init (nth k_mlp 0) [D (* 4 D)])
+                                 :b1 (zeros [1 (* 4 D)])
+                                 :W2 (xavier-init (nth k_mlp 1) [(* 4 D) D])
+                                 :b2 (zeros [1 D])}
+
+                          :ln1 { :gamma (ones [1 D]) :beta (zeros [1 D])}
+                          :ln2 { :gamma (ones [1 D]) :beta (zeros [1 D])}}))
+                     (range L))}))
 
 
 (defn gpt-model [inputs params config]
@@ -61,7 +64,7 @@
 
         ;; Position embeddings [T, D] -> [1, T, D]
         ;; We force the shape to ensure correct broadcasting across Batch
-        pos_emb (reshape (get pos-tensors (range T)) (list 1 T D))
+        pos_emb (reshape (get pos-tensors (range T)) [1 T D])
 
         X (+ tok_emb pos_emb)]
 
@@ -104,7 +107,7 @@
         scores (/ (@ Qh Kh_T) (sqrt Hd))
 
         ;; Causal masking
-        m_base (tril (ones (list T T)))
+        m_base (tril (ones [T T]))
         scores_masked (where (== m_base 1.0)
                              scores
                              -3e4)
@@ -118,7 +121,7 @@
                   (reshape h (shape X)) ;; [Batch, T, D]
                   (@ h Wo))]
 
-    (list att_out att_probs)))
+    [att_out att_probs]))
 
 
 (defn mlp [x p]

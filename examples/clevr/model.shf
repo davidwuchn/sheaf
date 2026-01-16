@@ -19,7 +19,7 @@
                     [0 0 0 1 0 0 0 0 0]]   ;; yellow
         shape-base [[0 0 0 0 1 0 0 0 0]    ;; circle
                     [0 0 0 0 0 1 0 0 0]    ;; square
-                    [0 0 0 0 0 0 1 0 0]])  ;; triangle
+                    [0 0 0 0 0 0 1 0 0]]]  ;; triangle
     {:color_embeddings (+ color-base (* (random-normal k1 (list 4 9)) 0.05))
      :shape_embeddings (+ shape-base (* (random-normal k2 (list 3 9)) 0.05))
      :temps {:filter 0.2 :unique 0.8 :leftmost 1.0 :spatial 1.0}

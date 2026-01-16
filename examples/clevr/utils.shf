@@ -14,7 +14,7 @@
   (let [scores (einsum "...nd,d->...n" scene query-vec)
         ;; Biais de -0.5 pour que score=0 donne attention~0, score=1 donne attention~1
         attention (sigmoid (/ (- scores 0.5) temperature))]
-    (* scene (reshape attention (list -1 1)))))
+    (* scene (reshape attention '[-1 1]))))
 
 
 ;; Soft selection - uses softmax for mutual exclusion
@@ -54,9 +54,9 @@
            ref-coord (get ref ... ~axis)
            ref-ndim (ndim ref-coord)
            ref-expanded (if (== ref-ndim 1)
-                          (reshape ref-coord (list -1 1 1))
-                          (reshape ref-coord (list -1 (shape ref-coord 1) 1)))
-           scene-expanded (reshape scene-coord (list -1 (shape scene-coord 1) 1))
+                          (reshape ref-coord [-1 1 1])
+                          (reshape ref-coord [-1 (shape ref-coord 1) 1]))
+           scene-expanded (reshape scene-coord [-1 (shape scene-coord 1) 1])
            relative (- scene-expanded ref-expanded)
            score-input (if (== ~sign -1)
                           (* -1.0 (+ relative threshold))
