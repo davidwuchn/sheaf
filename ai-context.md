@@ -23,7 +23,7 @@ keywords: [sheaf, jax, lisp, neural-networks, ml, dsl, differentiable]
 (use optim)
 
 ;; Simple MLP forward pass with parameter destructuring
-(defn forward (x p)
+(defn forward [x p]
   (as-> x h
     (with-params (get p :l1)    ;; Auto-bind W and b from layer 1
       (relu (+ (@ h W) b)))
@@ -31,11 +31,11 @@ keywords: [sheaf, jax, lisp, neural-networks, ml, dsl, differentiable]
       (sigmoid (+ (@ h W) b)))))
 
 ;; Training step with Adam optimizer
-(defn train-step (p m v t x y lr)
-  (let (loss-fn (lambda (params) (mse-loss params x y))
+(defn train-step [p m v t x y lr]
+  (let [loss-fn (fn [params] (mse-loss params x y))
         [loss grads] ((value-and-grad loss-fn) p)
-        [new-p new-m new-v new-t] (adam-step p grads m v t lr 0.9 0.999 1e-8))
-    (dict :p new-p :m new-m :v new-v :t new-t :loss loss)))
+        [new-p new-m new-v new-t] (adam-step p grads m v t lr 0.9 0.999 1e-8)]
+    {:p new-p :m new-m :v new-v :t new-t :loss loss}))
 ```
 
 ---
@@ -53,8 +53,8 @@ keywords: [sheaf, jax, lisp, neural-networks, ml, dsl, differentiable]
 Neural network parameters are stored in nested HashableDicts:
 
 ```sheaf
-(dict :l1 (dict :W weights :b biases)
-      :l2 (dict :W weights :b biases))
+{:l1 {:W weights :b biases}
+ :l2 {:W weights :b biases}}
 ```
 
 ### 3. Python Integration
@@ -152,6 +152,7 @@ This allows powerful metaprogramming while maintaining code clarity.
 
 ```sheaf
 [1 2 3]          ; Vector (JAX array)
+{:a 1 :b 2}      ; Dictionary (like Clojure/Python)
 :keyword         ; Keyword (evaluates to string "keyword")
 True / False     ; Booleans
 nil              ; None
@@ -165,7 +166,8 @@ nil              ; None
 ```sheaf
 (defn name [args] body)              ; Standard function
 (defn :jit name [args] body)         ; JIT-compiled (faster, limited control flow)
-(lambda [args] body)                 ; Anonymous function
+(fn [args] body)                     ; Anonymous function (preferred)
+(lambda [args] body)                 ; Anonymous function (legacy alias for fn)
 ```
 
 **Binding & Scope**
@@ -179,8 +181,10 @@ nil              ; None
 
 ```sheaf
 (if cond then else)                  ; Branching (avoid in JIT functions)
+(case expr clause1 clause2 ...)      ; Pattern matching (each clause: (pattern result))
 (where cond true-val false-val)      ; Differentiable select (use in JIT)
 (repeat [i n] [acc init] body)       ; Loop with accumulator
+(scan fn init xs)                    ; Fold with intermediate results (like Haskell scanl)
 (static expr)                        ; Force static evaluation in JIT
 ```
 
@@ -203,6 +207,8 @@ nil              ; None
 ```sheaf
 (map func coll)                      ; Apply function to each element
 (reduce func acc coll)               ; Reduce collection with accumulator
+(apply func args-list)               ; Apply function to list of arguments
+(vmap func)                          ; Vectorized map (JAX vmap) - auto-batch over first axis
 ```
 
 **Threading Macros**
@@ -227,7 +233,7 @@ nil              ; None
 ### Pattern 1: Multi-Layer Perceptron
 
 ```sheaf
-(defn forward (x p)
+(defn forward [x p]
   (as-> x h
     (with-params (get p :l1)
       (relu (+ (@ h W) b)))
@@ -238,8 +244,8 @@ nil              ; None
 ### Pattern 2: Transformer Block (from BareGPT)
 
 ```sheaf
-(defn transformer-block (x layer-p config)
-  (let (;; Self-Attention + Residual 1
+(defn transformer-block [x layer-p config]
+  (let [;; Self-Attention + Residual 1
         ln1_x (layer-norm x (get layer-p :ln1) 2)
         attn_out (first (multi-head-attention ln1_x layer-p config))
         x1 (+ x attn_out)
@@ -247,28 +253,28 @@ nil              ; None
         ;; MLP + Residual 2
         ln2_x1 (layer-norm x1 (get layer-p :ln2) 2)
         mlp_out (mlp ln2_x1 (get layer-p :mlp))
-        x2 (+ x1 mlp_out))
+        x2 (+ x1 mlp_out)]
     x2))
 ```
 
 ### Pattern 3: Training Loop with Adam
 
 ```sheaf
-(defn train-step (params m v t inputs targets config)
-  (let (lr (get config :lr)
-        loss-fn (lambda (p) (cross-entropy-loss (model inputs p config) targets))
+(defn train-step [params m v t inputs targets config]
+  (let [lr (get config :lr)
+        loss-fn (fn [p] (cross-entropy-loss (model inputs p config) targets))
         [loss grads] ((value-and-grad loss-fn) params)
-        [new-params new-m new-v new-t] (adam-step params grads m v t lr 0.9 0.999 1e-8))
-    (dict :loss loss :params new-params :m new-m :v new-v :t new-t)))
+        [new-params new-m new-v new-t] (adam-step params grads m v t lr 0.9 0.999 1e-8)]
+    {:loss loss :params new-params :m new-m :v new-v :t new-t}))
 ```
 
 ### Pattern 4: Einsum for Multi-Head Attention
 
 ```sheaf
 ;; Q, K, V projections [Batch, Heads, Time, Head_dim]
-(let (Qh (einsum "... t d, d h k -> ... h t k" X Wq_multi)
+(let [Qh (einsum "... t d, d h k -> ... h t k" X Wq_multi)
       Kh (einsum "... t d, d h k -> ... h t k" X Kh_multi)
-      Vh (einsum "... t d, d h k -> ... h t k" X Vh_multi))
+      Vh (einsum "... t d, d h k -> ... h t k" X Vh_multi)]
   ...)
 ```
 
@@ -327,7 +333,7 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 
 ```sheaf
 (defn :jit model [x config]
-  (let (D (static (get config :d_model)))  ; Force static evaluation
+  (let [D (static (get config :d_model))]  ; Force static evaluation
     (reshape x -1 D)))
 ```
 
@@ -345,47 +351,85 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 
 ### Math Operations
 
-| Operator                      | Description                          | Example                    |
-| ----------------------------- | ------------------------------------ | -------------------------- |
-| `+`, `-`, `*`, `/`            | Arithmetic (variadic, broadcastable) | `(+ a b c)`                |
-| `@`                           | Matrix multiplication                | `(@ W x)`                  |
-| `**`                          | Exponentiation                       | `(** x 2)`                 |
-| `(einsum pattern ...tensors)` | Einstein summation                   | `(einsum "ij,jk->ik" A B)` |
-| `(sum t :axis i)`             | Reduction                            | `(sum logits :axis -1)`    |
-| `(mean t :axis i)`            | Mean                                 | `(mean loss)`              |
+| Operator                      | Description                          | Example                     |
+| ----------------------------- | ------------------------------------ | --------------------------- |
+| `+`, `-`, `*`, `/`            | Arithmetic (variadic, broadcastable) | `(+ a b c)`                 |
+| `//`                          | Integer division                     | `(// 7 2)` → `3`            |
+| `@`                           | Matrix multiplication                | `(@ W x)`                   |
+| `**`                          | Exponentiation                       | `(** x 2)`                  |
+| `(einsum pattern ...tensors)` | Einstein summation                   | `(einsum "ij,jk->ik" A B)`  |
+| `(sum t :axis i)`             | Reduction                            | `(sum logits :axis -1)`     |
+| `(product t :axis i)`         | Product reduction                    | `(product weights :axis 0)` |
+| `(mean t :axis i)`            | Mean                                 | `(mean loss)`               |
+| `(var t :axis i)`             | Variance                             | `(var x :axis -1)`          |
+| `(min t :axis i)`             | Minimum                              | `(min x :axis 0)`           |
+| `(max t :axis i)`             | Maximum                              | `(max x :axis 0)`           |
+| `(minimum a b)`               | Element-wise minimum                 | `(minimum x y)`             |
+| `(maximum a b)`               | Element-wise maximum                 | `(maximum x y)`             |
+| `(abs x)`                     | Absolute value                       | `(abs x)`                   |
+| `(exp x)`                     | Exponential                          | `(exp x)`                   |
+| `(log x)`                     | Natural logarithm                    | `(log x)`                   |
+| `(sqrt x)`                    | Square root                          | `(sqrt x)`                  |
 
 ### Tensor Shaping
 
-| Function                    | Description        | Example                        |
-| --------------------------- | ------------------ | ------------------------------ |
-| `(shape t)`                 | Get shape tuple    | `(shape x)` → `[B, T, D]`      |
-| `(shape t axis)`            | Get dimension      | `(shape x -1)` → `D`           |
-| `(reshape t ...dims)`       | Reshape tensor     | `(reshape x -1 D)`             |
-| `(transpose t ...axes)`     | Permute axes       | `(transpose x 1 0 2)`          |
-| `(swapaxes t a1 a2)`        | Swap two axes      | `(swapaxes x -1 -2)`           |
-| `(tensor-split t n [axis])` | Split into n parts | `(tensor-split x 3)` → `[...]` |
+| Function                         | Description              | Example                        |
+| -------------------------------- | ------------------------ | ------------------------------ |
+| `(shape t)`                      | Get shape tuple          | `(shape x)` → `[B, T, D]`      |
+| `(shape t axis)`                 | Get dimension            | `(shape x -1)` → `D`           |
+| `(ndim t)`                       | Number of dimensions     | `(ndim x)` → `3`               |
+| `(reshape t ...dims)`            | Reshape tensor           | `(reshape x -1 D)`             |
+| `(transpose t ...axes)`          | Permute axes             | `(transpose x 1 0 2)`          |
+| `(swapaxes t a1 a2)`             | Swap two axes            | `(swapaxes x -1 -2)`           |
+| `(concat ...tensors :axis i)`    | Concatenate tensors      | `(concat a b :axis 0)`         |
+| `(tensor-split t n [axis])`      | Split into n parts       | `(tensor-split x 3)` → `[...]` |
+| `(slice t start end)`            | Slice along first axis   | `(slice x 0 10)`               |
+| `(dynamic-slice t starts sizes)` | Dynamic slice            | `(dynamic-slice x [i] [n])`    |
+| `(roll t shift :axis i)`         | Roll elements along axis | `(roll x 1 :axis 0)`           |
+| `(tril m [k])`                   | Lower triangular matrix  | `(tril x)` or `(tril x -1)`    |
+
+### Tensor Creation
+
+| Function                | Description      | Example                         |
+| ----------------------- | ---------------- | ------------------------------- |
+| `(zeros ...dims)`       | Tensor of zeros  | `(zeros 3 4)` → `[3, 4]`        |
+| `(ones ...dims)`        | Tensor of ones   | `(ones 3 4)` → `[3, 4]`         |
+| `(arange n)`            | 0 to n-1         | `(arange 5)` → `[0 1 2 3 4]`    |
+| `(range n)`             | Alias for arange | `(range 5)` → `[0 1 2 3 4]`     |
+| `(one-hot idx n)`       | One-hot encoding | `(one-hot 2 5)` → `[0 0 1 0 0]` |
+| `(normalize x :axis i)` | L2 normalization | `(normalize x :axis -1)`        |
 
 ### Activations
 
-| Function              | Description           |
-| --------------------- | --------------------- |
-| `(relu x)`            | ReLU activation       |
-| `(gelu x)`            | GELU (used in GPT)    |
-| `(sigmoid x)`         | Sigmoid (0-1 range)   |
-| `(tanh x)`            | Hyperbolic tangent    |
-| `(softmax x :axis i)` | Softmax normalization |
-| `(silu x)`            | Swish / SiLU          |
+| Function                  | Description                      |
+| ------------------------- | -------------------------------- |
+| `(relu x)`                | ReLU activation                  |
+| `(leaky-relu x)`          | Leaky ReLU (slope 0.01)          |
+| `(gelu x)`                | GELU (used in GPT)               |
+| `(selu x)`                | Scaled ELU                       |
+| `(celu x)`                | Continuous ELU                   |
+| `(sigmoid x)`             | Sigmoid (0-1 range)              |
+| `(tanh x)`                | Hyperbolic tangent               |
+| `(softmax x :axis i)`     | Softmax normalization            |
+| `(log-softmax x :axis i)` | Log-softmax (numerically stable) |
+| `(silu x)`                | Swish / SiLU                     |
 
 ### List Construction & Manipulation
 
-| Function           | Description                      | Example                       |
-| ------------------ | -------------------------------- | ----------------------------- |
-| `(list ...items)`  | Create list from arguments       | `(list 1 2 3)` → `[1, 2, 3]`  |
-| `(cons head tail)` | Prepend element to list          | `(cons 1 (list 2))` → `[1 2]` |
-| `(first coll)`     | Get first element (nil if empty) | `(first (list 1 2))` → `1`    |
-| `(rest coll)`      | All except first ([] if empty)   | `(rest (list 1 2))` → `[2]`   |
-| `(empty? coll)`    | Check if empty                   | `(empty? (list))` → `True`    |
-| `(count coll)`     | Number of elements               | `(count (list 1 2))` → `2`    |
+| Function                   | Description                      | Example                                    |
+| -------------------------- | -------------------------------- | ------------------------------------------ |
+| `(list ...items)`          | Create list from arguments       | `(list 1 2 3)` → `[1, 2, 3]`               |
+| `(cons head tail)`         | Prepend element to list          | `(cons 1 (list 2))` → `[1 2]`              |
+| `(append coll x)`          | Append element to list           | `(append (list 1) 2)` → `[1 2]`            |
+| `(append-and-roll coll x)` | Append and remove first (FIFO)   | `(append-and-roll (list 1 2) 3)` → `[2 3]` |
+| `(first coll)`             | Get first element (nil if empty) | `(first (list 1 2))` → `1`                 |
+| `(second coll)`            | Get second element               | `(second (list 1 2 3))` → `2`              |
+| `(last coll)`              | Get last element                 | `(last (list 1 2 3))` → `3`                |
+| `(nth coll n)`             | Get nth element (0-indexed)      | `(nth (list 1 2 3) 1)` → `2`               |
+| `(rest coll)`              | All except first ([] if empty)   | `(rest (list 1 2))` → `[2]`                |
+| `(len coll)`               | Number of elements               | `(len (list 1 2))` → `2`                   |
+| `(count coll)`             | Alias for len                    | `(count (list 1 2))` → `2`                 |
+| `(empty? coll)`            | Check if empty                   | `(empty? (list))` → `True`                 |
 
 ### Symbol Manipulation
 
@@ -393,6 +437,22 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 | ------------------ | ------------------------- | -------------------------- |
 | `(symbol? obj)`    | Check if object is symbol | `(symbol? 'foo)` → `True`  |
 | `(gensym prefix?)` | Generate unique symbol    | `(gensym)` → `"G__abc123"` |
+
+### PyTree Operations
+
+| Function                | Description                   | Example                   |
+| ----------------------- | ----------------------------- | ------------------------- |
+| `(tree-map fn tree)`    | Apply function to all leaves  | `(tree-map relu params)`  |
+| `(tree-map-zeros tree)` | Replace all leaves with zeros | `(tree-map-zeros params)` |
+
+### Utilities
+
+| Function                     | Description                  | Example               |
+| ---------------------------- | ---------------------------- | --------------------- |
+| `(top_k x k)`                | Top-k values and indices     | `(top_k scores 5)`    |
+| `(probe label x)`            | Print value during execution | `(probe "debug" x)`   |
+| `(str x)`                    | Convert to string            | `(str 42)` → `"42"`   |
+| `(str-call fn-name ...args)` | Call string-named function   | `(str-call "relu" x)` |
 
 ### Random Numbers (JAX PRNG)
 
@@ -410,8 +470,8 @@ JAX uses explicit PRNG keys (not global state). Always create a key first, then 
 **Quick example:**
 
 ```sheaf
-(let (key (random-key 42)
-      keys (random-split key 3))
+(let [key (random-key 42)
+      keys (random-split key 3)]
   (random-normal (first keys) [10 10]))
 ```
 
@@ -430,9 +490,10 @@ JAX uses explicit PRNG keys (not global state). Always create a key first, then 
 ### nn.shf
 
 ```sheaf
-(layer-norm x p axis)              ; Layer normalization
-(linear x w b)                     ; Dense layer: x @ w + b
-(cross-entropy-loss labels logits) ; Cross-entropy
+(layer-norm x p axis)                    ; Layer normalization
+(linear x w b)                           ; Dense layer: x @ w + b
+(cross-entropy-loss labels logits)       ; Cross-entropy (one-hot labels)
+(sparse-cross-entropy labels logits)     ; Cross-entropy (integer labels)
 ```
 
 ### optim.shf
@@ -468,7 +529,7 @@ Features:
 Example session:
 
 ```sheaf
-sheaf> (defn double (x) (* x 2))
+sheaf> (defn double [x] (* x 2))
 sheaf> (double 21)
 ⇒ Tensor i32[] = 42
 
@@ -577,8 +638,8 @@ sheaf/
 
 ```sheaf
 ; Instead of:
-(let (W (get params :W)
-      b (get params :b))
+(let [W (get params :W)
+      b (get params :b)]
   (+ (@ x W) b))
 
 ; Write:
