@@ -67,6 +67,33 @@ class SheafVector(list):
 def tokenize(chars):
     # Remove comments: both ;; and single ; until end of line
     chars = re.sub(r";.*", "", chars)
+    
+    # Treat commas as whitespace (like Clojure), but preserve commas inside strings
+    # We'll use a more sophisticated approach to only replace commas outside of strings
+    result = []
+    i = 0
+    while i < len(chars):
+        if chars[i] == '"':
+            # Found start of string, find the end
+            result.append(chars[i])  # Add opening quote
+            i += 1
+            while i < len(chars) and chars[i] != '"':
+                result.append(chars[i])
+                i += 1
+            if i < len(chars):
+                result.append(chars[i])  # Add closing quote
+                i += 1
+        elif chars[i] == ',':
+            # Replace comma with space (outside of strings)
+            result.append(' ')
+            i += 1
+        else:
+            # Keep other characters as-is
+            result.append(chars[i])
+            i += 1
+    
+    chars = ''.join(result)
+    
     # Updated pattern to capture backtick (`), tilde (~), and quote (') as separate tokens
     # ~@ must be captured as a single token
     # {} added for dict literals
