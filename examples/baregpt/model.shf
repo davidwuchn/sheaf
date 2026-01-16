@@ -7,8 +7,8 @@
 (use nn)
 
 
-(defn init-gpt-params (key config)
-  (let (;; Global config and keys
+(defn init-gpt-params [key config]
+  (let [;; Global config and keys
         D (get config :d_model)
         B (get config :block_size)
         V (get config :vocab_size)
@@ -21,40 +21,37 @@
 
         ;; Sub-dictionaries preparation
         k_emb_split (random-split k_emb 2)
-        emb-tensors (dict :token (* (random-normal (nth k_emb_split 0) (list V D)) 0.01)
-                          :pos   (* (random-normal (nth k_emb_split 1) (list B D)) 0.01))
+        emb-tensors  {:token (* (random-normal (nth k_emb_split 0) (list V D)) 0.01)
+                      :pos   (* (random-normal (nth k_emb_split 1) (list B D)) 0.01)}
 
-        head-tensors (dict :w (* (xavier-init k_head (list D V)))
-                           :b (zeros (list V))))
+        head-tensors {:w (* (xavier-init k_head (list D V)))
+                      :b (zeros (list V))}]
 
     ;; Final params structure
-    (dict
+    {
       :emb      emb-tensors
       :head     head-tensors
-      :final_ln (dict :gamma (ones (list 1 D))
-                      :beta  (zeros (list 1 D)))
-      :layers   (map (fn (i)
-                       (let (k (nth (random-split k_layers L) i)
+      :final_ln {:gamma (ones (list 1 D))
+                 :beta  (zeros (list 1 D))}
+      :layers   (map (fn [i]
+                       (let [k (nth (random-split k_layers L) i)
                              k_attn (random-split k 4)
-                             k_mlp  (random-split k 2))
-                         (dict
-                           :attn (dict
-                                   :Wq (xavier-init (nth k_attn 0) (list D D))
-                                   :Wk (xavier-init (nth k_attn 1) (list D D))
-                                   :Wv (xavier-init (nth k_attn 2) (list D D))
-                                   :Wo (xavier-init (nth k_attn 3) (list D D)))
-                           :mlp (dict
-                                   :W1 (xavier-init (nth k_mlp 0) (list D (* 4 D)))
-                                   :b1 (zeros (list 1 (* 4 D)))
-                                   :W2 (xavier-init (nth k_mlp 1) (list (* 4 D) D))
-                                   :b2 (zeros (list 1 D)))
-                           :ln1 (dict :gamma (ones (list 1 D)) :beta (zeros (list 1 D)))
-                           :ln2 (dict :gamma (ones (list 1 D)) :beta (zeros (list 1 D))))))
-                     (range L)))))
+                             k_mlp  (random-split k 2)]
+                         {:attn {:Wq (xavier-init (nth k_attn 0) (list D D))
+                                 :Wk (xavier-init (nth k_attn 1) (list D D))
+                                 :Wv (xavier-init (nth k_attn 2) (list D D))
+                                 :Wo (xavier-init (nth k_attn 3) (list D D))}
+                          :mlp {:W1 (xavier-init (nth k_mlp 0) (list D (* 4 D)))
+                                :b1 (zeros (list 1 (* 4 D)))
+                                :W2 (xavier-init (nth k_mlp 1) (list (* 4 D) D))
+                                :b2 (zeros (list 1 D))}
+                          :ln1 {:gamma (ones (list 1 D)) :beta (zeros (list 1 D))}
+                          :ln2 {:gamma (ones (list 1 D)) :beta (zeros (list 1 D))}}))
+                     (range L))}])
 
 
-(defn gpt-model (inputs params config)
-  (let (emb-tensors (get-in params [:emb :token])
+(defn gpt-model [inputs params config]
+  (let [emb-tensors (get-in params [:emb :token])
         pos-tensors (get-in params [:emb :pos])
         T (get (shape inputs) -1)
         D (static (get config :d_model)) ;; Explicitly get D for reshape
@@ -66,21 +63,21 @@
         ;; We force the shape to ensure correct broadcasting across Batch
         pos_emb (reshape (get pos-tensors (range T)) (list 1 T D))
 
-        X (+ tok_emb pos_emb))
+        X (+ tok_emb pos_emb)]
 
-    (let (hidden (reduce (fn (h layer-p) (transformer-block h layer-p config))
+    (let [hidden (reduce (fn [h layer-p] (transformer-block h layer-p config))
                          X
-                         (get params :layers)))
+                         (get params :layers))]
 
       ;; Final head
-      (let (final-norm (layer-norm hidden (get-in params [:final_ln]) 2)
+      (let [final-norm (layer-norm hidden (get-in params [:final_ln]) 2)
             W-out (get-in params [:head :w])
-            b-out (get-in params [:head :b]))
+            b-out (get-in params [:head :b])]
         (+ (@ final-norm W-out) b-out)))))
 
 
-(defn multi-head-attention (X layer-p config)
-  (let (;; Dimension extraction
+(defn multi-head-attention [X layer-p config]
+  (let [;; Dimension extraction
         T (get (shape X) -2)
         D (static (get config :d_model))
         H (static (get config :n_heads))
@@ -119,19 +116,19 @@
         att_out (as-> (@ att_probs Vh) h
                   (swapaxes h -2 -3)    ;; [Batch, T, Heads, Hd]
                   (reshape h (shape X)) ;; [Batch, T, D]
-                  (@ h Wo)))
+                  (@ h Wo))]
 
     (list att_out att_probs)))
 
 
-(defn mlp (x p)
+(defn mlp [x p]
   (with-params p
-    (let (h (gelu (+ (@ x W1) b1)))
+    (let [h (gelu (+ (@ x W1) b1))]
       (+ (@ h W2) b2))))
 
 
-(defn transformer-block (x layer-p config)
-  (let (;; Self-Attention
+(defn transformer-block [x layer-p config]
+  (let [;; Self-Attention
         ln1_x (layer-norm x (get layer-p :ln1) 2) ;; layernorm axis 2
         attn_out (first (multi-head-attention ln1_x layer-p config))
         x1 (+ x attn_out) ;; Residual 1
@@ -139,13 +136,13 @@
         ;; MLP
         ln2_x1 (layer-norm x1 (get layer-p :ln2) 2)
         mlp_out (mlp ln2_x1 (get layer-p :mlp))
-        x2 (+ x1 mlp_out)) ;; Residual 2
+        x2 (+ x1 mlp_out)] ;; Residual 2
     ;; Return the final state
     x2))
 
 
 ;; Alternative syntax using the threading operator
-(defn transformer-block-as (x layer-p config)
+(defn transformer-block-as [x layer-p config]
   (as-> x h
     ;; 1. Self-Attention
     (-> h
@@ -162,8 +159,8 @@
             (+ h))))) ;; Residual 2
 
 
-(defn cross-entropy-loss-not (logits targets)
-  (let (;; Convert logits to log-probabilities [Batch*Time, Vocab]
+(defn cross-entropy-loss-not [logits targets]
+  (let [;; Convert logits to log-probabilities [Batch*Time, Vocab]
         log-probs (log-softmax (reshape logits -1 (get (shape logits) -1)))
         V (get (shape log-probs) -1)
         flat-targets (reshape targets -1)
@@ -172,28 +169,28 @@
 
         ;; Extract the log-probs for the correct characters
         ;; Summing (* mask log-probs) acts as a selector
-        target-log-probs (sum (* log-probs target-mask) :axis -1))
+        target-log-probs (sum (* log-probs target-mask) :axis -1)]
 
     ;; Return negative mean log-likelihood
-    (* (mean target-log-probs) -1.0 )))
+    (* (mean target-log-probs) -1.0)))
 
 
-(defn train-step (params m v t inputs targets config)
-  (let (lr (get config :lr)
-        loss-fn (fn (p) (cross-entropy-loss (gpt-model inputs p config) targets))
+(defn train-step [params m v t inputs targets config]
+  (let [lr (get config :lr)
+        loss-fn (fn [p] (cross-entropy-loss (gpt-model inputs p config) targets))
         [loss grads] ((value-and-grad loss-fn) params)
 
-        [new-params new-m new-v new-t] (adam-step params grads m v t lr 0.9 0.999 1e-8))
+        [new-params new-m new-v new-t] (adam-step params grads m v t lr 0.9 0.999 1e-8)]
     ;; Return
-    (dict :loss loss
-          :params new-params
-          :m new-m
-          :v new-v
-          :t new-t)))
+    {:loss loss
+     :params new-params
+     :m new-m
+     :v new-v
+     :t new-t}))
 
 
-(defn generate-token (ids params config key k temp)
-  (let (;; Forward pass
+(defn generate-token [ids params config key k temp]
+  (let [;; Forward pass
         logits (gpt-model ids params config)
         ;; Process last token
         vocab_size (static (get config :vocab_size))
@@ -203,14 +200,14 @@
                     (softmax p-logits :axis -1))
 
         ;; Random keys
-        [new-key subkey] (random-split key))
+        [new-key subkey] (random-split key)]
 
-    (let (;; Sampling
+    (let [;; Sampling
           next-id (where (and k (> k 0))
-                      (let ([top-p top-idx] (top_k p-probs (min k vocab_size)))
+                      (let [[top-p top-idx] (top_k p-probs (min k vocab_size))]
                         (get top-idx (choice subkey (len top-p) :p (normalize top-p))))
-                      (choice subkey vocab_size :p p-probs)))
+                      (choice subkey vocab_size :p p-probs))]
 
       ;; Output
-      (dict :next_id next-id
-            :key new-key))))
+      {:next_id next-id
+       :key new-key})))

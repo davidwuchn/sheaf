@@ -10,9 +10,9 @@
 
 ;; Learnable parameters
 
-(defn init-clevr-params (key)
+(defn init-clevr-params [key]
   ; Initialize embeddings and temperatures
-  (let ([k1 k2 k3] (random-split key 3)
+  (let [[k1 k2 k3] (random-split key 3)
         color-base [[1 0 0 0 0 0 0 0 0]    ;; red
                     [0 1 0 0 0 0 0 0 0]    ;; green
                     [0 0 1 0 0 0 0 0 0]    ;; blue
@@ -20,65 +20,64 @@
         shape-base [[0 0 0 0 1 0 0 0 0]    ;; circle
                     [0 0 0 0 0 1 0 0 0]    ;; square
                     [0 0 0 0 0 0 1 0 0]])  ;; triangle
-    (dict
-      :color_embeddings (+ color-base (* (random-normal k1 (list 4 9)) 0.05))
-      :shape_embeddings (+ shape-base (* (random-normal k2 (list 3 9)) 0.05))
-      :temps (dict :filter 0.2 :unique 0.8 :leftmost 1.0 :spatial 1.0)
-      :thresholds (dict :spatial 0.1 :exists 1.72))))
+    {:color_embeddings (+ color-base (* (random-normal k1 (list 4 9)) 0.05))
+     :shape_embeddings (+ shape-base (* (random-normal k2 (list 3 9)) 0.05))
+     :temps {:filter 0.2 :unique 0.8 :leftmost 1.0 :spatial 1.0}
+     :thresholds {:spatial 0.1 :exists 1.72}}))
 
 
 ;; Vocabulary mapping
 
-(defn color-idx (name)
+(defn color-idx [name]
   (case name "red" 0 "green" 1 "blue" 2 "yellow" 3 0))
 
-(defn shape-idx (name)
+(defn shape-idx [name]
   (case name "circle" 0 "square" 1 "triangle" 2 0))
 
 
 ;; Filters - wrap utils with learned embeddings
 
-(defn filter-color (scene color-kw params)
-  (let (idx (color-idx (slice (str color-kw) 1))
-        query (get (get params :color_embeddings) idx))
+(defn filter-color [scene color-kw params]
+  (let [idx (color-idx (slice (str color-kw) 1))
+        query (get (get params :color_embeddings) idx)]
     (soft-filter scene query (get-in params [:temps :filter]))))
 
-(defn filter-shape (scene shape-kw params)
-  (let (idx (shape-idx (slice (str shape-kw) 1))
-        query (get (get params :shape_embeddings) idx))
+(defn filter-shape [scene shape-kw params]
+  (let [idx (shape-idx (slice (str shape-kw) 1))
+        query (get (get params :shape_embeddings) idx)]
     (soft-filter scene query (get-in params [:temps :filter]))))
 
 
 ;; Selection
 
-(defn unique (scene params)
+(defn unique [scene params]
   (soft-unique scene (get-in params [:temps :unique])))
 
-(defn leftmost (scene params)
+(defn leftmost [scene params]
   (soft-leftmost scene (get-in params [:temps :leftmost])))
 
-(defn rightmost (scene params)
+(defn rightmost [scene params]
   (soft-rightmost scene (get-in params [:temps :leftmost])))
 
 
 ;; Spatial relations
 
-(defn left-of (scene ref params)
+(defn left-of [scene ref params]
   (spatial-left-of scene ref
     (get-in params [:thresholds :spatial])
     (get-in params [:temps :spatial])))
 
-(defn right-of (scene ref params)
+(defn right-of [scene ref params]
   (spatial-right-of scene ref
     (get-in params [:thresholds :spatial])
     (get-in params [:temps :spatial])))
 
-(defn above (scene ref params)
+(defn above [scene ref params]
   (spatial-above scene ref
     (get-in params [:thresholds :spatial])
     (get-in params [:temps :spatial])))
 
-(defn below (scene ref params)
+(defn below [scene ref params]
   (spatial-below scene ref
     (get-in params [:thresholds :spatial])
     (get-in params [:temps :spatial])))
@@ -86,24 +85,24 @@
 
 ;; Logic & attribute queries
 
-(defn exists? (scene params)
+(defn exists? [scene params]
   (exists-any scene (get-in params [:thresholds :exists])))
 
-(defn intersect (scene1 scene2)
+(defn intersect [scene1 scene2]
   (intersect-scenes scene1 scene2))
 
-(defn query-color (obj)    (query-attribute obj 0 4))
-(defn query-shape (obj)    (query-attribute obj 4 7))
-(defn query-position (obj) (query-attribute obj 7 9))
+(defn query-color [obj]    (query-attribute obj 0 4))
+(defn query-shape [obj]    (query-attribute obj 4 7))
+(defn query-position [obj] (query-attribute obj 7 9))
 
 
 ;; Query executor - the core of neuro-symbolic reasoning
 
-(defn execute-query (scene q params)
+(defn execute-query [scene q params]
  ; Execute a symbolic S-expression query on a scene
-  (let (op (first q)
+  (let [op (first q)
         arg1 (second q)
-        rec (fn (subq) (execute-query scene subq params)))
+        rec (fn [subq] (execute-query scene subq params))]
     (case op
       "filter-color" (filter-color scene arg1 params)
       "filter-shape" (filter-shape scene arg1 params)
@@ -124,17 +123,17 @@
 
 ;; Loss functions
 
-(defn clevr-loss (params scene query target)
+(defn clevr-loss [params scene query target]
   ; Cross-entropy loss for a single query
-  (let (pred (execute-query scene query params)
+  (let [pred (execute-query scene query params)
         log-probs (log-softmax pred :axis -1)
-        target-vec (one-hot target (get (shape log-probs) -1)))
+        target-vec (one-hot target (get (shape log-probs) -1))]
     (* -1.0 (mean (sum (* log-probs target-vec) :axis -1)))))
 
-(defn batch-loss (params scenes queries targets)
+(defn batch-loss [params scenes queries targets]
   ; Average loss over a batch
-  (let (n (get (shape scenes) 0))
-    (/ (reduce (fn (acc i)
+  (let [n (get (shape scenes) 0)]
+    (/ (reduce (fn [acc i]
                  (+ acc (clevr-loss params
                           (reshape (get scenes i) 1 -1 9)
                           (nth queries i)
@@ -146,9 +145,9 @@
 
 ;; Training step
 
-(defn train-step (params m v t scenes queries targets config)
+(defn train-step [params m v t scenes queries targets config]
   ; Single training step with Adam
-  (let (loss-fn (fn (p) (batch-loss p scenes queries targets))
+  (let [loss-fn (fn [p] (batch-loss p scenes queries targets))
         [loss grads] ((value-and-grad loss-fn) params)
-        [new-p new-m new-v new-t] (adam-step params grads m v t (get config :lr) 0.9 0.999 1e-8))
-    (dict :loss loss :params new-p :m new-m :v new-v :t new-t)))
+        [new-p new-m new-v new-t] (adam-step params grads m v t (get config :lr) 0.9 0.999 1e-8)]
+    {:loss loss :params new-p :m new-m :v new-v :t new-t}))

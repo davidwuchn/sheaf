@@ -1,11 +1,11 @@
 ;; Optimizer library for Sheaf
 
-(defn sgd-step (params grads lr)
+(defn sgd-step [params grads lr]
   ;; Stochastic gradient descent: p := p - lr * g
-  (tree-map (lambda (p g) (- p (* lr g))) params grads))
+  (tree-map (fn [p g] (- p (* lr g))) params grads))
 
 
-(defn adam-step (params grads m v t lr b1 b2 eps)
+(defn adam-step [params grads m v t lr b1 b2 eps]
   ;; Adam optimizer step with bias correction
   ;;
   ;; Args:
@@ -21,26 +21,26 @@
   ;;
   ;; Returns: [new-params new-m new-v new-t]
 
-  (let (new-t (+ t 1)
-        new-m (tree-map (lambda (md gd) (+ (* b1 md) (* (- 1 b1) gd))) m grads)
-        new-v (tree-map (lambda (vd gd) (+ (* b2 vd) (* (- 1 b2) (** gd 2)))) v grads)
+  (let [new-t (+ t 1)
+        new-m (tree-map (fn [md gd] (+ (* b1 md) (* (- 1 b1) gd))) m grads)
+        new-v (tree-map (fn [vd gd] (+ (* b2 vd) (* (- 1 b2) (** gd 2)))) v grads)
         bias-correction-m (/ 1.0 (- 1 (** b1 new-t)))
         bias-correction-v (/ 1.0 (- 1 (** b2 new-t)))
-        new-p (tree-map (lambda (p mh vh)
+        new-p (tree-map (fn [p mh vh]
                           (- p (/ (* lr mh bias-correction-m)
                                   (+ (sqrt (* vh bias-correction-v)) eps))))
-                        params new-m new-v))
+                        params new-m new-v)]
     (list new-p new-m new-v new-t)))
 
 
-(defn global-norm (pytree)
+(defn global-norm [pytree]
   ;; Compute global L2 norm of all leaves in a pytree
-  (sqrt (sum (tree-map (lambda (g) (sum (** g 2))) pytree))))
+  (sqrt (sum (tree-map (fn [g] (sum (** g 2))) pytree))))
 
 
-(defn clip-by-global-norm (pytree max-norm)
+(defn clip-by-global-norm [pytree max-norm]
   ;; Clip gradients by global L2 norm
   ;; If norm exceeds max-norm, scale all gradients proportionally
-  (let (g-norm (global-norm pytree)
-        clip-factor (minimum 1.0 (/ max-norm (+ g-norm 1e-8))))
-    (tree-map (lambda (g) (* g clip-factor)) pytree)))
+  (let [g-norm (global-norm pytree)
+        clip-factor (minimum 1.0 (/ max-norm (+ g-norm 1e-8)))]
+    (tree-map (fn [g] (* g clip-factor)) pytree)))

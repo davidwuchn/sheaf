@@ -4,8 +4,8 @@
 
 ;; Recursivity by design: "forward" can accept any number of layers
 (defn forward [x params]
-  (let (layers (get params :layers)
-        head   (get params :head))
+  (let [layers (get params :layers)
+        head   (get params :head)]
     (as-> x h
       ;; The reduction acts as a dynamic sequence of layers
       (reduce (fn [h_in layer_p]
@@ -21,9 +21,9 @@
 ;; Evolution logic
 ;; Takes the current model state and returns a deeper model
 ;; while preserving existing knowledge.
-(defn grow-hydra (params key config)
+(defn grow-hydra [params key config]
   ; Get current model configuration
-  (let (D       (get config "d_model")
+  (let [D       (get config "d_model")
         head-w  (get (get params "head") "W")
         in_dim  (get (shape head-w) 0)
         keys    (random-split key)
@@ -32,22 +32,21 @@
         k2      (get keys 1)
 
         ; Reconstruct the parameter tree with the new layer appended
-        new-layer (dict "W" (random-normal k1 (list in_dim D))
-                        "b" (zeros (list D)))
-        new-head  (dict "W" (random-normal k2 (list D 1))
-                        "b" (zeros (list 1))))
+        new-layer {"W" (random-normal k1 (list in_dim D))
+                   "b" (zeros (list D))}
+        new-head  {"W" (random-normal k2 (list D 1))
+                   "b" (zeros (list 1))}]
     ; Return
-    (dict "head"   new-head
-          "layers" (append (get params "layers") new-layer))))
+    {"head"   new-head
+     "layers" (append (get params "layers") new-layer)}))
 
 
-(defn train-step (p x y lr)
-  (let (
-        loss-fn (fn (params) (mse-loss y (forward x params)))
-        [l g] ((value-and-grad loss-fn) p))
-    (dict "loss" l
-          "p" (sgd-step p g lr))))
+(defn train-step [p x y lr]
+  (let [loss-fn (fn [params] (mse-loss y (forward x params)))
+        [l g] ((value-and-grad loss-fn) p)]
+    {"loss" l
+     "p" (sgd-step p g lr)}))
 
 
-(defn loss (p x y)
+(defn loss [p x y]
   (cross-entropy-loss y (forward x p)))

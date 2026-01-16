@@ -9,40 +9,40 @@
 
 ;; Soft filtering - uses sigmoid for independent object selection
 
-(defn soft-filter (scene query-vec temperature)
+(defn soft-filter [scene query-vec temperature]
   "Filter objects by similarity to query vector."
-  (let (scores (einsum "...nd,d->...n" scene query-vec)
+  (let [scores (einsum "...nd,d->...n" scene query-vec)
         ;; Biais de -0.5 pour que score=0 donne attention~0, score=1 donne attention~1
-        attention (sigmoid (/ (- scores 0.5) temperature)))
+        attention (sigmoid (/ (- scores 0.5) temperature))]
     (* scene (reshape attention (list -1 1)))))
 
 
 ;; Soft selection - uses softmax for mutual exclusion
 
-(defn soft-unique (scene temperature)
+(defn soft-unique [scene temperature]
   "Select single object via softmax over presence scores."
-  (let (objectness (sum (abs scene) :axis -1)
-        attention (softmax (/ objectness temperature) :axis -1))
+  (let [objectness (sum (abs scene) :axis -1)
+        attention (softmax (/ objectness temperature) :axis -1)]
     (einsum "...n,...nd->...d" attention scene)))
 
-(defn soft-leftmost (scene temperature)
+(defn soft-leftmost [scene temperature]
   "Select leftmost object (smallest x) via softmax."
-  (let (x-coords (get scene ... 7)
+  (let [x-coords (get scene ... 7)
         objectness (sum (abs scene) :axis -1)
         is-present (> objectness 1e-3)
         scores (/ (* x-coords -1.0) temperature)
         masked-scores (where is-present scores -1e10)
-        attention (softmax masked-scores :axis -1))
+        attention (softmax masked-scores :axis -1)]
     (einsum "...n,...nd->...d" attention scene)))
 
-(defn soft-rightmost (scene temperature)
+(defn soft-rightmost [scene temperature]
   "Select rightmost object (largest x) via softmax."
-  (let (x-coords (get scene ... 7)
+  (let [x-coords (get scene ... 7)
         objectness (sum (abs scene) :axis -1)
         is-present (> objectness 1e-3)
         scores (/ x-coords temperature)
         masked-scores (where is-present scores -1e10)
-        attention (softmax masked-scores :axis -1))
+        attention (softmax masked-scores :axis -1)]
     (einsum "...n,...nd->...d" attention scene)))
 
 
@@ -50,7 +50,7 @@
 
 (defmacro defspatial [name axis sign]
   `(defn ~name [scene ref threshold temp]
-     (let (scene-coord (get scene ... ~axis)
+     (let [scene-coord (get scene ... ~axis)
            ref-coord (get ref ... ~axis)
            ref-ndim (ndim ref-coord)
            ref-expanded (if (== ref-ndim 1)
@@ -61,7 +61,7 @@
            score-input (if (== ~sign -1)
                           (* -1.0 (+ relative threshold))
                           (- relative threshold))
-           scores (sigmoid (/ score-input temp)))
+           scores (sigmoid (/ score-input temp))]
        (* scene scores))))
 
 (defspatial spatial-left-of 7 -1)
@@ -72,22 +72,22 @@
 
 ;; Logic operations
 
-(defn exists-any (scene threshold)
+(defn exists-any [scene threshold]
   "Check if any object exists (returns probability)."
-  (let (objectness (sum (abs scene) :axis -1)
-        total-presence (sum objectness :axis -1))
+  (let [objectness (sum (abs scene) :axis -1)
+        total-presence (sum objectness :axis -1)]
     (sigmoid (* 5.0 (- total-presence threshold)))))
 
-(defn intersect-scenes (scene1 scene2)
+(defn intersect-scenes [scene1 scene2]
   "Intersection of two filtered scenes."
   (minimum scene1 scene2))
 
 
 ;; Attribute extraction
 
-(defn query-attribute (obj start end)
+(defn query-attribute [obj start end]
   "Extract attribute slice as logits (not normalized)."
-  (let (aggregated (if (== (ndim obj) 3) (sum obj :axis -2) obj)
-        attribute (get aggregated ... (range start end)))
+  (let [aggregated (if (== (ndim obj) 3) (sum obj :axis -2) obj)
+        attribute (get aggregated ... (range start end))]
     ;; Retourne les valeurs brutes comme logits pour cross-entropy
     attribute))

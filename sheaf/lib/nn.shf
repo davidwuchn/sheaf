@@ -1,40 +1,40 @@
 ;; Neural network library for Sheaf
 
-(defn cross-entropy-loss (logits targets)
-  (let (;; Using runtime log-softmax directly
+(defn cross-entropy-loss [logits targets]
+  (let [;; Using runtime log-softmax directly
         log-p (log-softmax (reshape logits -1 (get (shape logits) -1)))
         V (get (shape log-p) -1)
         flat-targets (reshape targets -1)
         target-mask (one-hot flat-targets V)
-        target-log-probs (sum (* log-p target-mask) :axis -1))
+        target-log-probs (sum (* log-p target-mask) :axis -1)]
     (* (mean target-log-probs) -1.0)))
 
 
-(defn layer-norm (x p axis)
-  (let (eps 1e-5
+(defn layer-norm [x p axis]
+  (let [eps 1e-5
         ;; if no axis is specified, use -1
         m (mean x :axis axis :keepdims true)
         v (var x :axis axis :keepdims true)
         gamma (get p :gamma)
-        beta (get p :beta))
+        beta (get p :beta)]
     (+ (* (/ (- x m) (sqrt (+ v eps))) gamma) beta)))
 
 
-(defn linear (x w b)
+(defn linear [x w b]
   (+ (@ x w) b))
 
 
-(defn xavier-init (key shape)
-  (let (fan-in  (first shape)
+(defn xavier-init [key shape]
+  (let [fan-in  (first shape)
         fan-out (second shape)
-        limit (sqrt (/ 6.0 (+ fan-in fan-out))))
+        limit (sqrt (/ 6.0 (+ fan-in fan-out)))]
     (* (- (* (random-uniform key shape) 2.0) 1.0) limit)))
 
-(defn mse-loss (y-pred y-true)
+(defn mse-loss [y-pred y-true]
   ;; MSE = mean((y-pred - y-true)^2)
-  (let (diff (- y-pred y-true))
+  (let [diff (- y-pred y-true)]
     (mean (* diff diff))))
 
-(defn mae-loss (y-pred y-true)
+(defn mae-loss [y-pred y-true]
   ;; MAE = mean(abs(y-pred - y-true))
   (mean (abs (- y-pred y-true))))

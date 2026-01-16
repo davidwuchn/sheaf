@@ -5,27 +5,27 @@
 (use nn)
 (use optim)
 
-(defn init-params (key)
-  (let ([k1 k2] (random-split key 2))
-    (dict :l1 (dict :W (random-normal k1 (list 2 8))
-                    :b (zeros (list 8)))
-          :l2 (dict :W (random-normal k2 (list 8 1))
-                    :b (zeros (list 1))))))
+(defn init-params [key]
+  (let [[k1 k2] (random-split key 2)]
+    {:l1 {:W (random-normal k1 (list 2 8))
+          :b (zeros (list 8))}
+     :l2 {:W (random-normal k2 (list 8 1))
+          :b (zeros (list 1))}}))
 
-(defn forward (x p)
+(defn forward [x p]
   (as-> x h
     (with-params (get p :l1) (relu (+ (@ h W) b)))
     (with-params (get p :l2) (sigmoid (+ (@ h W) b)))))
 
-(defn loss (p x y)
+(defn loss [p x y]
   (mean (** (- (forward x p) y) 2)))
 
-(defn train-step (p x y lr)
-  (let ([l g] ((value-and-grad (fn (p) (loss p x y))) p))
-    (dict :p (sgd-step p g lr) :loss l)))
+(defn train-step [p x y lr]
+  (let [[l g] ((value-and-grad (fn [p] (loss p x y))) p)]
+    {:p (sgd-step p g lr) :loss l}))
 
 ;; Batch n steps of SGD training
-(defn train (p x y lr n)
-  (reduce (fn (s _) (train-step (get s :p) x y lr))
-          (dict :p p :loss 0.0)
+(defn train [p x y lr n]
+  (reduce (fn [s _] (train-step (get s :p) x y lr))
+          {:p p :loss 0.0}
           (range n)))
