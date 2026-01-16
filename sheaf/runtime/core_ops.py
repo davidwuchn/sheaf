@@ -200,7 +200,7 @@ def get_core_env():
         # "get": lambda obj, *keys: obj[...],
         "get-in": _sheaf_get_in,
         "last": lambda x: x[-1] if x else None,
-        "list": lambda *args: list(args),
+        # "list": lambda *args: list(args),
         "map": lambda f, lst: [f(x) for x in lst],
         "nth": lambda x, i: x[i],
         "reduce": lambda f, acc, lst: reduce(f, lst, acc),
