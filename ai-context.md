@@ -151,13 +151,21 @@ This allows powerful metaprogramming while maintaining code clarity.
 ### Literals
 
 ```sheaf
-[1 2 3]          ; Vector (JAX array)
+[1 2 3]          ; Vector literal (JAX array when numeric, tuple otherwise)
+[D D]            ; Shape literal (evaluates to tuple when symbols present)
+[[1 2] [3 4]]    ; Nested vectors (2D JAX array)
 {:a 1 :b 2}      ; Dictionary (like Clojure/Python)
+{"key" value}    ; Dictionary with string keys
 :keyword         ; Keyword (evaluates to string "keyword")
-True / False     ; Booleans
+true / false     ; Booleans (lowercase)
 nil              ; None
 ...              ; Ellipsis (for indexing/einsum)
 ```
+
+**Bracket contexts:**
+
+- `[]` in **binding context** (first arg to defn, let, fn): destructuring pattern
+- `[]` in **expression context** (function arguments, return values): data literal
 
 ### Core Operators
 
@@ -390,14 +398,33 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 
 ### Tensor Creation
 
-| Function                | Description      | Example                         |
-| ----------------------- | ---------------- | ------------------------------- |
-| `(zeros ...dims)`       | Tensor of zeros  | `(zeros 3 4)` → `[3, 4]`        |
-| `(ones ...dims)`        | Tensor of ones   | `(ones 3 4)` → `[3, 4]`         |
-| `(arange n)`            | 0 to n-1         | `(arange 5)` → `[0 1 2 3 4]`    |
-| `(range n)`             | Alias for arange | `(range 5)` → `[0 1 2 3 4]`     |
-| `(one-hot idx n)`       | One-hot encoding | `(one-hot 2 5)` → `[0 0 1 0 0]` |
-| `(normalize x :axis i)` | L2 normalization | `(normalize x :axis -1)`        |
+| Function                | Description      | Example                          |
+| ----------------------- | ---------------- | -------------------------------- |
+| `(zeros shape)`         | Tensor of zeros  | `(zeros [3 4])` → shape `[3, 4]` |
+| `(ones shape)`          | Tensor of ones   | `(ones [D D])` → shape `[D, D]`  |
+| `(random-normal k s)`   | Normal samples   | `(random-normal key [64 128])`   |
+| `(xavier-init k s)`     | Xavier init      | `(xavier-init key [D D])`        |
+| `(arange n)`            | 0 to n-1         | `(arange 5)` → `[0 1 2 3 4]`     |
+| `(range n)`             | Alias for arange | `(range 5)` → `[0 1 2 3 4]`      |
+| `(one-hot idx n)`       | One-hot encoding | `(one-hot 2 5)` → `[0 0 1 0 0]`  |
+| `(normalize x :axis i)` | L2 normalization | `(normalize x :axis -1)`         |
+
+**Shape syntax:**
+
+- **Quoted shapes** `'[...]` for static/literal shapes (no variables):
+
+  ```sheaf
+  (zeros '[3 4])       ; Static shape (3, 4) - quote prevents JAX array creation
+  (ones '[1])          ; Single dimension - must quote to get tuple, not array
+  ```
+
+- **Unquoted shapes** `[...]` for dynamic shapes with variables:
+  ```sheaf
+  (let [D 128 H 8]
+    (ones [D H]))      ; Variables evaluated → shape (128, 8)
+  ```
+
+**Why quote?** Without quote, `[1]` becomes a JAX array. With quote, `'[1]` becomes a Python tuple `(1,)` - which is what shape functions expect.
 
 ### Activations
 
@@ -414,22 +441,22 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 | `(log-softmax x :axis i)` | Log-softmax (numerically stable) |
 | `(silu x)`                | Swish / SiLU                     |
 
-### List Construction & Manipulation
+### List/Vector Operations
 
-| Function                   | Description                      | Example                                    |
-| -------------------------- | -------------------------------- | ------------------------------------------ |
-| `(list ...items)`          | Create list from arguments       | `(list 1 2 3)` → `[1, 2, 3]`               |
-| `(cons head tail)`         | Prepend element to list          | `(cons 1 (list 2))` → `[1 2]`              |
-| `(append coll x)`          | Append element to list           | `(append (list 1) 2)` → `[1 2]`            |
-| `(append-and-roll coll x)` | Append and remove first (FIFO)   | `(append-and-roll (list 1 2) 3)` → `[2 3]` |
-| `(first coll)`             | Get first element (nil if empty) | `(first (list 1 2))` → `1`                 |
-| `(second coll)`            | Get second element               | `(second (list 1 2 3))` → `2`              |
-| `(last coll)`              | Get last element                 | `(last (list 1 2 3))` → `3`                |
-| `(nth coll n)`             | Get nth element (0-indexed)      | `(nth (list 1 2 3) 1)` → `2`               |
-| `(rest coll)`              | All except first ([] if empty)   | `(rest (list 1 2))` → `[2]`                |
-| `(len coll)`               | Number of elements               | `(len (list 1 2))` → `2`                   |
-| `(count coll)`             | Alias for len                    | `(count (list 1 2))` → `2`                 |
-| `(empty? coll)`            | Check if empty                   | `(empty? (list))` → `True`                 |
+| Function                   | Description                      | Example                               |
+| -------------------------- | -------------------------------- | ------------------------------------- |
+| `[1 2 3]`                  | Vector literal                   | `[1 2 3]` → JAX array or tuple        |
+| `(cons head tail)`         | Prepend element to list          | `(cons 1 [2 3])` → `[1 2 3]`          |
+| `(append coll x)`          | Append element to list           | `(append [1 2] 3)` → `[1 2 3]`        |
+| `(append-and-roll coll x)` | Append and remove first (FIFO)   | `(append-and-roll [1 2] 3)` → `[2 3]` |
+| `(first coll)`             | Get first element (nil if empty) | `(first [1 2])` → `1`                 |
+| `(second coll)`            | Get second element               | `(second [1 2 3])` → `2`              |
+| `(last coll)`              | Get last element                 | `(last [1 2 3])` → `3`                |
+| `(nth coll n)`             | Get nth element (0-indexed)      | `(nth [1 2 3] 1)` → `2`               |
+| `(rest coll)`              | All except first ([] if empty)   | `(rest [1 2])` → `[2]`                |
+| `(len coll)`               | Number of elements               | `(len [1 2])` → `2`                   |
+| `(count coll)`             | Alias for len                    | `(count [1 2])` → `2`                 |
+| `(empty? coll)`            | Check if empty                   | `(empty? [])` → `true`                |
 
 ### Symbol Manipulation
 
@@ -470,9 +497,8 @@ JAX uses explicit PRNG keys (not global state). Always create a key first, then 
 **Quick example:**
 
 ```sheaf
-(let [key (random-key 42)
-      keys (random-split key 3)]
-  (random-normal (first keys) [10 10]))
+(let [[k1 k2 k3] (random-split (random-key 42) 3)]
+  (random-normal k1 [10 10]))
 ```
 
 ### Weight Initialization
@@ -585,7 +611,7 @@ sheaf/
 │   ├── tracer.py         # Execution tracing, guards (:no-nan, :range, :shape)
 │   └── error_handler.py  # Error reporting & Emergency Backtrace
 ├── runtime/
-│   ├── core_ops.py       # defn, let, if, dict, list, get, with-params, etc.
+│   ├── core_ops.py       # defn, let, if, get, with-params, etc.
 │   ├── jax_ops.py        # einsum, reshape, transpose, swapaxes, tensor-split, etc.
 │   ├── math_ops.py       # +, -, *, /, @, **, sum, mean, etc.
 │   ├── nn_ops.py         # relu, gelu, sigmoid, tanh, softmax, silu, layer-norm, etc.
