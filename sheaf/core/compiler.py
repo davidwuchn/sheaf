@@ -180,29 +180,23 @@ class Sheaf:
     def _compile_vector_literal(self, exp, local_vars):
         """Compile a vector literal [...] to a Python tuple.
 
-        In expression context, [D D] becomes (D_value, D_value).
-        If all elements are numeric literals, create a JAX array instead.
+        In expression context, [a b c] is now always treated as a dynamic list constructor,
+        equivalent to (list a b c). Each element is evaluated at runtime.
+
+        This removes the need for quote ' in shapes like (zeros [D]) and makes
+        [in_dim D] equivalent to (list in_dim D) in the generated code.
         """
-        import jax.numpy as jnp
 
-        # Check if all elements are numeric literals (no symbols to evaluate)
-        all_numeric = all(isinstance(x, (int, float)) for x in exp)
-
-        # Check for nested vectors (like [[1 2] [3 4]])
-        has_nested = any(isinstance(x, (list, SheafVector)) for x in exp)
-
-        if all_numeric or (has_nested and self._is_all_numeric_nested(exp)):
-            # Pure numeric literal - create JAX array
-            return self._compile_tensor_literal(exp)
-
-        # Evaluate each element
+        # Always treat as dynamic list constructor in expression context
+        # Evaluate each element at runtime to get its actual value
         evaluated = tuple(self.compile(x, local_vars) for x in exp)
         return evaluated
 
     def _is_all_numeric_nested(self, exp):
-        """Check if a nested structure contains only numeric literals."""
+        """Check if a nested structure contains only numeric literals or simple symbols."""
         for x in exp:
-            if isinstance(x, (int, float)):
+            if isinstance(x, (int, float, str)):
+                # Numeric literal or simple symbol
                 continue
             elif isinstance(x, (list, SheafVector)):
                 if not self._is_all_numeric_nested(x):
