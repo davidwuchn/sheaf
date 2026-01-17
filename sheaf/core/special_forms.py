@@ -347,14 +347,43 @@ class DictForm(SpecialForm):
 
 
 class GetForm(SpecialForm):
-    """get indexing: (get obj key1 key2 ...)"""
+    """get indexing: (get obj key1 key2 ...) or (get obj key default)"""
 
     def __init__(self):
         super().__init__("get")
 
     def compile(self, compiler, args, local_vars):
-        # (get obj key1 key2 ...)
+        # (get obj key1 key2 ...) or (get obj key default-value)
         obj = compiler.compile(args[0], local_vars)
+
+        # Check if this is a dict access with a potential default value
+        # Syntax: (get {:a 1} :missing 99) -> return 99
+        # vs (get {:a 1} :a) -> return 1
+        # vs (get [[1 2] [3 4]] 0 1) -> return element [0][1]
+
+        has_default = False
+        default_val = None
+
+        # If we have 3 args and obj is a dict, the last arg might be a default
+        if len(args) == 3 and isinstance(obj, dict):
+            # Try to get the value, if it fails use the default
+            key_arg = args[1]
+            raw_key = compiler.compile(key_arg, local_vars)
+            clean_key = (
+                raw_key[1:]
+                if isinstance(raw_key, str) and raw_key.startswith(":")
+                else raw_key
+            )
+
+            if clean_key not in obj:
+                # Key not found, use default
+                default_val = compiler.compile(args[2], local_vars)
+                return default_val
+            else:
+                # Key found, return the value
+                return obj[clean_key]
+
+        # Standard multi-key access (arrays or nested dicts)
         raw_keys = [compiler.compile(k, local_vars) for k in args[1:]]
 
         # Strip ':' prefix from keyword symbols
