@@ -71,7 +71,7 @@ class SheafErrorFormatter:
             elif "got an unexpected keyword argument" in error_msg:
                 error_msg = error_msg.replace(
                     "() got an unexpected keyword argument",
-                    "received unexpected parameter",
+                    " received unexpected parameter",
                 )
         elif error_type == "KeyError":
             error_msg = f"key not found: {error_msg}"
