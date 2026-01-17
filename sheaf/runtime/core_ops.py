@@ -158,16 +158,23 @@ def generic_concat(*args, **kwargs):
 
 def count(lst):
     """
-    Return the number of elements in a list.
+    Return the number of elements in a list or first dimension of an array.
 
     Examples:
         (count [1 2 3])  -> 3
         (count [])       -> 0
+        (count [[1 2] [3 4]]) -> 2
 
     Returns:
         number of elements
     """
-    return len(lst) if isinstance(lst, (list, tuple, str)) else 0
+    if isinstance(lst, (list, tuple, str)):
+        return len(lst)
+    # For JAX arrays, return the size of the first dimension
+    elif hasattr(lst, "shape"):
+        return lst.shape[0] if lst.shape else 0
+    else:
+        return 0
 
 
 def empty_q(lst):
