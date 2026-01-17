@@ -25,9 +25,9 @@ keywords: [sheaf, jax, lisp, neural-networks, ml, dsl, differentiable]
 ;; Simple MLP forward pass with parameter destructuring
 (defn forward [x p]
   (as-> x h
-    (with-params (get p :l1)    ;; Auto-bind W and b from layer 1
+    (with-params [p :l1]    ;; Auto-bind W and b from layer 1
       (relu (+ (@ h W) b)))
-    (with-params (get p :l2)    ;; Auto-bind W and b from layer 2
+    (with-params [p :l2]    ;; Auto-bind W and b from layer 2
       (sigmoid (+ (@ h W) b)))))
 
 ;; Training step with Adam optimizer
@@ -126,8 +126,8 @@ Sheaf macros can manipulate code at compile-time using Lisp functions. The `defm
 ```sheaf
 (defn my-mlp [x p]
   (as-> x _
-    (with-params (get p :l1) (relu (+ (@ _ W) b)))
-    (with-params (get p :l2) (softmax (+ (@ _ W) b)))))
+    (with-params [p :l1] (relu (+ (@ _ W) b)))
+    (with-params [p :l2] (softmax (+ (@ _ W) b)))))
 ```
 
 **How it works:**
@@ -243,9 +243,9 @@ nil              ; None
 ```sheaf
 (defn forward [x p]
   (as-> x h
-    (with-params (get p :l1)
+    (with-params [p :l1]
       (relu (+ (@ h W) b)))
-    (with-params (get p :l2)
+    (with-params [get p :l2]
       (sigmoid (+ (@ h W) b)))))
 ```
 
@@ -348,9 +348,10 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 ### ⚠️ Dictionary Access
 
 ```sheaf
-(get dict :key)              ; Single key access
-(get-in dict [:path :to :key])  ; Nested access
-(with-params dict body)      ; Auto-bind :W, :b, etc. as variables
+(get dict :key)                ; Single key access
+(get-in dict [:path :to :key])   ; Nested access
+(with-params [dict] body)        ; Auto-bind :W, :b, etc. as variables
+(with-params [dict :key] body)   ; Shorthand for (get dict :key)
 ```
 
 ---
@@ -668,8 +669,24 @@ sheaf/
       b (get params :b)]
   (+ (@ x W) b))
 
-; Write:
+; Write (legacy syntax):
 (with-params params
+  (+ (@ x W) b))
+
+; Or with brackets (recommended):
+(with-params [params]
+  (+ (@ x W) b))
+
+; Or with key shorthand (most elegant):
+(with-params [params :l1]
+  (+ (@ x W) b))
+
+; With complex expression (compute params on the fly):
+(with-params [(get layer-params layer-id)]
+  (+ (@ x W) b))
+
+; Or with transformation:
+(with-params [(tree-map (fn [x] (* x scale)) (get params :l1))]
   (+ (@ x W) b))
 ```
 
