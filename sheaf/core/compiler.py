@@ -119,6 +119,11 @@ class Sheaf:
             if self._is_tensor_literal(exp):
                 return self._compile_tensor_literal(exp)
 
+            # --- Internal: Quasiquote (backtick syntax) ---
+            # Handled here directly, not exposed as a language keyword
+            if op == "quasiquote":
+                return self._expand_quasiquote(args[0], local_vars)
+
             # --- Special Forms Dispatch ---
             if isinstance(op, str) and op in self.special_forms:
                 return self.special_forms[op].compile(self, args, local_vars)
@@ -197,6 +202,68 @@ class Sheaf:
         # Mixed or contains symbols/vars - return as tuple for shape arguments
         evaluated = tuple(self.compile(x, local_vars) for x in exp)
         return evaluated
+
+    def _expand_quasiquote(self, expr, local_vars):
+        """Expand quasiquote (backtick) with unquote (~) and unquote-splicing (~@).
+
+        Internal method - quasiquote is not exposed as a language keyword.
+        The backtick syntax is transformed by the parser to (quasiquote ...).
+        """
+        # Handle unquote: ~expr evaluates expr
+        if isinstance(expr, list) and len(expr) > 0:
+            first = expr[0]
+            if first == "unquote":
+                if len(expr) != 2:
+                    raise ValueError("unquote (~) requires exactly one argument")
+                return self.compile(expr[1], local_vars)
+
+            if first == "unquote-splicing":
+                if len(expr) != 2:
+                    raise ValueError(
+                        "unquote-splicing (~@) requires exactly one argument"
+                    )
+                return ("__splice__", self.compile(expr[1], local_vars))
+
+        # Handle lists: recurse and process splicing
+        if isinstance(expr, list):
+            result = []
+            for item in expr:
+                expanded = self._expand_quasiquote(item, local_vars)
+                if (
+                    isinstance(expanded, tuple)
+                    and len(expanded) == 2
+                    and expanded[0] == "__splice__"
+                ):
+                    spliced = expanded[1]
+                    if isinstance(spliced, (list, tuple)):
+                        result.extend(spliced)
+                    else:
+                        result.append(spliced)
+                else:
+                    result.append(expanded)
+            return result
+
+        # Handle vectors: recurse, return as tuple (for shapes)
+        if isinstance(expr, SheafVector):
+            result = []
+            for item in expr:
+                expanded = self._expand_quasiquote(item, local_vars)
+                if (
+                    isinstance(expanded, tuple)
+                    and len(expanded) == 2
+                    and expanded[0] == "__splice__"
+                ):
+                    spliced = expanded[1]
+                    if isinstance(spliced, (list, tuple)):
+                        result.extend(spliced)
+                    else:
+                        result.append(spliced)
+                else:
+                    result.append(expanded)
+            return tuple(result)
+
+        # Atoms: return as-is
+        return expr
 
     def _is_all_numeric_nested(self, exp):
         """Check if a nested structure contains only numeric literals or simple symbols."""
