@@ -12,7 +12,7 @@
         activated-expr (if activation
                          (list activation linear-expr)
                          linear-expr)]
-    (list 'with-params (list 'get 'p layer-name) activated-expr)))
+    (list 'with-params [p layer-name] activated-expr)))
 
 
 (defmacro defmodel [name input-params & layers]
