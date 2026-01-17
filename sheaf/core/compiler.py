@@ -119,6 +119,26 @@ class Sheaf:
             if self._is_tensor_literal(exp):
                 return self._compile_tensor_literal(exp)
 
+            # --- Internal: Quote (apostrophe syntax) ---
+            # Handled here directly, not exposed as a language keyword
+            if op == "quote":
+                if len(args) != 1:
+                    raise ValueError("quote requires exactly one argument")
+                expr = args[0]
+                # For vectors, return as raw Python tuple (useful for shapes)
+                if isinstance(expr, SheafVector):
+                    def vec_to_tuple(v):
+                        result = []
+                        for item in v:
+                            if isinstance(item, SheafVector):
+                                result.append(vec_to_tuple(item))
+                            else:
+                                result.append(item)
+                        return tuple(result)
+                    return vec_to_tuple(expr)
+                # For other expressions, return as-is
+                return expr
+
             # --- Internal: Quasiquote (backtick syntax) ---
             # Handled here directly, not exposed as a language keyword
             if op == "quasiquote":

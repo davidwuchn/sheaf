@@ -963,7 +963,7 @@ special_forms = {
     "lambda": LambdaForm(),
     "last": LastForm(),
     "let": LetForm(),
-    "quote": QuoteForm(),
+    # "quote": QuoteForm(),
     "repeat": RepeatForm(),
     "scan": ScanForm(),
     "static": StaticForm(),
