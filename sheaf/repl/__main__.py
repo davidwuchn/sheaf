@@ -39,7 +39,6 @@ class SheafCompleter:
         self.commands = [
             ":help",
             ":h",
-            ":?",
             ":quit",
             ":q",
             ":exit",
@@ -175,8 +174,7 @@ def print_help():
 Sheaf Console - Interactive REPL
 
 Commands:
-  :help, :h           Show this help message
-  :?, :? <name>       Show help for a function/special-form
+  :help, :h [name]    Show help (optionally for a function/special-form)
   :quit, :q, :exit    Exit the REPL
   :trace <mode>       Set trace mode: off, fast, normal, verbose
   :scope <name>       Filter traces to functions matching <name>
@@ -275,11 +273,7 @@ def run_repl():
                     break
 
                 elif cmd in ("help", "h"):
-                    print_help()
-                    continue
-
-                elif cmd == "?":
-                    # Help for specific function/special-form
+                    # Help - with optional argument for specific symbol
                     if cmd_arg:
                         help_text = get_help(cmd_arg)
                         print(help_text)
