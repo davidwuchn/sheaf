@@ -37,7 +37,7 @@ def create_dict(*args):
 def generic_apply(func, *args):
     """
     Apply a function to arguments.
-    The last argument is expected to be a sequence (list or tuple)
+    The last argument is expected to be a sequence (list, tuple, or JAX array)
     that will be unpacked.
     """
     if not args:
@@ -47,9 +47,15 @@ def generic_apply(func, *args):
     fixed_args = args[:-1]
     last_arg = args[-1]
 
-    if isinstance(last_arg, (list, tuple)):
-        # Standard Lisp apply: (func fixed_args... *last_arg)
-        return func(*fixed_args, *last_arg)
+    # Check if last argument is a sequence (list, tuple, or JAX array)
+    # JAX arrays have __iter__ and can be unpacked
+    if isinstance(last_arg, (list, tuple)) or hasattr(last_arg, "__iter__"):
+        try:
+            # Standard Lisp apply: (func fixed_args... *last_arg)
+            return func(*fixed_args, *last_arg)
+        except TypeError:
+            # If unpacking fails, fall back to standard call
+            return func(*args)
     else:
         # Fallback to standard call if the last argument is not a sequence
         return func(*args)
