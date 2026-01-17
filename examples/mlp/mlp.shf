@@ -8,16 +8,16 @@
 
 (defn init-params [key]
   (let [[k1 k2] (random-split key 2)]
-    {:l1 {:W (random-normal k1 [2 8])
-          :b (zeros [8])}
-     :l2 {:W (random-normal k2 [8 1])
-          :b (zeros [1])}}))
+    {:l1 {:W (random-normal k1 '[2 8])
+          :b (zeros '[8])}
+     :l2 {:W (random-normal k2 '[8 1])
+          :b (zeros '[1])}}))
 
 
 (defn forward [x p]
   (as-> x h
-    (with-params (get p :l1) (relu (+ (@ h W) b)))
-    (with-params (get p :l2) (sigmoid (+ (@ h W) b)))))
+    (with-params [p :l1] (relu (+ (@ h W) b)))
+    (with-params [p :l2] (sigmoid (+ (@ h W) b)))))
 
 
 (defn loss [p x y]
