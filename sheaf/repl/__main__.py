@@ -160,6 +160,12 @@ def format_result(value):
     elif value is None:
         return "nil"
 
+    elif value is True:
+        return "true"
+
+    elif value is False:
+        return "false"
+
     elif isinstance(value, dict):
         # Format dictionaries (like params trees)
         return f"Dict with {len(value)} keys: {list(value.keys())}"
