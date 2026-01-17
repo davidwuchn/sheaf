@@ -121,31 +121,39 @@ def generic_concat(*args, **kwargs):
     axis = kwargs.get("axis", 0) if kwargs else 0
     has_axis_kwarg = "axis" in kwargs
 
-    # Check if all args are lists
-    if all(isinstance(arg, (list, tuple)) for arg in args):
+    # Check what we're concatenating
+    has_jax_arrays = any(hasattr(arg, "shape") for arg in args)
+    has_lists = any(isinstance(arg, (list, tuple)) for arg in args)
+
+    # If we have JAX arrays, use JAX concatenation (possibly with axis)
+    if has_jax_arrays:
+        import jax.numpy as jnp
+
+        arrays = []
+        for arg in args:
+            arrays.append(jnp.asarray(arg))
+        return jnp.concatenate(arrays, axis=axis)
+
+    # If we have only lists/tuples
+    if has_lists:
+        # If :axis is specified, convert to JAX arrays and concatenate
         if has_axis_kwarg:
-            raise ValueError(
-                ":axis is only supported for JAX array concatenation, not for lists"
-            )
-        # Concatenate lists
+            import jax.numpy as jnp
+
+            arrays = [jnp.asarray(arg) for arg in args]
+            return jnp.concatenate(arrays, axis=axis)
+
+        # Otherwise, concatenate as lists
         result = []
         for arg in args:
             result.extend(arg)
         return result
 
-    # Try JAX concatenation
+    # Try JAX concatenation as fallback
     try:
         import jax.numpy as jnp
 
-        # Check if args are JAX arrays
-        arrays = []
-        for arg in args:
-            if isinstance(arg, (list, tuple)):
-                raise ValueError(
-                    "Cannot mix lists and JAX arrays in concat. Use lists or arrays, not both."
-                )
-            arrays.append(jnp.asarray(arg))
-
+        arrays = [jnp.asarray(arg) for arg in args]
         return jnp.concatenate(arrays, axis=axis)
     except (ImportError, TypeError) as e:
         if has_axis_kwarg:
