@@ -37,8 +37,8 @@ def get_math_env():
         "exp": jnp.exp,
         "log": jnp.log,
         "mean": jnp.mean,
-        "min": jnp.minimum,  # JAX-compatible min
-        "max": jnp.maximum,  # JAX-compatible max
+        "min": jnp.min,  # JAX-compatible min
+        "max": jnp.max,  # JAX-compatible max
         "sum": jnp.sum,
         "sqrt": jnp.sqrt,
     }
