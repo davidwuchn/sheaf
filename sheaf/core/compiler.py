@@ -187,17 +187,38 @@ class Sheaf:
 
         In expression context:
         - If all elements are numeric literals → JAX array (e.g., [1 2 3])
+        - If nested vectors with all numeric → JAX array (e.g., [[1 2] [3 4]])
         - If contains symbols/vars → tuple (e.g., [D H] for shapes)
         - If contains function calls → tuple (e.g., [(+ 1 2) x])
         """
         import jax.numpy as jnp
 
-        # Check if all elements are pure numeric literals (no symbols or expressions)
+        # Check if all elements are pure numeric literals
         all_numeric = all(isinstance(x, (int, float)) for x in exp)
 
-        if all_numeric:
-            # Pure numeric literal - create JAX array
-            return jnp.array(list(exp), dtype=self.dtype)
+        # Check if nested vectors with all numeric (recursively)
+        def is_all_numeric_nested(items):
+            for item in items:
+                if isinstance(item, (int, float)):
+                    continue
+                elif isinstance(item, SheafVector):
+                    if not is_all_numeric_nested(item):
+                        return False
+                else:
+                    return False
+            return True
+
+        if all_numeric or (
+            all(isinstance(x, SheafVector) for x in exp) and is_all_numeric_nested(exp)
+        ):
+            # Pure numeric literal or nested numeric vectors - create JAX array
+            def to_list(item):
+                if isinstance(item, SheafVector):
+                    return [to_list(x) for x in item]
+                return item
+
+            data = [to_list(x) for x in exp]
+            return jnp.array(data, dtype=self.dtype)
 
         # Mixed or contains symbols/vars - return as tuple for shape arguments
         evaluated = tuple(self.compile(x, local_vars) for x in exp)
