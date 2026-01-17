@@ -83,7 +83,7 @@ def get_math_env():
         # Boolean Logic (Using JAX-friendly reduction)
         "=": lambda a, b: jnp.array_equal(a, b),
         "==": lambda a, b: a == b,
-        "!=": lambda a, b: jnp.logical_not(jnp.array_equal(a, b)),
+        "!=": lambda a, b: a != b,
         ">": lambda a, b: a > b,
         "<": lambda a, b: a < b,
         ">=": lambda a, b: a >= b,
