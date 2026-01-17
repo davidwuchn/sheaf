@@ -166,6 +166,14 @@ def format_result(value):
     elif value is False:
         return "false"
 
+    elif isinstance(value, str):
+        # Handle keyword symbols (like :yes, :no)
+        if value.startswith(":"):
+            return value
+        else:
+            # Regular string - show with quotes
+            return repr(value)
+
     elif isinstance(value, dict):
         # Format dictionaries (like params trees)
         return f"Dict with {len(value)} keys: {list(value.keys())}"
