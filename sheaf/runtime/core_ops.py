@@ -187,19 +187,26 @@ def count(lst):
 
 def empty_q(lst):
     """
-    Check if a list is empty.
+    Check if a list or array is empty.
 
     Examples:
         (empty? [])     -> True
         (empty? [1 2])  -> False
+        (empty? [])     -> True (empty JAX array)
 
     Args:
-        lst: list to check
+        lst: list or array to check
 
     Returns:
-        True if list is empty, False otherwise
+        True if empty, False otherwise
     """
-    return len(lst) == 0 if isinstance(lst, (list, tuple)) else False
+    if isinstance(lst, (list, tuple)):
+        return len(lst) == 0
+    # For JAX arrays, check size
+    elif hasattr(lst, "size"):
+        return lst.size == 0
+    else:
+        return False
 
 
 def rest(lst):
