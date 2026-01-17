@@ -11,6 +11,62 @@ from functools import reduce
 import jax.numpy as jnp
 
 
+def _sheaf_and(*args):
+    """
+    Lisp-style logical AND: returns last truthy value or false.
+
+    Examples:
+        (and true false) -> false
+        (and true (> 2 1)) -> true
+        (and 1 2 3) -> 3
+    """
+    if not args:
+        return True
+
+    for arg in args[:-1]:
+        # Check if arg is falsy
+        if arg is False or arg is None:
+            return arg
+        # For JAX arrays, check if all elements are truthy
+        if hasattr(arg, "__iter__") and not isinstance(arg, str):
+            try:
+                if not jnp.all(arg):
+                    return False
+            except (TypeError, ValueError):
+                pass
+
+    # Return the last argument
+    return args[-1]
+
+
+def _sheaf_or(*args):
+    """
+    Lisp-style logical OR: returns first truthy value or last value.
+
+    Examples:
+        (or false true) -> true
+        (or false false nil) -> nil
+        (or nil 42) -> 42
+    """
+    if not args:
+        return False
+
+    for arg in args[:-1]:
+        # Check if arg is truthy
+        if arg is not False and arg is not None:
+            return arg
+        # For JAX arrays, check if any element is truthy
+        if hasattr(arg, "__iter__") and not isinstance(arg, str):
+            try:
+                if jnp.any(arg):
+                    return arg
+            except (TypeError, ValueError):
+                pass
+
+    # Return the last argument
+    return args[-1]
+
+
 def get_math_env():
     return {
         # Variadic addition: (+ 1 2 3) -> 6
@@ -30,9 +86,11 @@ def get_math_env():
         "!=": lambda a, b: jnp.logical_not(jnp.array_equal(a, b)),
         ">": lambda a, b: a > b,
         "<": lambda a, b: a < b,
+        ">=": lambda a, b: a >= b,
+        "<=": lambda a, b: a <= b,
         "abs": jnp.abs,
-        "and": lambda *args: reduce(jnp.logical_and, args),
-        "or": lambda *args: reduce(jnp.logical_or, args),
+        "and": _sheaf_and,
+        "or": _sheaf_or,
         "not": jnp.logical_not,
         "exp": jnp.exp,
         "log": jnp.log,
