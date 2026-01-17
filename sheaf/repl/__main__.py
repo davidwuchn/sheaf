@@ -158,7 +158,7 @@ def format_result(value):
             return f"Tensor {dtype_str}[{shape_str}] ({stats})"
 
     elif value is None:
-        return ""  # Don't print anything for None (e.g., from def, use)
+        return "nil"
 
     elif isinstance(value, dict):
         # Format dictionaries (like params trees)
