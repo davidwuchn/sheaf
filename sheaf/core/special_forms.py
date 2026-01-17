@@ -636,14 +636,45 @@ class UseForm(SpecialForm):
 
 
 class WithParamsForm(SpecialForm):
-    """with-params parameter destructuring: (with-params p body)"""
+    """with-params parameter destructuring: (with-params [p :key] body) or (with-params [expr] body)"""
 
     def __init__(self):
         super().__init__("with-params")
 
     def compile(self, compiler, args, local_vars):
         p_expr, *body = args
-        p_val = compiler.compile(p_expr, local_vars)
+
+        # Syntax with brackets:
+        # [p]        -> evaluate p (brackets are optional)
+        # [p :key]   -> shorthand for [(get p :key)]
+        # [(expr)]   -> evaluate expr
+        if isinstance(p_expr, SheafVector):
+            if (
+                len(p_expr) == 2
+                and isinstance(p_expr[1], str)
+                and p_expr[1].startswith(":")
+            ):
+                # [dict :key] -> (get dict :key)
+                dict_expr = p_expr[0]
+                key = p_expr[1]
+                dict_val = compiler.compile(dict_expr, local_vars)
+                # Normalize key (remove leading colon)
+                clean_key = key[1:] if key.startswith(":") else key
+                p_val = (
+                    dict_val.get(clean_key) if isinstance(dict_val, dict) else dict_val
+                )
+            elif len(p_expr) == 1:
+                # [p] or [(expr)] -> evaluate the single element
+                p_val = compiler.compile(p_expr[0], local_vars)
+            else:
+                raise ValueError(
+                    "with-params expects [p], [p :key], or [(expr)], got vector with "
+                    f"{len(p_expr)} elements"
+                )
+        else:
+            # Legacy syntax: (with-params expr body) - still supported
+            p_val = compiler.compile(p_expr, local_vars)
+
         context = dict(local_vars)
         if isinstance(p_val, dict):
             for k, v in p_val.items():
