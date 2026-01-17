@@ -216,7 +216,9 @@ nil              ; None
 (map func coll)                      ; Apply function to each element
 (reduce func acc coll)               ; Reduce collection with accumulator
 (apply func args-list)               ; Apply function to list of arguments
-(vmap func)                          ; Vectorized map (JAX vmap) - auto-batch over first axis
+(vmap func)                          ; Vectorized map (JAX vmap) - auto-batch over axis 0
+(vmap func axis)                     ; Vectorized map over specified axis
+(vmap func [0 nil])                  ; vmap first arg on axis 0, keep second fixed
 ```
 
 **Threading Macros**
@@ -286,6 +288,25 @@ nil              ; None
   ...)
 ```
 
+### Pattern 5: Batching with vmap
+
+```sheaf
+;; Define single-sample forward pass
+(defn forward-single [x params]
+  (with-params [params]
+    (sigmoid (+ (@ x W) b))))
+
+;; Batch it automatically with vmap
+(let [batch-forward (vmap forward-single [0 nil])  ; vmap over axis 0 of inputs, keep params fixed
+      batch-results (batch-forward X params)]
+  batch-results)
+
+;; Or use the defbatch macro (from lib/macros.shf) for cleaner syntax:
+(defbatch linear-layer [x w b] [0 nil nil]
+  (+ (@ x w) b))
+; Now (linear-layer batch-x W b) automatically batches over first axis of x
+```
+
 ---
 
 ## Gotchas & Common Mistakes
@@ -337,12 +358,16 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
   ...)
 ```
 
-### ⚠️ Shape Inference with Static
+### ⚠️ Shape Inference with Static & Reshape
 
 ```sheaf
 (defn :jit model [x config]
   (let [D (static (get config :d_model))]  ; Force static evaluation
-    (reshape x -1 D)))
+    (reshape x '(-1 D))))  ; -1 infers dimension automatically (like NumPy)
+
+;; Examples:
+(reshape (arange 12) '(3 -1))    ; => shape (3 4) - infers 4
+(reshape (arange 12) '(2 -1 2))  ; => shape (2 3 2) - infers 3
 ```
 
 ### ⚠️ Dictionary Access
@@ -387,10 +412,10 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 | `(shape t)`                      | Get shape tuple          | `(shape x)` → `[B, T, D]`      |
 | `(shape t axis)`                 | Get dimension            | `(shape x -1)` → `D`           |
 | `(ndim t)`                       | Number of dimensions     | `(ndim x)` → `3`               |
-| `(reshape t ...dims)`            | Reshape tensor           | `(reshape x -1 D)`             |
-| `(transpose t ...axes)`          | Permute axes             | `(transpose x 1 0 2)`          |
+| `(reshape t ...dims)`            | Reshape tensor           | `(reshape x '(-1 D))`          |
+| `(transpose t ...axes)`          | Permute axes             | `(transpose x '(1 0 2))`       |
 | `(swapaxes t a1 a2)`             | Swap two axes            | `(swapaxes x -1 -2)`           |
-| `(concat ...tensors :axis i)`    | Concatenate tensors      | `(concat a b :axis 0)`         |
+| `(concat ...seq [:axis i])`      | Concatenate lists/arrays | `(concat '[1] '[2] :axis 0)`   |
 | `(tensor-split t n [axis])`      | Split into n parts       | `(tensor-split x 3)` → `[...]` |
 | `(slice t start end)`            | Slice along first axis   | `(slice x 0 10)`               |
 | `(dynamic-slice t starts sizes)` | Dynamic slice            | `(dynamic-slice x [i] [n])`    |
@@ -399,16 +424,16 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 
 ### Tensor Creation
 
-| Function                | Description      | Example                          |
-| ----------------------- | ---------------- | -------------------------------- |
-| `(zeros shape)`         | Tensor of zeros  | `(zeros [3 4])` → shape `[3, 4]` |
-| `(ones shape)`          | Tensor of ones   | `(ones [D D])` → shape `[D, D]`  |
-| `(random-normal k s)`   | Normal samples   | `(random-normal key [64 128])`   |
-| `(xavier-init k s)`     | Xavier init      | `(xavier-init key [D D])`        |
-| `(arange n)`            | 0 to n-1         | `(arange 5)` → `[0 1 2 3 4]`     |
-| `(range n)`             | Alias for arange | `(range 5)` → `[0 1 2 3 4]`      |
-| `(one-hot idx n)`       | One-hot encoding | `(one-hot 2 5)` → `[0 0 1 0 0]`  |
-| `(normalize x :axis i)` | L2 normalization | `(normalize x :axis -1)`         |
+| Function                | Description      | Example                           |
+| ----------------------- | ---------------- | --------------------------------- |
+| `(zeros shape)`         | Tensor of zeros  | `(zeros '(3 4))` → shape `[3, 4]` |
+| `(ones shape)`          | Tensor of ones   | `(ones '(D D))` → shape `[D, D]`  |
+| `(random-normal k s)`   | Normal samples   | `(random-normal key '(64 128))`   |
+| `(xavier-init k s)`     | Xavier init      | `(xavier-init key '(D D))`        |
+| `(arange n)`            | 0 to n-1         | `(arange 5)` → `[0 1 2 3 4]`      |
+| `(range n)`             | Alias for arange | `(range 5)` → `[0 1 2 3 4]`       |
+| `(one-hot idx n)`       | One-hot encoding | `(one-hot 2 5)` → `[0 0 1 0 0]`   |
+| `(normalize x :axis i)` | L2 normalization | `(normalize x :axis -1)`          |
 
 **Shape syntax:**
 
