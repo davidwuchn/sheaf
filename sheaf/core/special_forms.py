@@ -353,35 +353,38 @@ class GetForm(SpecialForm):
         super().__init__("get")
 
     def compile(self, compiler, args, local_vars):
-        # (get obj key1 key2 ...) or (get obj key default-value)
+        # (get obj key1 key2 ...) or (get obj key [default])
         obj = compiler.compile(args[0], local_vars)
 
-        # Check if this is a dict access with a potential default value
-        # Syntax: (get {:a 1} :missing 99) -> return 99
-        # vs (get {:a 1} :a) -> return 1
-        # vs (get [[1 2] [3 4]] 0 1) -> return element [0][1]
-
-        has_default = False
-        default_val = None
-
-        # If we have 3 args and obj is a dict, the last arg might be a default
+        # Special case: if 3 args and obj is a dict, the 3rd might be a default value
+        # We need to check if key exists first before deciding
         if len(args) == 3 and isinstance(obj, dict):
-            # Try to get the value, if it fails use the default
-            key_arg = args[1]
-            raw_key = compiler.compile(key_arg, local_vars)
+            # Compile first key
+            raw_key = compiler.compile(args[1], local_vars)
             clean_key = (
                 raw_key[1:]
                 if isinstance(raw_key, str) and raw_key.startswith(":")
                 else raw_key
             )
 
-            if clean_key not in obj:
-                # Key not found, use default
+            if clean_key in obj:
+                # Key exists - check if it's a nested dict access
+                val = obj[clean_key]
+                if isinstance(val, dict):
+                    # Might be nested access like (get {:attn {...}} :attn :Wq)
+                    # Check if 3rd arg is a key-like thing (string starting with :)
+                    raw_third = compiler.compile(args[2], local_vars)
+                    if isinstance(raw_third, str) and raw_third.startswith(":"):
+                        # It's a nested key access
+                        clean_third = raw_third[1:]
+                        if clean_third in val:
+                            return val[clean_third]
+                # Simple value found, return it
+                return val
+            else:
+                # Key doesn't exist, treat 3rd arg as default value
                 default_val = compiler.compile(args[2], local_vars)
                 return default_val
-            else:
-                # Key found, return the value
-                return obj[clean_key]
 
         # Standard multi-key access (arrays or nested dicts)
         raw_keys = [compiler.compile(k, local_vars) for k in args[1:]]
@@ -403,7 +406,7 @@ class GetForm(SpecialForm):
                 # JAX array indexing: arr[k1, k2]
                 return obj[tuple(clean_keys)]
         else:
-            # Simple access: obj[k1]
+            # Simple access: obj[key]
             return obj[clean_keys[0]]
 
 
