@@ -52,7 +52,7 @@ class Sheaf:
                 "...": Ellipsis,
                 # "False": False,
                 # "True": True,
-                "concat": lambda *args: "".join(map(str, args)),
+                "concat": core_ops.generic_concat,
                 "false": False,
                 "len": len,
                 "nil": None,

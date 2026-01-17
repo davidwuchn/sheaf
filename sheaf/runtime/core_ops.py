@@ -105,6 +105,57 @@ def cons(head, tail):
     return [head] + tail
 
 
+def generic_concat(*args, **kwargs):
+    """
+    Concatenate sequences (lists, tuples, or JAX arrays).
+
+    Supports :axis keyword for array concatenation.
+    Examples:
+        (concat '(1 2) '(3 4)) -> (1 2 3 4)
+        (concat [1 2] [3 4] :axis 0) -> [1. 2. 3. 4.]
+    """
+    if not args:
+        return []
+
+    # Extract axis from kwargs
+    axis = kwargs.get("axis", 0) if kwargs else 0
+    has_axis_kwarg = "axis" in kwargs
+
+    # Check if all args are lists
+    if all(isinstance(arg, (list, tuple)) for arg in args):
+        if has_axis_kwarg:
+            raise ValueError(
+                ":axis is only supported for JAX array concatenation, not for lists"
+            )
+        # Concatenate lists
+        result = []
+        for arg in args:
+            result.extend(arg)
+        return result
+
+    # Try JAX concatenation
+    try:
+        import jax.numpy as jnp
+
+        # Check if args are JAX arrays
+        arrays = []
+        for arg in args:
+            if isinstance(arg, (list, tuple)):
+                raise ValueError(
+                    "Cannot mix lists and JAX arrays in concat. Use lists or arrays, not both."
+                )
+            arrays.append(jnp.asarray(arg))
+
+        return jnp.concatenate(arrays, axis=axis)
+    except (ImportError, TypeError) as e:
+        if has_axis_kwarg:
+            raise ValueError(
+                ":axis requires JAX arrays, but concatenation failed"
+            ) from e
+        # Fall back to string concatenation if JAX fails
+        return "".join(map(str, args))
+
+
 def count(lst):
     """
     Return the number of elements in a list.
