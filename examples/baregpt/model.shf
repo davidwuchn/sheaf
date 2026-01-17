@@ -125,7 +125,7 @@
 
 
 (defn mlp [x p]
-  (with-params p
+  (with-params [p]
     (let [h (gelu (+ (@ x W1) b1))]
       (+ (@ h W2) b2))))
 
@@ -191,7 +191,7 @@
 
     (let [;; Sampling
           next-id (where (and k (> k 0))
-                      (let [[top-p top-idx] (top_k p-probs (min k vocab_size))]
+                      (let [[top-p top-idx] (top_k p-probs (minimum k vocab_size))]
                         (get top-idx (choice subkey (len top-p) :p (normalize top-p))))
                       (choice subkey vocab_size :p p-probs))]
 
