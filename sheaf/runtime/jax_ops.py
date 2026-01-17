@@ -77,9 +77,12 @@ def sheaf_dynamic_slice(x, start, length):
     return jax.lax.dynamic_slice_in_dim(x, start, length, axis=0)
 
 
-def sheaf_transpose(tensor, *axes):
-    if not axes:
+def sheaf_transpose(tensor, axes=None):
+    if axes is None:
         return jnp.transpose(tensor)
+    # Convert list/tuple to tuple if needed
+    if isinstance(axes, (list, tuple)):
+        axes = tuple(axes)
     # If the user provides axes, we use them as a permutation
     return jnp.transpose(tensor, axes=axes)
 
