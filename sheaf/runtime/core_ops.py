@@ -37,24 +37,22 @@ def create_dict(*args):
 def generic_apply(func, *args):
     """
     Apply a function to arguments.
-
-    This enables dynamic function application, useful for:
-    - Higher-order programming
-    - Dynamic dispatch
-    - Metaprogramming
-
-    Examples:
-        (apply + 1 2 3)        -> 6
-        (apply max [1 5 3])    -> 5 (if list is unpacked)
-
-    Args:
-        func: callable function
-        *args: arguments to pass to the function
-
-    Returns:
-        result of func(*args)
+    The last argument is expected to be a sequence (list or tuple)
+    that will be unpacked.
     """
-    return func(*args)
+    if not args:
+        return func()
+
+    # Separate fixed arguments from the last one (the list to unpack)
+    fixed_args = args[:-1]
+    last_arg = args[-1]
+
+    if isinstance(last_arg, (list, tuple)):
+        # Standard Lisp apply: (func fixed_args... *last_arg)
+        return func(*fixed_args, *last_arg)
+    else:
+        # Fallback to standard call if the last argument is not a sequence
+        return func(*args)
 
 
 def generic_slice(obj, start, end=None):
