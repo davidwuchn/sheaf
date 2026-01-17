@@ -218,7 +218,22 @@ class Sheaf:
                 return item
 
             data = [to_list(x) for x in exp]
-            return jnp.array(data, dtype=self.dtype)
+
+            # Check for explicit dtype metadata from parser: [1 2 3] :bf16
+            dtype = self.dtype
+            if hasattr(exp, "_dtype"):
+                dtype_keyword = exp._dtype
+                dtype_map = {
+                    ":f16": "float16",
+                    ":f32": "float32",
+                    ":bf16": "bfloat16",
+                    ":i32": "int32",
+                    ":u32": "uint32",
+                    ":bool": "bool",
+                }
+                dtype = dtype_map.get(dtype_keyword, self.dtype)
+
+            return jnp.array(data, dtype=dtype)
 
         # Mixed or contains symbols/vars - return as tuple for shape arguments
         evaluated = tuple(self.compile(x, local_vars) for x in exp)
