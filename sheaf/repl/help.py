@@ -14,11 +14,22 @@ import re
 
 def find_doc_file(name):
     """Find the documentation file for a given function/special-form name."""
-    # Get the project root (sheaf/repl/help.py -> sheaf -> root)
+    # Get the sheaf directory (sheaf/repl/help.py -> sheaf)
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(current_dir))
+    sheaf_dir = os.path.dirname(current_dir)
 
-    # Search in functions, special-forms, and macros
+    # First try the unified reference.md file in assets
+    unified_ref = os.path.join(sheaf_dir, "assets", "reference.md")
+    if os.path.exists(unified_ref):
+        return unified_ref
+
+    # Fall back to old location in docs (for backwards compatibility)
+    project_root = os.path.dirname(sheaf_dir)
+    old_unified_ref = os.path.join(project_root, "docs", "reference.md")
+    if os.path.exists(old_unified_ref):
+        return old_unified_ref
+
+    # Fall back to individual files in functions, special-forms, and macros
     search_paths = [
         os.path.join(project_root, "docs", "reference", "functions", f"{name}.md"),
         os.path.join(project_root, "docs", "reference", "special-forms", f"{name}.md"),
@@ -30,6 +41,65 @@ def find_doc_file(name):
             return path
 
     return None
+
+
+def extract_symbol_from_unified_ref(filepath, name):
+    """Extract documentation for a symbol from the unified reference-new.md file."""
+    with open(filepath, "r") as f:
+        lines = f.readlines()
+
+    # Find the symbol's h3 heading (### name)
+    symbol_start = None
+    for i, line in enumerate(lines):
+        if line.strip() == f"### {name}":
+            symbol_start = i
+            break
+
+    if symbol_start is None:
+        return None
+
+    # Find the end of this symbol's documentation (next ### or ## heading)
+    symbol_end = len(lines)
+    for i in range(symbol_start + 1, len(lines)):
+        if lines[i].startswith("### ") or lines[i].startswith("## "):
+            symbol_end = i
+            break
+
+    # Extract the symbol's content
+    symbol_content = "".join(lines[symbol_start:symbol_end]).strip()
+
+    # Parse the content to extract Type, Signature, and description
+    lines_content = symbol_content.split("\n")
+    frontmatter = {}
+    sections = {"description": "", "examples": []}
+    in_code_block = False
+    current_section = "description"
+
+    for line in lines_content[1:]:  # Skip the ### name line
+        if line.startswith("---"):
+            continue
+        elif line.startswith("**Type:**"):
+            frontmatter["type"] = line.replace("**Type:**", "").strip()
+        elif line.startswith("**Signature:**"):
+            frontmatter["signature"] = line.replace("**Signature:**", "").strip()
+        elif line.startswith("```"):
+            in_code_block = not in_code_block
+            if in_code_block and not sections["examples"]:
+                sections["examples"].append("")
+            elif in_code_block:
+                sections["examples"].append("")
+        elif in_code_block:
+            if sections["examples"]:
+                sections["examples"][-1] += line + "\n"
+        elif line.strip() and not line.startswith("**"):
+            if current_section == "description":
+                sections["description"] += line + "\n"
+
+    # Clean up sections
+    sections["description"] = sections["description"].strip()
+    sections["examples"] = [ex.strip() for ex in sections["examples"] if ex.strip()]
+
+    return frontmatter, sections
 
 
 def parse_markdown_doc(filepath):
@@ -109,15 +179,20 @@ def format_help_for_terminal(name, frontmatter, sections):
 
     # Signature
     if "signature" in frontmatter:
-        output.append(f"Signature: {frontmatter['signature']}")
+        sig = frontmatter["signature"]
+        # Remove markdown code backticks if present
+        sig = sig.replace("`", "")
+        output.append(f"Signature: {sig}")
         output.append("")
 
-    # Description (from Signature section's first paragraph or content before it)
-    if "Signature" in sections:
-        # Get text before the code block
+    # Description
+    if "description" in sections and sections["description"]:
+        output.append(strip_markdown(sections["description"]))
+        output.append("")
+    elif "Signature" in sections:
+        # Old format: get text before the code block
         sig_content = sections["Signature"]
         if sig_content:
-            # Extract description before code blocks
             desc_match = re.match(r"^(.*?)```", sig_content, re.DOTALL)
             if desc_match:
                 desc = desc_match.group(1).strip()
@@ -135,19 +210,28 @@ def format_help_for_terminal(name, frontmatter, sections):
                 output.append(f"  {line[1:].strip()}")
         output.append("")
 
-    # Examples (max 3 for brevity)
-    if "Examples" in sections:
+    # Examples
+    if "examples" in sections and sections["examples"]:
+        # New format: list of example strings
+        output.append("Examples:")
+        for example in sections["examples"][:3]:  # Max 3 examples
+            output.append("")
+            for line in example.split("\n"):
+                if line.strip():
+                    output.append(f"  {line}")
+        if len(sections["examples"]) > 3:
+            output.append("")
+            output.append(f"  ... and {len(sections['examples']) - 3} more examples")
+        output.append("")
+    elif "Examples" in sections:
+        # Old format: extract code blocks from Examples section
         output.append("Examples:")
         examples_text = sections["Examples"]
-
-        # Extract code blocks
         code_blocks = re.findall(r"```sheaf\n(.*?)\n```", examples_text, re.DOTALL)
-
-        for i, block in enumerate(code_blocks[:3]):  # Max 3 examples
+        for i, block in enumerate(code_blocks[:3]):
             output.append("")
             for line in block.split("\n"):
                 output.append(f"  {line}")
-
         if len(code_blocks) > 3:
             output.append("")
             output.append(f"  ... and {len(code_blocks) - 3} more examples")
@@ -160,7 +244,6 @@ def format_help_for_terminal(name, frontmatter, sections):
         for line in see_also_text.split("\n"):
             line = line.strip()
             if line and line.startswith("-"):
-                # Extract just the function name (before the dash)
                 match = re.match(r"- \[?`?([^\]`\-]+)", line)
                 if match:
                     output.append(f"  {match.group(1).strip()}")
@@ -179,7 +262,15 @@ def get_help(name):
 
     # Parse and format
     try:
-        frontmatter, sections = parse_markdown_doc(doc_file)
+        # Check if this is the unified reference file
+        if doc_file.endswith("reference.md"):
+            result = extract_symbol_from_unified_ref(doc_file, name)
+            if result is None:
+                return f"\nNo documentation found for '{name}'.\n\nTry:\n  :env    to see available functions\n  :help   for REPL commands\n"
+            frontmatter, sections = result
+        else:
+            frontmatter, sections = parse_markdown_doc(doc_file)
+
         return format_help_for_terminal(name, frontmatter, sections)
     except Exception as e:
         return f"\nError loading documentation for '{name}': {e}\n"
