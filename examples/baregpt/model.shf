@@ -33,7 +33,7 @@
       :head     head-tensors
       :final_ln {:gamma (ones [1 D])
                  :beta  (zeros [1 D])}
-      :layers   (map  (fn [i] ;; Map the init lambda to all layers
+      :layers   (map  (fn [i] ;; Init lambda
                        (let [k (nth (random-split k_layers L) i)
                              k_attn (random-split k 4)
                              k_mlp  (random-split k 2)]
@@ -50,11 +50,11 @@
 
                           :ln1 { :gamma (ones [1 D]) :beta (zeros [1 D])}
                           :ln2 { :gamma (ones [1 D]) :beta (zeros [1 D])}}))
-                      (range L))})) ;; For each layer
+                      (range L))})) ;; On each layer
 
 
 ;; Recursively compiles the entire model graph; remove ':jit' for tracing/debugging
-(defn :jit gpt-model [inputs params config]
+(defn gpt-model [inputs params config] :jit
   (let [emb-tensors (get-in params [:emb :token])
         pos-tensors (get-in params [:emb :pos])
         T (get (shape inputs) -1)
