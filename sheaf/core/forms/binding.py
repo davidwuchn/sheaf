@@ -69,12 +69,13 @@ class DefnForm(SpecialForm):
             return str(expr)
 
     def compile(self, compiler, args, local_vars):
-        is_jit = args[0] == ":jit"
-        offset = 1 if is_jit else 0
+        # Check if :jit flag is at the end of body
+        # Syntax: (defn name [params] body... [:jit])
+        is_jit = len(args) > 2 and args[-1] == ":jit"
 
-        name = args[offset]
-        params = args[offset + 1]
-        body = args[offset + 2 :]
+        name = args[0]
+        params = args[1]
+        body = args[2:-1] if is_jit else args[2:]
 
         # Warn if using () instead of [] for parameters
         _warn_parens_in_binding("function parameters", params)
@@ -182,10 +183,13 @@ class DefnForm(SpecialForm):
 
         # Store source code for inspection in REPL
         params_str = "[" + " ".join(str(p) for p in params) + "]"
-        source_lines = [f"(defn{' :jit' if is_jit else ''} {name} {params_str}"]
+        source_lines = [f"(defn {name} {params_str}"]
         for expr in body:
             source_lines.append("  " + self._expr_to_source(expr, 2))
-        source_lines.append(")")
+        if is_jit:
+            source_lines.append("  :jit)")
+        else:
+            source_lines.append(")")
         generated_func.__sheaf_source__ = "\n".join(source_lines)
         generated_func.__sheaf_name__ = name
         generated_func.__sheaf_params__ = params

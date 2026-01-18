@@ -33,7 +33,7 @@
       :head     head-tensors
       :final_ln {:gamma (ones [1 D])
                  :beta  (zeros [1 D])}
-      :layers   (map (fn [i]
+      :layers   (map  (fn [i] ;; Map the init lambda to all layers
                        (let [k (nth (random-split k_layers L) i)
                              k_attn (random-split k 4)
                              k_mlp  (random-split k 2)]
@@ -50,7 +50,7 @@
 
                           :ln1 { :gamma (ones [1 D]) :beta (zeros [1 D])}
                           :ln2 { :gamma (ones [1 D]) :beta (zeros [1 D])}}))
-                     (range L))}))
+                      (range L))})) ;; For each layer
 
 
 ;; Recursively compiles the entire model graph; remove ':jit' for tracing/debugging
@@ -118,9 +118,9 @@
         ;; Concatenation and Final Projection
         ;; Merge heads back together before applying Wo projection
         att_out (as-> (@ att_probs Vh) h
-                  (swapaxes h -2 -3)    ;; [Batch, T, Heads, Hd]
-                  (reshape h (shape X)) ;; [Batch, T, D]
-                  (@ h Wo))]
+                      (swapaxes h -2 -3)    ;; [Batch, T, Heads, Hd]
+                      (reshape h (shape X)) ;; [Batch, T, D]
+                      (@ h Wo))]
 
     [att_out att_probs]))
 
@@ -132,35 +132,19 @@
 
 
 (defn transformer-block [x layer-p config]
-  (let [;; Self-Attention
-        ln1_x (layer-norm x (get layer-p :ln1) 2) ;; layernorm axis 2
-        attn_out (first (multi-head-attention ln1_x layer-p config))
-        x1 (+ x attn_out) ;; Residual 1
-
-        ;; MLP
-        ln2_x1 (layer-norm x1 (get layer-p :ln2) 2)
-        mlp_out (mlp ln2_x1 (get layer-p :mlp))
-        x2 (+ x1 mlp_out)] ;; Residual 2
-    ;; Return the final state
-    x2))
-
-
-;; Alternative syntax using the threading operator
-(defn transformer-block-as [x layer-p config]
   (as-> x h
     ;; 1. Self-Attention
     (-> h
-        (local-layer-norm (get layer-p :ln1))
+        (layer-norm (get layer-p :ln1) 2)
         (multi-head-attention layer-p config)
         (first) ;; Get the attention output, ignore weights
         (+ h))  ;; Residual 1
 
     ;; 2. MLP
-    (as-> h
-        (-> h
-            (local-layer-norm (get layer-p :ln2))
-            (mlp (get layer-p :mlp))
-            (+ h))))) ;; Residual 2
+    (-> h
+        (layer-norm (get layer-p :ln2) 2)
+        (mlp (get layer-p :mlp))
+        (+ h)))) ;; Residual 2
 
 
 (defn train-step [params m v t inputs targets config]
@@ -186,7 +170,6 @@
         p-probs (where (!= temp 1.0)
                     (softmax (/ p-logits temp) :axis -1)
                     (softmax p-logits :axis -1))
-
         ;; Random keys
         [new-key subkey] (random-split key)]
 
