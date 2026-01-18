@@ -264,9 +264,70 @@ def gensym(prefix="G__"):
     return f"{prefix}{uuid.uuid4().hex[:8]}"
 
 
+def sheaf_assoc(dict_obj, *key_val_pairs):
+    """
+    Associate (update) a dictionary with new key-value pairs.
+    Returns a new dict with the updates applied (non-mutating).
+
+    Examples:
+        (assoc {:a 1} :b 2)              -> {:a 1, :b 2}
+        (assoc {:a 1} :a 10 :b 2)        -> {:a 10, :b 2}
+    """
+    result = dict(dict_obj) if isinstance(dict_obj, dict) else {}
+    for i in range(0, len(key_val_pairs), 2):
+        key = key_val_pairs[i]
+        val = key_val_pairs[i + 1]
+        # Auto-clean Lisp keywords: ':token' -> 'token'
+        clean_key = key[1:] if isinstance(key, str) and key.startswith(":") else key
+        result[clean_key] = val
+    return result
+
+
+def sheaf_merge(*dicts):
+    """
+    Merge multiple dictionaries into one.
+    Later dicts override earlier ones for conflicting keys.
+    Returns a new dict (non-mutating).
+
+    Examples:
+        (merge {:a 1} {:b 2})            -> {:a 1, :b 2}
+        (merge {:a 1} {:a 10} {:b 2})    -> {:a 10, :b 2}
+    """
+    result = {}
+    for d in dicts:
+        if isinstance(d, dict):
+            result.update(d)
+    return result
+
+
+def sheaf_keys(dict_obj):
+    """
+    Get all keys from a dictionary as a list.
+
+    Examples:
+        (keys {:a 1 :b 2})               -> (:a :b) or ['a', 'b']
+    """
+    if isinstance(dict_obj, dict):
+        return list(dict_obj.keys())
+    return []
+
+
+def sheaf_vals(dict_obj):
+    """
+    Get all values from a dictionary as a list.
+
+    Examples:
+        (vals {:a 1 :b 2})               -> (1 2)
+    """
+    if isinstance(dict_obj, dict):
+        return list(dict_obj.values())
+    return []
+
+
 def get_core_env():
     return {
         "apply": generic_apply,
+        "assoc": sheaf_assoc,
         "cons": cons,
         "count": count,
         # "dict": create_dict,
@@ -276,12 +337,15 @@ def get_core_env():
         # "get" is now a special form in compiler.py to avoid keyword argument issues
         # "get": lambda obj, *keys: obj[...],
         "get-in": _sheaf_get_in,
+        "keys": sheaf_keys,
         "last": lambda x: x[-1] if x else None,
         # "list": lambda *args: list(args),
         "map": lambda f, lst: tuple(f(x) for x in lst),
+        "merge": sheaf_merge,
         "nth": lambda x, i: x[i],
         "reduce": lambda f, acc, lst: reduce(f, lst, acc),
         "rest": rest,
         "slice": generic_slice,
         "symbol?": symbol_q,
+        "vals": sheaf_vals,
     }

@@ -17,18 +17,20 @@ from .binding import DefmacroForm, DefnForm, LambdaForm, LetForm
 from .control import CaseForm, GuardForm, IfForm, RepeatForm
 from .flow import ThreadAsForm, ThreadFirstForm
 from .ml import ScanForm, StaticForm, VmapForm, WithDtypeForm, WithParamsForm
-from .utils import DictForm, GetForm, LastForm, QuoteForm, UseForm
+from .utils import AssocForm, DictForm, GetForm, GetInForm, LastForm, QuoteForm, UseForm
 
 # Registry of all special forms
 special_forms = {
     "->": ThreadFirstForm(),
     "as->": ThreadAsForm(),
+    "assoc": AssocForm(),
     "case": CaseForm(),
     "defmacro": DefmacroForm(),
     "defn": DefnForm(),
     "dict": DictForm(),
     "fn": LambdaForm(),
     "get": GetForm(),
+    "get-in": GetInForm(),
     "guard": GuardForm(),
     "if": IfForm(),
     "lambda": LambdaForm(),
@@ -47,12 +49,14 @@ __all__ = [
     "special_forms",
     "ThreadFirstForm",
     "ThreadAsForm",
+    "AssocForm",
     "CaseForm",
     "DefmacroForm",
     "DefnForm",
     "DictForm",
     "LambdaForm",
     "GetForm",
+    "GetInForm",
     "GuardForm",
     "IfForm",
     "LastForm",

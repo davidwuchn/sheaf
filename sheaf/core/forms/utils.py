@@ -76,6 +76,94 @@ class GetForm(SpecialForm):
             return obj[clean_keys[0]]
 
 
+class AssocForm(SpecialForm):
+    """assoc dictionary update: (assoc dict :key1 val1 :key2 val2 ...)"""
+
+    def __init__(self):
+        super().__init__("assoc")
+
+    def compile(self, compiler, args, local_vars):
+        # (assoc dict :k1 v1 :k2 v2 ...)
+        dict_obj = compiler.compile(args[0], local_vars)
+
+        if not isinstance(dict_obj, dict):
+            raise SheafRuntimeError(
+                f"assoc requires a dictionary as first argument, got {type(dict_obj).__name__}",
+                args,
+            )
+
+        # Create a copy and update with key-value pairs
+        result = dict(dict_obj)
+
+        # Process remaining arguments in pairs: key, value
+        for i in range(1, len(args), 2):
+            if i + 1 >= len(args):
+                raise SheafRuntimeError(
+                    "assoc requires key-value pairs after the dictionary",
+                    args,
+                )
+
+            raw_key = compiler.compile(args[i], local_vars)
+            clean_key = (
+                raw_key[1:]
+                if isinstance(raw_key, str) and raw_key.startswith(":")
+                else raw_key
+            )
+
+            val = compiler.compile(args[i + 1], local_vars)
+            result[clean_key] = val
+
+        return result
+
+
+class GetInForm(SpecialForm):
+    """get-in nested access: (get-in obj [:path :to :key]) or (get-in obj [:path] default)"""
+
+    def __init__(self):
+        super().__init__("get-in")
+
+    def compile(self, compiler, args, local_vars):
+        # (get-in obj path) or (get-in obj path default)
+        obj = compiler.compile(args[0], local_vars)
+        path_expr = args[1]
+
+        # Check if there's a default value (3rd argument)
+        has_default = len(args) == 3
+        default_val = None
+        if has_default:
+            default_val = compiler.compile(args[2], local_vars)
+
+        # Convert path to list if needed
+        if isinstance(path_expr, (list, tuple)):
+            path = path_expr
+        else:
+            path = [path_expr]
+
+        # Navigate through the path
+        current = obj
+        for i, key in enumerate(path):
+            # Auto-clean Lisp keywords: ':token' -> 'token'
+            clean_key = key[1:] if isinstance(key, str) and key.startswith(":") else key
+
+            try:
+                if isinstance(current, dict):
+                    current = current[clean_key]
+                else:
+                    # Try array indexing
+                    current = current[clean_key]
+            except (KeyError, IndexError, TypeError):
+                # Path doesn't exist
+                if has_default:
+                    return default_val
+                else:
+                    raise SheafRuntimeError(
+                        f"get-in: Cannot access path {path} - failed at key '{clean_key}'",
+                        args,
+                    )
+
+        return current
+
+
 class DictForm(SpecialForm):
     """dict literal: {:key1 val1 :key2 val2} or (dict :key1 val1 ...)"""
 
