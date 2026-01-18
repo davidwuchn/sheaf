@@ -373,10 +373,32 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 ### ⚠️ Dictionary Access
 
 ```sheaf
-(get dict :key)                ; Single key access
-(get-in dict [:path :to :key])   ; Nested access
-(with-params [dict] body)        ; Auto-bind :W, :b, etc. as variables
-(with-params [dict :key] body)   ; Shorthand for (get dict :key)
+(get dict :key)                      ; Single key access
+(get dict :missing 99)               ; With default value
+(get-in dict [:path :to :key])       ; Nested access
+(get-in dict [:path :missing] 99)    ; Nested with default
+(assoc dict :k1 v1 :k2 v2)          ; Add/update keys (functional)
+(merge dict1 dict2)                  ; Merge dicts (later overrides)
+(keys dict)                          ; Get all keys as list
+(vals dict)                          ; Get all values as list
+(with-params [dict] body)            ; Auto-bind :W, :b, etc. as variables
+(with-params [dict :key] body)       ; Shorthand for (get dict :key)
+```
+
+**Dictionary manipulation examples:**
+
+```sheaf
+;; Functional dict update for multi-task learning
+(let [model {:head old-head :layers layers}
+      heads {:task1 head1 :task2 head2}]
+  (assoc model :head (get heads :task1)))
+
+;; Merge config with defaults
+(merge {:lr 0.001 :epochs 100} user-config)
+
+;; Iterate over dict
+(let [params {:W w :b b}]
+  (map (fn [k] (str k)) (keys params)))  ; => ["W" "b"]
 ```
 
 ---
