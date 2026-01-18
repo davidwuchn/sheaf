@@ -115,6 +115,18 @@ class Sheaf:
             if isinstance(op, str) and op.startswith(":"):
                 return [self.compile(x, local_vars) for x in exp]
 
+            # --- Check if op is a literal (number, string, tensor) - these cannot be called ---
+            # Must check BEFORE tensor literal detection to reject (1 2 5) as invalid
+            if isinstance(op, (int, float, bool)):
+                hint = "\nHint: Use square brackets [...] instead of parentheses for data literals."
+                raise SheafRuntimeError(
+                    f"Cannot call a number as a function: {op}{hint}", exp
+                )
+            if isinstance(op, str) and op.startswith('"'):
+                raise SheafRuntimeError(
+                    f"Cannot call a string as a function: {op}\nHint: Use square brackets [...] instead of parentheses for data literals.", exp
+                )
+
             # --- Tensor Literal ---
             if self._is_tensor_literal(exp):
                 return self._compile_tensor_literal(exp)
@@ -192,13 +204,14 @@ class Sheaf:
 
     def _is_tensor_literal(self, exp):
         # Check if expression is a tensor literal, like [1 2 3]
-        if not isinstance(exp, list) or len(exp) == 0:
+        # Only SheafVector (brackets) count as tensor literals, not SheafList (parens)
+        if not isinstance(exp, SheafVector) or len(exp) == 0:
             return False
 
         op = exp[0]
         if isinstance(op, (int, float)):
             return True
-        if isinstance(op, list) and len(op) > 0 and isinstance(op[0], (int, float)):
+        if isinstance(op, SheafVector) and len(op) > 0 and isinstance(op[0], (int, float)):
             return True
         return False
 
@@ -362,6 +375,20 @@ class Sheaf:
     def _compile_function_call(self, exp, op, args, local_vars):
         # Compile and execute a standard function call
         try:
+            # Check if op is a literal (number, string, tensor) - these cannot be called
+            # Lists are allowed because they might be dynamically generated functions
+            if isinstance(op, (int, float, bool)):
+                hint = ""
+                if isinstance(op, (int, float)):
+                    hint = "\nHint: Did you mean (max [10 52 8]) or (max '[10 52 8]) ?"
+                raise SheafRuntimeError(
+                    f"Cannot call a number as a function: {op}{hint}", exp
+                )
+            if isinstance(op, str) and op.startswith('"'):
+                raise SheafRuntimeError(
+                    f"Cannot call a string as a function: {op}", exp
+                )
+
             func = self.compile(op, local_vars)
 
             # Type checks
