@@ -13,7 +13,7 @@ from ..runtime import core_ops, jax_ops, math_ops, nn_ops, string_ops
 from .error_handler import format_error, set_source
 from .macro_engine import create_macro_engine
 from .parser import SheafRuntimeError, SheafSyntaxError, SheafVector, parse_full
-from .special_forms import special_forms
+from .forms import special_forms
 from .tracer import sheaf_probe, shf_tracer
 
 
