@@ -454,26 +454,32 @@ class Sheaf:
 
         while i < len(args):
             # Keyword argument detection
-            if (
-                not is_dict_op
-                and isinstance(args[i], str)
-                and args[i].startswith(":")
-                and (i + 1) < len(args)
-            ):
-                arg_expr = args[i + 1]
-                is_nested_call = isinstance(arg_expr, list) and len(arg_expr) > 0
+            if not is_dict_op and isinstance(args[i], str) and args[i].startswith(":"):
+                # Check if this is a flag (keyword without value) or a keyword with value
+                key_name = args[i][1:]  # Strip ':' prefix
 
-                val = self.compile(arg_expr, local_vars)
-                kwargs[args[i][1:]] = val
+                # Flag without value: :keepdims, :normalize, etc.
+                # Check if next arg is also a keyword or if we're at end of args
+                if (i + 1) >= len(args) or (isinstance(args[i + 1], str) and args[i + 1].startswith(":")):
+                    # This is a flag - set to True
+                    kwargs[key_name] = True
+                    i += 1
+                else:
+                    # This is a keyword with value
+                    arg_expr = args[i + 1]
+                    is_nested_call = isinstance(arg_expr, list) and len(arg_expr) > 0
 
-                # Log simple values (nested calls log themselves)
-                if (
-                    (getattr(self, "trace", False) or shf_tracer.monitoring)
-                    and not is_nested_call
-                    and not is_jit_func
-                ):
-                    shf_tracer.log_arg(val, name=args[i][1:])
-                i += 2
+                    val = self.compile(arg_expr, local_vars)
+                    kwargs[key_name] = val
+
+                    # Log simple values (nested calls log themselves)
+                    if (
+                        (getattr(self, "trace", False) or shf_tracer.monitoring)
+                        and not is_nested_call
+                        and not is_jit_func
+                    ):
+                        shf_tracer.log_arg(val, name=key_name)
+                    i += 2
             else:
                 # Positional argument
                 arg_expr = args[i]
