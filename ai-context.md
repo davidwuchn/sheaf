@@ -407,25 +407,25 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 
 ### Math Operations
 
-| Operator                      | Description                          | Example                     |
-| ----------------------------- | ------------------------------------ | --------------------------- |
-| `+`, `-`, `*`, `/`            | Arithmetic (variadic, broadcastable) | `(+ a b c)`                 |
-| `//`                          | Integer division                     | `(// 7 2)` → `3`            |
-| `@`                           | Matrix multiplication                | `(@ W x)`                   |
-| `**`                          | Exponentiation                       | `(** x 2)`                  |
-| `(einsum pattern ...tensors)` | Einstein summation                   | `(einsum "ij,jk->ik" A B)`  |
-| `(sum t :axis i)`             | Reduction                            | `(sum logits :axis -1)`     |
-| `(product t :axis i)`         | Product reduction                    | `(product weights :axis 0)` |
-| `(mean t :axis i)`            | Mean                                 | `(mean loss)`               |
-| `(var t :axis i)`             | Variance                             | `(var x :axis -1)`          |
-| `(min t :axis i)`             | Minimum                              | `(min x :axis 0)`           |
-| `(max t :axis i)`             | Maximum                              | `(max x :axis 0)`           |
-| `(minimum a b)`               | Element-wise minimum                 | `(minimum x y)`             |
-| `(maximum a b)`               | Element-wise maximum                 | `(maximum x y)`             |
-| `(abs x)`                     | Absolute value                       | `(abs x)`                   |
-| `(exp x)`                     | Exponential                          | `(exp x)`                   |
-| `(log x)`                     | Natural logarithm                    | `(log x)`                   |
-| `(sqrt x)`                    | Square root                          | `(sqrt x)`                  |
+| Operator                          | Description                                | Example                                                        |
+| --------------------------------- | ------------------------------------------ | -------------------------------------------------------------- |
+| `+`, `-`, `*`, `/`                | Arithmetic (variadic, broadcastable)       | `(+ a b c)`                                                    |
+| `//`                              | Integer division                           | `(// 7 2)` → `3`                                               |
+| `@`                               | Matrix multiplication                      | `(@ W x)`                                                      |
+| `**`                              | Exponentiation                             | `(** x 2)`                                                     |
+| `(einsum pattern ...tensors)`     | Einstein summation                         | `(einsum "ij,jk->ik" A B)`                                     |
+| `(sum t :axis i [:keepdims])`     | Reduction (keep dims as 1 if :keepdims)    | `(sum logits :axis -1)` or `(sum logits :axis 1 :keepdims)`    |
+| `(product t :axis i [:keepdims])` | Product reduction (keep dims if :keepdims) | `(product weights :axis 0)` or `(product x :axis 0 :keepdims)` |
+| `(mean t :axis i [:keepdims])`    | Mean (keep dims as 1 if :keepdims)         | `(mean loss)` or `(mean x :axis 1 :keepdims)`                  |
+| `(var t :axis i [:keepdims])`     | Variance (keep dims if :keepdims)          | `(var x :axis -1)` or `(var x :axis 1 :keepdims)`              |
+| `(min t :axis i [:keepdims])`     | Minimum (keep dims if :keepdims)           | `(min x :axis 0)` or `(min x :axis 0 :keepdims)`               |
+| `(max t :axis i [:keepdims])`     | Maximum (keep dims if :keepdims)           | `(max x :axis 0)` or `(max x :axis 0 :keepdims)`               |
+| `(minimum a b)`                   | Element-wise minimum                       | `(minimum x y)`                                                |
+| `(maximum a b)`                   | Element-wise maximum                       | `(maximum x y)`                                                |
+| `(abs x)`                         | Absolute value                             | `(abs x)`                                                      |
+| `(exp x)`                         | Exponential                                | `(exp x)`                                                      |
+| `(log x)`                         | Natural logarithm                          | `(log x)`                                                      |
+| `(sqrt x)`                        | Square root                                | `(sqrt x)`                                                     |
 
 ### Tensor Shaping
 
