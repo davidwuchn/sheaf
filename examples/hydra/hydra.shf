@@ -21,7 +21,10 @@
 ;; Evolution logic
 ;; Takes the current model state and returns a deeper model
 ;; while preserving existing knowledge.
-(defn grow-hydra [params key config]
+;;
+;; Note: Unlike most frameworks, Sheaf supports structural mutation within
+;; JIT-compiled functions, allowing for high-performance architectural evolution.
+(defn grow-hydra [params key config] :jit
   ; Get current model configuration
   (let [D       (get config "d_model")
         head-w  (get (get params "head") "W")
