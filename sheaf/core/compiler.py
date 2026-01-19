@@ -56,7 +56,6 @@ class Sheaf:
                 "false": False,
                 "len": len,
                 "nil": None,
-                "probe": sheaf_probe,
                 "second": lambda x: x[1],
                 "str": str,
                 "true": True,
