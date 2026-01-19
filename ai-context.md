@@ -95,6 +95,18 @@ Sheaf supports compile-time macros with quasiquote syntax:
 - `~expr` - unquote: evaluate expression inside quasiquote
 - `~@expr` - unquote-splicing: splice list into quasiquote
 
+**Critical Distinction: Quote Before Square Brackets**
+
+The quote prefix changes semantics fundamentally:
+
+- `[1 2 3]` (unquoted) → JAX Tensor (evaluated immediately to numeric array)
+- `'[1 2 3]` (quoted) → Sheaf list (unevaluated data, treated as static structure)
+
+Always quote shapes for functions that expect static data:
+
+- ✓ Correct: `(ones '[10 20])`, `(reshape x '[2 -1])`
+- ✗ Wrong: `(ones [10 20])`, `(reshape x [2 -1])` (these create tensors first!)
+
 **Quote examples:**
 
 ```sheaf
