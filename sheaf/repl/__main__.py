@@ -175,8 +175,49 @@ def format_result(value):
             return repr(value)
 
     elif isinstance(value, dict):
-        # Format dictionaries (like params trees)
-        return f"Dict with {len(value)} keys: {list(value.keys())}"
+        # Format dictionaries with keys and values (like params trees)
+        if not value:
+            return "{}"
+
+        # Build dict representation
+        items = []
+        keys_list = list(value.keys())
+
+        # Show up to 10 items
+        for key in keys_list[:10]:
+            val = value[key]
+
+            # Format value
+            if isinstance(val, jnp.ndarray):
+                # JAX tensor: show dtype and shape
+                shape_str = "x".join(str(d) for d in val.shape)
+                dtype_str = (
+                    str(val.dtype)
+                    .replace("bfloat16", "bf16")
+                    .replace("float32", "f32")
+                    .replace("int32", "i32")
+                )
+                val_str = f"{dtype_str}[{shape_str}]"
+            elif isinstance(val, dict):
+                # Nested dict: show as {...}
+                val_str = "{...}"
+            elif isinstance(val, (list, tuple)):
+                # List/tuple: show as [...]
+                val_str = "[...]"
+            elif isinstance(val, str):
+                # String: show with quotes
+                val_str = repr(val)
+            else:
+                # Other: show as-is
+                val_str = repr(val)
+
+            items.append(f":{key} {val_str}")
+
+        # If more than 10 items, add ellipsis
+        if len(keys_list) > 10:
+            items.append("...")
+
+        return "{" + ", ".join(items) + "}"
 
     else:
         # Default Python repr
