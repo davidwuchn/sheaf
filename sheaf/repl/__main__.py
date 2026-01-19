@@ -199,8 +199,38 @@ def format_result(value):
                 )
                 val_str = f"{dtype_str}[{shape_str}]"
             elif isinstance(val, dict):
-                # Nested dict: show as {...}
-                val_str = "{...}"
+                # Nested dict: format recursively with actual values
+                if not val:
+                    val_str = "{}"
+                else:
+                    nested_items = []
+                    for k in list(val.keys())[:3]:  # Show first 3 keys of nested dict
+                        v = val[k]
+                        if isinstance(v, jnp.ndarray):
+                            # For arrays, show actual values if small, else show shape
+                            if v.size <= 5:
+                                # Small array: show values as list
+                                arr_str = str(v.tolist())
+                            else:
+                                # Large array: show dtype and shape
+                                shape_str = "x".join(str(d) for d in v.shape)
+                                dtype_str = (
+                                    str(v.dtype)
+                                    .replace("bfloat16", "bf16")
+                                    .replace("float32", "f32")
+                                    .replace("int32", "i32")
+                                )
+                                arr_str = f"{dtype_str}[{shape_str}]"
+                            nested_items.append(f":{k} {arr_str}")
+                        elif isinstance(v, dict):
+                            # Deeply nested dict: show as {...}
+                            nested_items.append(f":{k} {{...}}")
+                        else:
+                            # Scalars and other types
+                            nested_items.append(f":{k} {repr(v)}")
+                    if len(val) > 3:
+                        nested_items.append("...")
+                    val_str = "{" + " ".join(nested_items) + "}"
             elif isinstance(val, (list, tuple)):
                 # List/tuple: show as [...]
                 val_str = "[...]"
