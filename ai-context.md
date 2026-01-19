@@ -515,10 +515,31 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 
 ### PyTree Operations
 
+Pytrees are nested structures (dicts, lists) that JAX and Sheaf use for parameter storage.
+
+**Functions:**
+
 | Function                | Description                   | Example                   |
 | ----------------------- | ----------------------------- | ------------------------- |
 | `(tree-map fn tree)`    | Apply function to all leaves  | `(tree-map relu params)`  |
 | `(tree-map-zeros tree)` | Replace all leaves with zeros | `(tree-map-zeros params)` |
+
+**Example - Transform nested parameters:**
+
+```sheaf
+;; Square all elements in a nested structure
+(let [params {:layer1 {:w [2.0 4.0] :b 0.5}
+              :layer2 {:w [10.0]}}]
+  (tree-map (fn [x] (* x x)) params))
+; => {:layer1 {:w [4.0 16.0], :b 0.25}, :layer2 {:w [100.0]}}
+
+;; Scale all gradients by learning rate
+(tree-map (fn [g] (* g -0.001)) gradients)
+
+;; Initialize optimizer state (zeros everywhere)
+(let [state (tree-map-zeros params)]
+  state)  ; Same structure as params, all zeros
+```
 
 ### Utilities
 
