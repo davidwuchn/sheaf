@@ -111,9 +111,18 @@ class DefnForm(SpecialForm):
 
             try:
                 # 3. Standard execution logic
-                context = dict(local_vars)
-                arg_bindings = dict(zip(params, input_args))
-                context.update(arg_bindings)
+                # NOTE: We start with an empty context, not local_vars from definition time.
+                # The only variables in scope are the function parameters.
+                # Handle both positional args and kwargs
+                context = dict(zip(params, input_args))
+                # Add remaining kwargs (convert snake_case to match Sheaf params)
+                for key, value in kwargs.items():
+                    # Convert Python snake_case to Sheaf hyphen-case if needed
+                    sheaf_key = key.replace("_", "-")
+                    if sheaf_key in params:
+                        context[sheaf_key] = value
+                    elif key in params:
+                        context[key] = value
                 context["__current_func__"] = name
 
                 res = None
