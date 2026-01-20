@@ -128,7 +128,13 @@ Usage:
             if result is not None:
                 print(result)
     except Exception as e:
-        # Errors are already formatted by the error handler
+        # Error occurred during load or execution
+        if getattr(e, "is_sheaf_error", False):
+            # Sheaf error - message is already formatted
+            print(str(e), file=sys.stderr)
+        else:
+            # Unexpected error - print with context
+            print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
 
 
