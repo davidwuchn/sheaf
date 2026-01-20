@@ -44,5 +44,6 @@ def str_call(method_name, s, *args):
 
 def get_string_env():
     return {
+        "print": print,
         "str-call": str_call,
     }
