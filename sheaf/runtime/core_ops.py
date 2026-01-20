@@ -283,6 +283,39 @@ def sheaf_assoc(dict_obj, *key_val_pairs):
     return result
 
 
+def sheaf_dissoc(dict_obj, keys_to_remove):
+    """
+    Dissociate (remove) keys from a dictionary.
+    Returns a new dict with the specified keys removed (non-mutating).
+
+    Args:
+        dict_obj: dictionary to remove keys from
+        keys_to_remove: list of keys to remove (e.g., [:a :b])
+
+    Examples:
+        (dissoc {:a 1 :b 2} [:b])          -> {:a 1}
+        (dissoc {:a 1 :b 2 :c 3} [:a :c])  -> {:b 2}
+    """
+    result = dict(dict_obj) if isinstance(dict_obj, dict) else {}
+
+    # Handle both list and tuple for keys_to_remove
+    if isinstance(keys_to_remove, (list, tuple)):
+        for key in keys_to_remove:
+            # Auto-clean Lisp keywords: ':token' -> 'token'
+            clean_key = key[1:] if isinstance(key, str) and key.startswith(":") else key
+            result.pop(clean_key, None)  # Remove key if it exists
+    else:
+        # Single key case
+        clean_key = (
+            keys_to_remove[1:]
+            if isinstance(keys_to_remove, str) and keys_to_remove.startswith(":")
+            else keys_to_remove
+        )
+        result.pop(clean_key, None)
+
+    return result
+
+
 def sheaf_merge(*dicts):
     """
     Merge multiple dictionaries into one.
@@ -331,6 +364,7 @@ def get_core_env():
         "cons": cons,
         "count": count,
         # "dict": create_dict,
+        "dissoc": sheaf_dissoc,
         "empty?": empty_q,
         "first": lambda x: x[0] if x else None,
         "gensym": gensym,
