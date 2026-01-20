@@ -79,6 +79,8 @@ def get_math_env():
         "/": lambda a, b: a / b,
         "**": jnp.power,
         "//": lambda a, b: a // b,
+        "mod": lambda a, b: a % b,
+        "%": lambda a, b: a % b,  # Alias for mod
         "@": jnp.matmul,
         # Boolean Logic (Using JAX-friendly reduction)
         "=": lambda a, b: jnp.array_equal(a, b),
