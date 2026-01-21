@@ -3,7 +3,7 @@
 (use optim)
 
 ;; Recursivity by design: "forward" can accept any number of layers
-(defn forward [x params]
+(defn forward [x params] :jit
   (let [layers (get params :layers)
         head   (get params :head)]
     (as-> x h
@@ -22,8 +22,7 @@
 ;; Takes the current model state and returns a deeper model
 ;; while preserving existing knowledge.
 ;;
-;; Note: Unlike most frameworks, Sheaf supports structural mutation within
-;; JIT-compiled functions, allowing for high-performance architectural evolution.
+;; Note: Sheaf supports structural mutation within JIT-compiled functions
 (defn grow-hydra [params key config] :jit
   ; Get current model configuration
   (let [D       (get config "d_model")
