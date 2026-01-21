@@ -112,6 +112,67 @@ def sheaf_tree_map_zeros(tree):
     return jax.tree_util.tree_map(jnp.zeros_like, tree)
 
 
+def sheaf_flatten(tree):
+    """
+    Flattens a PyTree into a single list of leaves.
+    Returns (leaves, tree_def) where tree_def can be used to unflatten.
+
+    Converts Sheaf-specific types (SheafList) to Python equivalents first.
+
+    Examples:
+        (flatten {:a 1 :b 2})           -> ([1, 2], ...)
+        (flatten '(1 2 3 4))            -> ([1, 2, 3, 4], ...)
+        (first (flatten {:a 1 :b 2}))   -> [1, 2]
+    """
+    # Import here to avoid circular imports
+    from sheaf.core.parser import SheafList
+
+    def convert_sheaf_types(obj):
+        """Convert SheafList to Python list recursively."""
+        if isinstance(obj, SheafList):
+            return [convert_sheaf_types(item) for item in obj]
+        elif isinstance(obj, dict):
+            return {k: convert_sheaf_types(v) for k, v in obj.items()}
+        else:
+            return obj
+
+    # Convert tree to native Python types
+    tree = convert_sheaf_types(tree)
+
+    leaves, treedef = jax.tree_util.tree_flatten(tree)
+    # Return as a tuple so users can get leaves with (first ...)
+    return (leaves, treedef)
+
+
+def sheaf_tree_reduce(f, tree, init=None):
+    """
+    Reduces all leaves of a PyTree using the provided function.
+
+    Converts Sheaf-specific types (SheafList) to Python equivalents first.
+
+    Examples:
+        (tree-reduce + {:a 1 :b 2 :c 3} 0)          -> 6
+        (tree-reduce + '(1 2 3 4) 0)                -> 10
+        (tree-reduce * '(2 3) 1)                    -> 6
+    """
+    # Import here to avoid circular imports
+    from sheaf.core.parser import SheafList
+
+    def convert_sheaf_types(obj):
+        """Convert SheafList to Python list recursively."""
+        if isinstance(obj, SheafList):
+            return [convert_sheaf_types(item) for item in obj]
+        elif isinstance(obj, dict):
+            return {k: convert_sheaf_types(v) for k, v in obj.items()}
+        else:
+            return obj
+
+    # Convert tree to native Python types
+    tree = convert_sheaf_types(tree)
+
+    return jax.tree_util.tree_reduce(f, tree, init)
+
+
 def get_jax_env():
     return {
         "append": sheaf_append,
@@ -119,6 +180,7 @@ def get_jax_env():
         "arange": jnp.arange,
         "choice": jax.random.choice,
         "einsum": jnp.einsum,
+        "flatten": sheaf_flatten,
         "maximum": jnp.maximum,
         "minimum": jnp.minimum,
         "ndim": lambda x: x.ndim,
@@ -143,6 +205,7 @@ def get_jax_env():
         "transpose": sheaf_transpose,
         "tree-map": sheaf_tree_map,
         "tree-map-zeros": sheaf_tree_map_zeros,
+        "tree-reduce": sheaf_tree_reduce,
         "tril": jnp.tril,
         "var": jnp.var,
         "where": jnp.where,
