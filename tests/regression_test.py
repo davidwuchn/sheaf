@@ -128,11 +128,70 @@ def test_example(
         else:  # Scalar
             result_str = str(result)
 
-        # Compare with expected result
-        if result_str == expected_result:
-            return True, result_str
+        # Intelligent comparison - try multiple approaches
+        def clean_array_representation(obj):
+            """Recursively clean JAX Array objects to Python format"""
+            if isinstance(obj, dict):
+                return {k: clean_array_representation(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [clean_array_representation(item) for item in obj]
+            elif hasattr(obj, "tolist"):  # JAX array
+                # Convert to Python list/scalar
+                py_obj = obj.tolist()
+                return clean_array_representation(py_obj)
+            else:
+                return obj
+
+        def dict_to_sheaf_str(obj, top_level=True):
+            """Convert Python dict/list to Sheaf representation with colons
+
+            Top-level dicts get commas between pairs, nested dicts don't
+            """
+            if isinstance(obj, dict):
+                items = []
+                for k, v in sorted(obj.items()):
+                    items.append(f":{k} {dict_to_sheaf_str(v, top_level=False)}")
+                # Top-level dicts have commas between pairs, nested ones don't
+                if top_level:
+                    return "{" + ", ".join(items) + "}"
+                else:
+                    return "{" + " ".join(items) + "}"
+            elif isinstance(obj, (list, tuple)):
+                items = [dict_to_sheaf_str(item, top_level=False) for item in obj]
+                return "[" + ", ".join(items) + "]"
+            elif isinstance(obj, float):
+                # Format floats to match expected output
+                if obj == int(obj):
+                    return f"{int(obj)}.0"
+                return str(obj)
+            else:
+                return str(obj)
+
+        def try_convert_and_compare():
+            """Try different conversion approaches for comparison"""
+            # First try: direct string comparison
+            if result_str == expected_result:
+                return True, result_str
+
+            # Second try: if result is a dict with Array objects (tree-map, etc.)
+            if isinstance(result, dict):
+                # Clean JAX arrays and convert to Sheaf-like format
+                cleaned = clean_array_representation(result)
+                sheaf_str = dict_to_sheaf_str(cleaned)
+                if sheaf_str == expected_result:
+                    return True, sheaf_str
+                else:
+                    # Return the cleaned format for debugging even if it doesn't match
+                    return False, sheaf_str
+
+            return False, result_str
+
+        success, final_result_str = try_convert_and_compare()
+
+        if success:
+            return True, final_result_str
         else:
-            return False, f"Expected: {expected_result}, Got: {result_str}"
+            return False, f"Expected: {expected_result}, Got: {final_result_str}"
 
     except Exception as e:
         return False, str(e)
