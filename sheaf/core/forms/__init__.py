@@ -9,14 +9,14 @@ Organized into modules:
 - control: if, case, guard, repeat
 - binding: defn, lambda, let, defmacro
 - flow: ->, as->
-- ml: vmap, scan, with-params, with-dtype, static
+- ml: vmap, scan, with-params, static
 - utils: get, dict, last, use, quote
 """
 
 from .binding import DefmacroForm, DefnForm, LambdaForm, LetForm
 from .control import CaseForm, GuardForm, IfForm, RepeatForm
 from .flow import ThreadAsForm, ThreadFirstForm
-from .ml import ScanForm, StaticForm, VmapForm, WithDtypeForm, WithParamsForm
+from .ml import ScanForm, StaticForm, VmapForm, WithParamsForm
 from .utils import AssocForm, DictForm, GetForm, GetInForm, LastForm, QuoteForm, UseForm
 
 # Registry of all special forms
@@ -42,7 +42,6 @@ special_forms = {
     "use": UseForm(),
     "vmap": VmapForm(),
     "with-params": WithParamsForm(),
-    "with-dtype": WithDtypeForm(),
 }
 
 __all__ = [
@@ -66,7 +65,6 @@ __all__ = [
     "StaticForm",
     "UseForm",
     "VmapForm",
-    "WithDtypeForm",
     "WithParamsForm",
     "QuoteForm",
 ]
