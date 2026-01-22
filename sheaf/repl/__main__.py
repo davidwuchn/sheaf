@@ -376,9 +376,11 @@ def run_repl():
                         print(f"Trace: {status} (mode: {mode})")
                     elif cmd_arg == "off":
                         shf_tracer.enabled = False
+                        shf_tracer.monitoring = False
                         print("Trace disabled")
                     elif cmd_arg in ("fast", "normal", "verbose"):
                         shf_tracer.enabled = True
+                        shf_tracer.monitoring = True
                         shf_tracer.mode = cmd_arg
                         print(f"Trace enabled: {cmd_arg} mode")
                     else:
