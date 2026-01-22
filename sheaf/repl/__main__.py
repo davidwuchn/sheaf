@@ -48,6 +48,7 @@ class SheafCompleter:
             ":registry",
             ":reg",
             ":show",
+            ":clear",
         ]
 
     def complete(self, text, state):
@@ -267,6 +268,7 @@ Commands:
   :env                Show current environment (defined variables)
   :registry, :reg     List user-defined functions
   :show <name>        Show value of variable or function source
+  :clear              Clear the screen
 
 Expression evaluation:
   Type any Sheaf expression and press Enter to evaluate it.
@@ -467,6 +469,11 @@ def run_repl():
                     else:
                         print(f"Error: '{cmd_arg}' not found")
                         print("Try :env to see all available names")
+                    continue
+
+                elif cmd == "clear":
+                    # Clear screen
+                    os.system("clear" if os.name != "nt" else "cls")
                     continue
 
                 else:
