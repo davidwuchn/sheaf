@@ -33,7 +33,6 @@ special_forms = {
     "get-in": GetInForm(),
     "guard": GuardForm(),
     "if": IfForm(),
-    "lambda": LambdaForm(),
     "last": LastForm(),
     "let": LetForm(),
     "repeat": RepeatForm(),
