@@ -213,6 +213,61 @@ def decode_answer(prediction, query_type):
     return "Unknown", {}
 
 
+def generate_fixed_scene():
+    """Generate a scene with 5 objects: all colors and shapes represented."""
+    import random
+    import time
+
+    # Fixed positions that are well-distributed and visible
+    base_positions = [
+        (0.2, 0.75),
+        (0.5, 0.8),
+        (0.8, 0.75),
+        (0.35, 0.3),
+        (0.65, 0.25),
+    ]
+
+    # Ensure we have all colors and shapes represented
+    colors = data.COLORS  # [red, green, blue, yellow]
+    shapes = data.SHAPES  # [circle, square, triangle]
+
+    # Shuffle colors and shapes to create different combinations
+    seed = int(time.time() * 1000) % 100000
+    random.seed(seed)
+    colors_shuffled = colors.copy()
+    shapes_shuffled = shapes.copy()
+    random.shuffle(colors_shuffled)
+    random.shuffle(shapes_shuffled)
+
+    # Create objects with shuffled colors and shapes
+    objects = []
+    colors_cycle = (colors_shuffled + colors_shuffled)[:5]  # Repeat to get 5
+    shapes_cycle = (shapes_shuffled + shapes_shuffled)[:5]  # Repeat to get 5
+
+    for i, (x, y) in enumerate(base_positions):
+        objects.append(
+            {
+                "color": colors_cycle[i],
+                "shape": shapes_cycle[i],
+                "x": x,
+                "y": y,
+            }
+        )
+
+    # Add small random jitter to positions
+    key = jax.random.PRNGKey(seed)
+    keys = jax.random.split(key, 5)
+    for i, obj in enumerate(objects):
+        x_noise = float(jax.random.uniform(keys[i], minval=-0.05, maxval=0.05))
+        y_noise = float(jax.random.uniform(keys[i], minval=-0.05, maxval=0.05))
+        obj["x"] = max(0.1, min(0.9, obj["x"] + x_noise))
+        obj["y"] = max(0.1, min(0.9, obj["y"] + y_noise))
+
+    scene = {"objects": objects, "n_objects": 5}
+    scene_tensor = data.scene_to_tensor(scene)
+    return scene, scene_tensor
+
+
 def infer_query_type(query):
     op = query[0]
     if op == "query-color":
@@ -265,37 +320,28 @@ def main():
     shf = st.session_state.shf
     params = st.session_state.params
 
-    # ========================================================================
-    # SIDEBAR: Scene Generation
-    # ========================================================================
-
-    st.sidebar.header("Scene Configuration")
-
-    seed = st.sidebar.number_input("Random Seed", min_value=0, max_value=9999, value=42)
-    n_objects = st.sidebar.slider(
-        "Number of Objects", min_value=2, max_value=5, value=4
-    )
-
-    if st.sidebar.button("Generate New Scene") or "scene" not in st.session_state:
-        key = jax.random.PRNGKey(seed)
-        st.session_state.scene = data.generate_scene(key, n_objects=n_objects)
-        st.session_state.scene_tensor = data.scene_to_tensor(st.session_state.scene)
+    # Generate initial scene if not exists
+    if "scene" not in st.session_state:
+        st.session_state.scene, st.session_state.scene_tensor = generate_fixed_scene()
 
     scene = st.session_state.scene
     scene_tensor = st.session_state.scene_tensor
 
-    # ========================================================================
-    # MAIN: Query Interface
-    # ========================================================================
+    # Main layout: Scene on left, Query and probability on right
+    scene_col, query_col = st.columns(2)
 
-    col1, col2 = st.columns([1, 1])
+    with scene_col:
+        fig_scene = plot_scene(scene, title="")
+        st.pyplot(fig_scene, use_container_width=True)
+        plt.close()
 
-    with col1:
-        st.header("Query Input")
+    with query_col:
+        st.subheader("Query")
 
-        # Example selector
         example_name = st.selectbox(
-            "Choose a query:", ["Custom"] + list(example_queries.keys())
+            "Choose a query:",
+            ["Custom"] + list(example_queries.keys()),
+            key="query_selector",
         )
 
         if example_name != "Custom":
@@ -303,59 +349,66 @@ def main():
         else:
             default_query = '["query-color", ["leftmost", ["filter-shape", ":circle"]]]'
 
-        # Query input
         query_str = st.text_area(
-            "Sheaf Query (Python list format):", value=default_query, height=100
+            "Sheaf Query:", value=default_query, height=80, label_visibility="collapsed"
         )
 
-        execute_button = st.button("Execute Query", type="primary")
+        if st.button("Execute Query", type="primary", use_container_width=True):
+            st.session_state.execute_query = True
 
-    with col2:
-        st.header("Scene Visualization")
+        st.divider()
 
-        # Display scene
-        fig_scene = plot_scene(scene, title=f"Scene (Seed: {seed})")
-        st.pyplot(fig_scene)
-        plt.close()
+        if st.session_state.get("execute_query", False):
+            try:
+                query = eval(query_str)
 
-    # Execution and results
+                # Execute query
+                scene_batch = jnp.expand_dims(scene_tensor, axis=0)
 
-    if execute_button:
-        try:
-            # Parse query
-            query = eval(query_str)  # Safe in this context
+                with st.spinner("Executing query..."):
+                    prediction = shf.execute_query(scene_batch, query, params)
 
-            st.success(f"✓ Query parsed: `{query}`")
+                # Decode answer
+                query_type = infer_query_type(query)
+                answer, prob_dict = decode_answer(prediction, query_type)
 
-            # Execute query
-            scene_batch = jnp.expand_dims(scene_tensor, axis=0)
+                # Store in session for display
+                st.session_state.last_query = query
+                st.session_state.last_answer = answer
+                st.session_state.last_prob_dict = prob_dict
 
-            with st.spinner("Executing query..."):
-                prediction = shf.execute_query(scene_batch, query, params)
-
-            # Decode answer
-            query_type = infer_query_type(query)
-            answer, prob_dict = decode_answer(prediction, query_type)
-
-            st.markdown("---")
-            st.header("Results:")
-
-            result_col1, result_col2 = st.columns([1, 1])
-
-            with result_col1:
-                st.subheader("Answer")
-                st.markdown(f"### **{answer}**")
-                st.caption(f"Query type: {query_type}")
-
-            with result_col2:
-                st.subheader("Probability Distribution")
-                fig_probs = plot_probability_distribution(prob_dict)
-                st.pyplot(fig_probs)
+                # Show probability chart
+                fig_probs = plot_probability_distribution(
+                    prob_dict, title="Answer Probabilities"
+                )
+                st.pyplot(fig_probs, use_container_width=True)
                 plt.close()
 
-        except Exception as e:
-            st.error(f"Error executing query: {e}")
-            st.exception(e)
+                st.session_state.execute_query = False
+
+            except Exception as e:
+                st.error(f"Error executing query: {e}")
+                import traceback
+
+                st.text(traceback.format_exc())
+                st.session_state.execute_query = False
+
+    # Generate scene button below scene
+    with scene_col:
+        if st.button(
+            "🎲 Generate Random Scene", type="primary", use_container_width=True
+        ):
+            st.session_state.scene, st.session_state.scene_tensor = (
+                generate_fixed_scene()
+            )
+            st.rerun()
+
+    # Query result banner at the bottom
+    if st.session_state.get("last_query"):
+        st.divider()
+        query_result = st.session_state.last_query
+        result = st.session_state.last_answer
+        st.info(f"📊 Query: `{query_result}` → **Result: {result}**")
 
 
 if __name__ == "__main__":
