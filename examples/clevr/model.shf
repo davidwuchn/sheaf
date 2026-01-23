@@ -20,10 +20,10 @@
         shape-base [[0 0 0 0 1 0 0 0 0]    ;; circle
                     [0 0 0 0 0 1 0 0 0]    ;; square
                     [0 0 0 0 0 0 1 0 0]]]  ;; triangle
-    {:color_embeddings (+ color-base (* (random-normal k1 (list 4 9)) 0.05))
-     :shape_embeddings (+ shape-base (* (random-normal k2 (list 3 9)) 0.05))
-     :temps {:filter 0.2 :unique 0.8 :leftmost 1.0 :spatial 1.0}
-     :thresholds {:spatial 0.1 :exists 1.72}}))
+    {:color_embeddings color-base
+     :shape_embeddings shape-base
+     :temps {:filter 0.1 :unique 0.5 :leftmost 0.5 :spatial 0.1}
+     :thresholds {:spatial 0.0 :exists 1.72}}))
 
 
 ;; Vocabulary mapping
@@ -126,9 +126,27 @@
 (defn clevr-loss [params scene query target]
   ; Cross-entropy loss for a single query
   (let [pred (execute-query scene query params)
-        log-probs (log-softmax pred :axis -1)
-        target-vec (one-hot target (get (shape log-probs) -1))]
-    (* -1.0 (mean (sum (* log-probs target-vec) :axis -1)))))
+        ; For existence queries, pred is [batch] (scalar per batch)
+        ; For attribute queries, pred is [batch, num_classes]
+        pred-ndim (ndim pred)
+        is-existence (== pred-ndim 1)]
+    (if is-existence
+      ; Binary cross-entropy for existence queries
+      ; pred is already a probability (0-1) from sigmoid
+      (let [pred-scalar (get (reshape pred -1) 0)
+            eps 1e-7
+            clipped (maximum (minimum pred-scalar (- 1.0 eps)) eps)
+            ; BCE = -target * log(pred) - (1-target) * log(1-pred)
+            bce (+ (* target (log clipped))
+                   (* (- 1.0 target) (log (- 1.0 clipped))))
+            ce (* -1.0 bce)]
+        ce)
+      ; Cross-entropy for attribute queries
+      (let [pred-shape (shape pred)
+            log-probs (log-softmax pred :axis -1)
+            target-vec (one-hot target (get pred-shape -1))
+            ce (* -1.0 (sum (* log-probs target-vec) :axis -1))]
+        (mean ce)))))
 
 (defn batch-loss [params scenes queries targets]
   ; Average loss over a batch
