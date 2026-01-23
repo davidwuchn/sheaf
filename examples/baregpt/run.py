@@ -17,14 +17,15 @@ if current_dir not in sys.path:
 import utils
 
 # --- HYPERPARAMETERS ---
-D_MODEL = 256
-N_LAYERS = 4
-N_HEADS = 4
-BATCH_SIZE = 32
-BLOCK_SIZE = 128
-EPOCHS = 500  # Sufficient for PoC, use 1200 for high-quality text
-LEARNING_RATE = 1e-3
-
+CONFIG = {
+    "d_model": 256,
+    "n_layers": 4,
+    "n_heads": 4,
+    "batch_size": 32,
+    "block_size": 128,
+    "lr": 1e-3,
+}
+EPOCHS = 500
 WEIGHTS_PATH = os.path.join(current_dir, "out", "weights.pkl")
 
 
@@ -37,7 +38,6 @@ def prepare_data(path):
 
 
 def save_checkpoint(shf, params, path):
-    """Save params using Sheaf pytree serialization."""
     import pickle
 
     tree = shf.to_pytree(params)
@@ -46,7 +46,7 @@ def save_checkpoint(shf, params, path):
 
 
 def load_checkpoint(shf, path):
-    """Load params using Sheaf pytree serialization."""
+
     import pickle
 
     with open(path, "rb") as f:
@@ -69,14 +69,13 @@ def run_training(shf, params, encoded_data, config):
     # Adam states
     m = jax.tree_util.tree_map(jnp.zeros_like, params)
     v = jax.tree_util.tree_map(jnp.zeros_like, params)
-    t = jnp.array(0, dtype=jnp.int32)
     t = 0
 
     print(f"Starting training for {EPOCHS} epochs...")
     last_time = time.perf_counter()
 
     for step in range(1, EPOCHS + 1):
-        x_ids, y_ids = utils.get_batch(encoded_data, BLOCK_SIZE, BATCH_SIZE)
+        x_ids, y_ids = utils.get_batch(encoded_data, config["block_size"], config["batch_size"])
 
         # New short call: shf.train_step direct execution
         res = shf.train_step(params, m, v, t, x_ids, y_ids, config)
@@ -105,8 +104,8 @@ def run_inference(
 ):
     print(f"\nGenerating text (Prompt: '{prompt}')...")
     initial_ids = utils.encode(prompt, vocab)
-    ids = jnp.zeros(BLOCK_SIZE, dtype=jnp.int32)
-    ids = ids.at[-len(initial_ids) :].set(jnp.array(initial_ids[-BLOCK_SIZE:]))
+    ids = jnp.zeros(config["block_size"], dtype=jnp.int32)
+    ids = ids.at[-len(initial_ids) :].set(jnp.array(initial_ids[-config["block_size"]:]))
     key = jax.random.PRNGKey(time.perf_counter_ns() % 2**32)
 
     for _ in range(length):
@@ -128,16 +127,8 @@ def main():
     text, encoded_data, vocab = prepare_data(
         os.path.join(current_dir, "data", "shakespeare.txt")
     )
-    config = {
-        "d_model": D_MODEL,
-        "n_layers": N_LAYERS,
-        "n_heads": N_HEADS,
-        "batch_size": BATCH_SIZE,
-        "block_size": BLOCK_SIZE,
-        "vocab_size": len(vocab),
-        "lr": LEARNING_RATE,
-    }
-
+    config = CONFIG
+    config["vocab_size"] = len(vocab)
     params = load_or_train_params(shf, encoded_data, config)
     run_inference(shf, params, vocab, config)
 
