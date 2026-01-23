@@ -35,7 +35,7 @@
 
 (defn global-norm [pytree]
   ;; Compute global L2 norm of all leaves in a pytree
-  (sqrt (sum (tree-map (fn [g] (sum (** g 2))) pytree))))
+  (sqrt (tree-reduce + (tree-map (fn [g] (sum (** g 2))) pytree) 0.0)))
 
 
 (defn clip-by-global-norm [pytree max-norm]
