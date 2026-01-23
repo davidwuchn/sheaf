@@ -473,61 +473,67 @@ Here's a complete MLP training pipeline from initialization to evaluation:
     loss))
 ```
 
-**Python training loop:**
+**Building blocks in pure Sheaf:**
 
-```python
-import jax
-import jax.numpy as jnp
-from sheaf import Sheaf
+Initialization with Xavier scaling:
 
-# Initialize
-shf = Sheaf()
-shf.load("""...""")  # Load Sheaf code above
+```sheaf
+(defn init-layer [key input-size output-size]
+  (let [scale (sqrt (/ 2.0 (+ input-size output-size)))
+        W (random-normal key '[input-size output-size])]
+    {:W (* W scale)
+     :b (zeros '[output-size])}))
+```
 
-# Data
-X_train = jnp.array([[0,0], [0,1], [1,0], [1,1]], dtype=jnp.float32)
-y_train = jnp.array([[0], [1], [1], [0]], dtype=jnp.float32)
+Training step with gradient computation:
 
-# Initialize parameters with Xavier initialization
-key = jax.random.PRNGKey(42)
-key_l1, key_l2 = jax.random.split(key)
+```sheaf
+(defn train-step [params loss-fn x y lr]
+  (let [[loss grads] ((value-and-grad loss-fn) params)]
+    {:p (sgd-step params grads lr)
+     :loss loss}))
+```
 
-params = {
-    "l1": {
-        "W": jax.random.normal(key_l1, (2, 8)) * jnp.sqrt(1.0 / 2),    # Xavier: sqrt(1/fan_in)
-        "b": jnp.zeros((8,))
-    },
-    "l2": {
-        "W": jax.random.normal(key_l2, (8, 1)) * jnp.sqrt(1.0 / 8),    # Xavier: sqrt(1/fan_in)
-        "b": jnp.zeros((1,))
-    }
-}
+Loop pattern for n training steps:
 
-# Initialize optimizer state
-m = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), params)
-v = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), params)
-t = 1
+```sheaf
+(defn train-epoch [params loss-fn xs ys lr n-steps]
+  (reduce (fn [state _]
+            (let [result (train-step (get state :p) loss-fn xs ys lr)]
+              {:p (get result :p)
+               :loss (get result :loss)}))
+          {:p params :loss 0.0}
+          (range n-steps)))
+```
 
-# Hyperparameters
-lr = 0.01        # Learning rate (conservative starting point)
-epochs = 1000
+Multi-epoch training with progress reporting:
 
-# Training loop
-for epoch in range(epochs):
-    result = shf.train_step(params, m, v, t, X_train, y_train, lr)
-    params = result["params"]
-    m = result["m"]
-    v = result["v"]
-    t = result["t"]
-    loss = result["loss"]
+```sheaf
+(defn train-model [params loss-fn xs ys lr n-epochs steps-per-epoch]
+  (reduce (fn [state epoch]
+            (let [epoch-result (train-epoch (get state :p) loss-fn xs ys lr steps-per-epoch)
+                  loss-val (get epoch-result :loss)]
+              ;; Report progress
+              (print (str-call "format" "[epoch {}] loss: {:.6f}" epoch loss-val))
+              {:p (get epoch-result :p)
+               :loss loss-val
+               :epoch epoch}))
+          {:p params :loss 0.0 :epoch 0}
+          (range n-epochs))))
+```
 
-    if epoch % 100 == 0:
-        val_loss = shf.evaluate(params, X_train, y_train)
-        print(f"Epoch {epoch}: loss={loss:.6f}, val_loss={val_loss:.6f}")
+**Using these building blocks:**
 
-# Evaluate
-predictions = shf.forward(X_train, params)
-print("Predictions:", predictions)
+```sheaf
+;; 1. Define your loss function (model-specific)
+(defn my-loss [params x y]
+  (mse-loss (my-model x params) y))
+
+;; 2. Initialize your parameters
+(let [params (init-layer key 10 8)]
+
+  ;; 3. Train
+  (train-model params my-loss X Y 0.01 100 50))
 ```
 
 ### Weight Initialization Strategies
@@ -546,20 +552,43 @@ print("Predictions:", predictions)
 | **Zero**            | Biases                         | 0.0      | `(zeros shape)`                | Always use for biases                                |
 | **Small Normal**    | RNN biases, skip connections   | ~0.01    | `(* (random-normal ...) 0.01)` | Slight random offset for biases                      |
 
-**Python implementation:**
+**Sheaf implementations:**
 
-```python
-import jax
-import jax.numpy as jnp
+```sheaf
+;; Xavier Normal (for tanh/sigmoid)
+(defn init-xavier-normal [key shape]
+  (let [fan-in (first shape)
+        fan-out (nth shape 1)
+        scale (sqrt (/ 2.0 (+ fan-in fan-out)))]
+    (* (random-normal key shape) scale)))
 
-key1, key2 = jax.random.split(jax.random.PRNGKey(0))
+;; Kaiming Normal (for ReLU)
+(defn init-kaiming-normal [key shape]
+  (let [fan-in (first shape)
+        scale (sqrt (/ 2.0 fan-in))]
+    (* (random-normal key shape) scale)))
 
-# Xavier initialization (for layer with 10 -> 8 neurons)
-fan_in, fan_out = 10, 8
-W_xavier = jax.random.normal(key1, (fan_in, fan_out)) * jnp.sqrt(2.0 / (fan_in + fan_out))
+;; LeCun Normal (for SELU)
+(defn init-lecun-normal [key shape]
+  (let [fan-in (first shape)
+        scale (sqrt (/ 1.0 fan-in))]
+    (* (random-normal key shape) scale)))
 
-# Kaiming initialization (for ReLU)
-W_kaiming = jax.random.normal(key2, (fan_in, fan_out)) * jnp.sqrt(2.0 / fan_in)
+;; Orthogonal (for RNNs)
+(defn init-orthogonal [key shape]
+  ;; Simplified: random normal + QR decomposition
+  ;; For production, use init-orthogonal from lib/nn.shf
+  (let [scale 1.0]
+    (* (random-normal key shape) scale)))
+```
+
+**Usage:**
+
+```sheaf
+(let [[k1 k2 k3] (random-split key 3)]
+  {:W-sigmoid (init-xavier-normal k1 '[10 8])      ; For sigmoid layer
+   :W-relu    (init-kaiming-normal k2 '[8 16])     ; For ReLU layer
+   :W-rnn     (init-lecun-normal k3 '[32 32])})    ; For SELU/RNN
 ```
 
 ### Loss Functions: When to Use Which
@@ -805,6 +834,7 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 (get-in dict [:path :to :key])       ; Nested access
 (get-in dict [:path :missing] 99)    ; Nested with default
 (assoc dict :k1 v1 :k2 v2)          ; Add/update keys (functional)
+(dissoc dict [:k1 :k2])              ; Remove keys (functional)
 (merge dict1 dict2)                  ; Merge dicts (later overrides)
 (keys dict)                          ; Get all keys as list
 (vals dict)                          ; Get all values as list
@@ -819,6 +849,10 @@ Sheaf uses JAX arrays as the fundamental data type. Python scalars (int, float) 
 (let [model {:head old-head :layers layers}
       heads {:task1 head1 :task2 head2}]
   (assoc model :head (get heads :task1)))
+
+;; Remove keys from state (useful in scan for carry structure)
+(let [state {:p params :m momentum :v velocity :loss 2.5}]
+  (dissoc state [:loss]))  ; => {:p ..., :m ..., :v ...}
 
 ;; Merge config with defaults
 (merge {:lr 0.001 :epochs 100} user-config)
@@ -1428,6 +1462,7 @@ RNNs are very sensitive to initialization. Test with different scales:
 | --------------------------------- | ------------------------------------------ | -------------------------------------------------------------- |
 | `+`, `-`, `*`, `/`                | Arithmetic (variadic, broadcastable)       | `(+ a b c)`                                                    |
 | `//`                              | Integer division                           | `(// 7 2)` → `3`                                               |
+| `mod`, `%`                        | Modulo (remainder after division)          | `(mod 7 3)` → `1` or `(% 7 3)` → `1`                           |
 | `@`                               | Matrix multiplication                      | `(@ W x)`                                                      |
 | `**`                              | Exponentiation                             | `(** x 2)`                                                     |
 | `(einsum pattern ...tensors)`     | Einstein summation                         | `(einsum "ij,jk->ik" A B)`                                     |
