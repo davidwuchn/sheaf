@@ -2,7 +2,7 @@
 
 Traditional approaches in AI have complementary strengths and weaknesses.
 
-Neural networks are good at perception and pattern recognition but opaque "black boxes" with unexplainable decisions.
+Neural networks are good at perception and pattern recognition but opaque "black boxes" with sometimes unexplainable decisions.
 
 Symbolic systems are good at logical reasoning and explicit rule-based inference but brittle when handling noisy or uncertain data.
 
@@ -46,7 +46,9 @@ Each symbolic operation (like "filter-shape") computes a mask that narrows the n
     Answer (Argmax)
    ```
 
-### What does Sheaf have to do with this?
+Note: While CLEVR is fully differentiable, it uses hard-coded one-hot embeddings and works out-of-the-box without further training. Learning embeddings from scratch would add no practical benefit for this demonstration.
+
+### Sheaf’s Role in the Architecture
 
 Sheaf queries are data structures (S-expressions) that map 1:1 to the model's call stack. Sheaf can then transform a symbolic tree into a JAX computational graph through simple recursion.
 
@@ -55,6 +57,6 @@ Sheaf queries are data structures (S-expressions) that map 1:1 to the model's ca
 - `data.py`: Generates random scenes and questions
 - `model.shf`: Core model with soft filters, selections, attribute extraction...
 - `utils.shf`: Differentiable operations (filtering, selection, intersection, existence checking)
-- `train.py`: Training loop
 - `run.py`: Evaluation on 10 random test cases
-- `dashboard/app.py`: Interactive visualization
+- `visualizer/run.sh`: Run the interactive visualization
+- `visualizer/visualizer.py`: Streamlit code for visualization
