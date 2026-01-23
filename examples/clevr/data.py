@@ -106,7 +106,7 @@ def generate_query(scene, key):
                 nearest = max(left_objs, key=lambda o: o["x"])
                 return [
                     "query-shape",
-                    ["left-of", ["unique", ["filter-color", f":{color}"]]],
+                    ["unique", ["left-of", ["unique", ["filter-color", f":{color}"]]]],
                 ], nearest["shape"]
 
     # Fallback: simple existence
