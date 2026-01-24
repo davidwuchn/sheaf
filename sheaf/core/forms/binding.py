@@ -77,6 +77,24 @@ class DefnForm(SpecialForm):
         params = args[1]
         body = args[2:-1] if is_jit else args[2:]
 
+        # Check if trying to shadow a special form as function name
+        if hasattr(compiler, "special_forms") and name in compiler.special_forms:
+            raise SheafRuntimeError(
+                f"Error: Cannot shadow special form '{name}'. It is a reserved keyword.\n"
+                f"Special forms like 'fn', 'get', 'let', etc. cannot be used as function names.",
+                args,
+            )
+
+        # Check if any parameter name shadows a special form
+        if hasattr(compiler, "special_forms"):
+            for param in params:
+                if param in compiler.special_forms:
+                    raise SheafRuntimeError(
+                        f"Error: Cannot use special form '{param}' as a parameter name. It is a reserved keyword.\n"
+                        f"Special forms like 'fn', 'let', 'if', etc. cannot be used as parameter names.",
+                        args,
+                    )
+
         # Warn if using () instead of [] for parameters
         _warn_parens_in_binding("function parameters", params)
 
