@@ -78,19 +78,9 @@ def load_sheaf_model():
     finally:
         os.chdir(old_cwd)
 
-    # Load trained parameters
-    params_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "weights.pkl")
-    )
-    if os.path.exists(params_path):
-        import pickle
-
-        with open(params_path, "rb") as f:
-            params = pickle.load(f)
-    else:
-        # Initialize random parameters if no trained weights exist
-        init_key = jax.random.PRNGKey(42)
-        params = shf.init_clevr_params(init_key)
+    # Initialize parameters with optimized values
+    init_key = jax.random.PRNGKey(42)
+    params = shf.init_clevr_params(init_key)
 
     return shf, params
 
@@ -279,6 +269,32 @@ def infer_query_type(query):
     return "color"  # default
 
 
+def extract_operation_names(query):
+    """
+    Extract operation names from query in depth-first order.
+    This matches the order that execute-query-with-steps returns attention tensors.
+    """
+    ops = []
+
+    def traverse(q):
+        if not isinstance(q, list) or len(q) == 0:
+            return
+
+        op = q[0]
+
+        # Process all sub-queries first (depth-first)
+        for i in range(1, len(q)):
+            arg = q[i]
+            if isinstance(arg, list):
+                traverse(arg)
+
+        # Add this operation
+        ops.append(op)
+
+    traverse(query)
+    return ops
+
+
 def plot_probability_distribution(prob_dict, title="Answer Probabilities"):
     fig, ax = plt.subplots(figsize=(8, 4))
 
@@ -303,6 +319,190 @@ def plot_probability_distribution(prob_dict, title="Answer Probabilities"):
     return fig
 
 
+def format_pipeline_text(scene, query, steps, answer):
+    """
+    Format the query execution pipeline as readable text with attention values.
+
+    Args:
+        scene: Original scene dict
+        query: The symbolic query
+        steps: List of {"op": op_name, "attention": attention_weights}
+        answer: The final answer
+
+    Returns:
+        Formatted string showing the pipeline
+    """
+    lines = []
+
+    # Header
+    lines.append(f"Query: {query}\n")
+
+    # Input tensor
+    n_objects = len(scene["objects"])
+    lines.append(f"Input: Scene [batch=1, n_objects={n_objects}, features=9]")
+    lines.append("    ↓")
+
+    # Steps with attention values
+    for step_idx, step in enumerate(steps):
+        op_name = step["op"]
+        attention = jnp.array(step["attention"])
+
+        # Handle batch/scalar dimensions
+        if attention.ndim == 2:
+            attention = attention[0]
+        if attention.ndim == 0:
+            attention = jnp.ones(n_objects)
+
+        # Format the step - use just the operation name
+        step_title = op_name.capitalize()
+        lines.append(f"[{step_title}] {op_name}")
+
+        # Add operation description
+        if "filter" in op_name:
+            lines.append("  Operation: Dot product (scene @ W_embed) + Sigmoid")
+        elif op_name in ["leftmost", "rightmost"]:
+            coord_name = "x" if "leftmost" in op_name else "x"
+            direction = "smallest" if "leftmost" in op_name else "largest"
+            lines.append(
+                f"  Operation: Softmax over {coord_name}-coordinates (weighted by attention)"
+            )
+        elif op_name == "unique":
+            lines.append("  Operation: Softmax over objectness")
+        elif "query" in op_name:
+            attr_type = op_name.replace("query-", "").upper()
+            lines.append(
+                f"  Operation: Extract {attr_type} logits (scene @ W_{attr_type.lower()})"
+            )
+
+        # Add attention/logits values
+        if "query" in op_name:
+            # For query operations, show logits with attribute names
+            attr_type = op_name.replace("query-", "").lower()
+            if attr_type == "color":
+                attr_names = ["red", "green", "blue", "yellow"]
+            elif attr_type == "shape":
+                attr_names = ["circle", "square", "triangle"]
+            elif attr_type == "position":
+                attr_names = ["x", "y"]
+            else:
+                attr_names = [f"dim_{i}" for i in range(len(attention))]
+
+            logit_labels = []
+            for i, name in enumerate(attr_names):
+                if i < len(attention):
+                    logit_labels.append(f"{name}: {float(attention[i]):.2f}")
+            lines.append(f"  Logits: [{', '.join(logit_labels)}]")
+        else:
+            # For filter/selection operations, show attention per object
+            objects = scene["objects"]
+            att_labels = []
+            for i, obj in enumerate(objects):
+                if i < len(attention):
+                    label = f"{obj['color']}_{obj['shape']}"
+                    att_val = float(attention[i])
+                    att_labels.append(f"{label}: {att_val:.2f}")
+            lines.append(f"  Attention: [{', '.join(att_labels)}]")
+
+        lines.append("    ↓")
+
+    # Final answer
+    lines.append(f"[Decision] argmax(logits): {answer.upper()}")
+    return "\n".join(lines)
+
+
+def plot_symbolic_visualization(scene, steps, scene_tensor):
+    """
+    Visualize how symbolic operations progressively shape the neural network's attention.
+
+    Args:
+        scene: Original scene dict
+        steps: List of {"op": op_name, "attention": attention_weights}
+        scene_tensor: Original scene tensor for rendering
+
+    Returns:
+        matplotlib figure with progressive attention visualization
+    """
+    n_objects = len(scene["objects"])
+    n_steps = len(steps)
+
+    if n_steps == 0:
+        return None
+
+    # Create figure with subplots: one for each step
+    fig, axes = plt.subplots(1, n_steps, figsize=(4 * n_steps, 5))
+
+    # Handle single step case
+    if n_steps == 1:
+        axes = [axes]
+
+    for step_idx, step in enumerate(steps):
+        ax = axes[step_idx]
+        op_name = step["op"]
+        attention = jnp.array(step["attention"])
+
+        # Handle batch dimension if present
+        if attention.ndim == 2:
+            attention = attention[0]
+
+        # Handle scalar case (if attention is 0-dimensional, use uniform attention)
+        if attention.ndim == 0:
+            n_objects = len(scene["objects"])
+            attention = jnp.ones(n_objects)
+
+        # Normalize attention for visualization
+        att_min = jnp.min(attention)
+        att_max = jnp.max(attention)
+        if att_max > att_min:
+            attention_norm = (attention - att_min) / (att_max - att_min)
+        else:
+            attention_norm = jnp.ones_like(attention)
+
+        # Plot objects with attention-based sizing
+        objects = scene["objects"]
+        for i, obj in enumerate(objects):
+            x, y = obj["x"], obj["y"]
+            color = COLOR_MAP[obj["color"]]
+            shape = obj["shape"]
+            marker = SHAPE_SYMBOLS[shape]
+
+            # Size and alpha based on attention
+            alpha = float(attention_norm[i]) * 0.8 + 0.2
+            size = 150 + float(attention_norm[i]) * 350
+
+            ax.scatter(
+                x,
+                y,
+                c=color,
+                marker=marker,
+                s=size,
+                alpha=alpha,
+                edgecolors="black",
+                linewidths=2,
+            )
+
+            # Add attention value as label
+            ax.text(
+                x,
+                y - 0.08,
+                f"{float(attention[i]):.2f}",
+                ha="center",
+                va="top",
+                fontsize=9,
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+            )
+
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_aspect("equal")
+        ax.set_title(op_name, fontsize=11, fontweight="bold")
+        ax.grid(True, alpha=0.3)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    plt.tight_layout()
+    return fig
+
+
 # STREAMLIT APP
 
 
@@ -315,7 +515,7 @@ def main():
     if "shf" not in st.session_state:
         with st.spinner("Loading Sheaf model..."):
             st.session_state.shf, st.session_state.params = load_sheaf_model()
-        st.success("Model loaded!")
+        st.success("Model loaded")
 
     shf = st.session_state.shf
     params = st.session_state.params
@@ -327,13 +527,8 @@ def main():
     scene = st.session_state.scene
     scene_tensor = st.session_state.scene_tensor
 
-    # Main layout: Scene on left, Query and probability on right
-    scene_col, query_col = st.columns(2)
-
-    with scene_col:
-        fig_scene = plot_scene(scene, title="")
-        st.pyplot(fig_scene, use_container_width=True)
-        plt.close()
+    # Top layout: Query on left, Scene on right
+    query_col, scene_col = st.columns(2)
 
     with query_col:
         st.subheader("Query")
@@ -353,10 +548,16 @@ def main():
             "Sheaf Query:", value=default_query, height=80, label_visibility="collapsed"
         )
 
-        if st.button("Execute Query", type="primary", use_container_width=True):
-            st.session_state.execute_query = True
-
-        st.divider()
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Execute Query", type="primary", width="stretch"):
+                st.session_state.execute_query = True
+        with col2:
+            if st.button("Generate Random Scene", width="stretch"):
+                st.session_state.scene, st.session_state.scene_tensor = (
+                    generate_fixed_scene()
+                )
+                st.rerun()
 
         if st.session_state.get("execute_query", False):
             try:
@@ -367,22 +568,33 @@ def main():
 
                 with st.spinner("Executing query..."):
                     prediction = shf.execute_query(scene_batch, query, params)
+                    # Get attention tensors from execute-query-with-steps
+                    query_result = shf.execute_query_with_steps(
+                        scene_batch, query, params
+                    )
 
                 # Decode answer
                 query_type = infer_query_type(query)
                 answer, prob_dict = decode_answer(prediction, query_type)
 
+                # Extract operation names and match with attention tensors
+                op_names = extract_operation_names(query)
+                steps = []
+
+                if isinstance(query_result, (list, tuple)) and len(query_result) > 1:
+                    attention_list = query_result[1]
+                    # Match operation names with attention tensors
+                    for i, op_name in enumerate(op_names):
+                        if i < len(attention_list):
+                            steps.append(
+                                {"op": op_name, "attention": attention_list[i]}
+                            )
+
                 # Store in session for display
                 st.session_state.last_query = query
                 st.session_state.last_answer = answer
                 st.session_state.last_prob_dict = prob_dict
-
-                # Show probability chart
-                fig_probs = plot_probability_distribution(
-                    prob_dict, title="Answer Probabilities"
-                )
-                st.pyplot(fig_probs, use_container_width=True)
-                plt.close()
+                st.session_state.last_steps = steps
 
                 st.session_state.execute_query = False
 
@@ -393,22 +605,33 @@ def main():
                 st.text(traceback.format_exc())
                 st.session_state.execute_query = False
 
-    # Generate scene button below scene
-    with scene_col:
-        if st.button(
-            "🎲 Generate Random Scene", type="primary", use_container_width=True
-        ):
-            st.session_state.scene, st.session_state.scene_tensor = (
-                generate_fixed_scene()
-            )
-            st.rerun()
+        # Display result in query column only
+        if st.session_state.get("last_answer"):
+            st.divider()
+            st.info(f"**Result: {st.session_state.last_answer.upper()}**")
 
-    # Query result banner at the bottom
+    with scene_col:
+        st.subheader("Scene")
+
+        fig_scene = plot_scene(scene, title="")
+        st.pyplot(fig_scene, width="stretch")
+        plt.close()
+
+    # Divider between top and bottom sections
+    st.divider()
+
+    # Symbolic execution pipeline at the bottom
     if st.session_state.get("last_query"):
-        st.divider()
-        query_result = st.session_state.last_query
-        result = st.session_state.last_answer
-        st.info(f"📊 Query: `{query_result}` → **Result: {result}**")
+        st.subheader("Symbolic Attention Shaping")
+
+        # Display pipeline as formatted text
+        pipeline_text = format_pipeline_text(
+            scene,
+            st.session_state.last_query,
+            st.session_state.last_steps,
+            st.session_state.last_answer,
+        )
+        st.code(pipeline_text, language="text")
 
 
 if __name__ == "__main__":
