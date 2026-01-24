@@ -187,7 +187,7 @@ def test_query(shf, scene_dict, query, answer, params, with_steps=False):
     }
 
 
-def run_tests(shf, params, num_tests=10, show_detailed=True):
+def run_tests(shf, params, demo_scene, num_tests=10, show_detailed=True):
     # Run random tests and report accuracy
     key = jax.random.PRNGKey(42)
     passed = 0
@@ -214,14 +214,11 @@ def run_tests(shf, params, num_tests=10, show_detailed=True):
         print("-" * 58)
         print("Detailed operations for query: 'color of rightmost square'\n")
         print("Symbolic attention shaping:")
-        # Generate a demo scene with multiple objects
-        demo_key = jax.random.PRNGKey(999)
-        demo_scene = data.generate_scene(demo_key, n_objects=5)
 
         # Custom query: color of rightmost square
         custom_query = ["query-color", ["rightmost", ["filter-shape", ":square"]]]
 
-        # Execute with steps
+        # Execute with steps (scene was already generated and displayed)
         result = test_query(
             shf, demo_scene, custom_query, None, params, with_steps=True
         )
@@ -235,6 +232,7 @@ def run_tests(shf, params, num_tests=10, show_detailed=True):
                 result["steps"],
             )
             print(pipeline)
+        print("=" * 80)
 
     return passed / num_tests
 
@@ -243,10 +241,51 @@ def main():
     print("CLEVR Neuro-Symbolic Reasoning\n")
 
     shf = load_model()
-    print(f"Loaded functions: {list(shf.registry.keys())}")
+    print(f"Loaded functions: {list(shf.registry.keys())}\n")
 
     params = load_params(shf)
-    run_tests(shf, params, num_tests=10)
+
+    # Generate a random scene with at least one square for the demo query
+    import time
+
+    demo_seed = int(time.time() * 1000) % 10000
+    demo_key = jax.random.PRNGKey(demo_seed)
+
+    # Generate scenes until we get one with at least one square
+    demo_scene = None
+    max_attempts = 100
+    for attempt in range(max_attempts):
+        candidate_scene = data.generate_scene(demo_key, n_objects=5)
+        has_square = any(obj["shape"] == "square" for obj in candidate_scene["objects"])
+        if has_square:
+            demo_scene = candidate_scene
+            break
+        demo_key = jax.random.PRNGKey(demo_seed + attempt + 1)
+
+    if demo_scene is None:
+        # Fallback: force create a scene with a square
+        demo_scene = data.generate_scene(demo_key, n_objects=5)
+        demo_scene["objects"][0]["shape"] = "square"
+
+    # Display the scene tensor and decoded objects
+    scene_tensor = data.scene_to_tensor(demo_scene)
+    print("Input tensor:")
+    print(f"  Shape: {scene_tensor.shape} (5 objects × 9 features)")
+    print(f"  Features: [red, green, blue, yellow, circle, square, triangle, x, y]")
+    print(f"\n  Raw tensor values:")
+    for i, obj_tensor in enumerate(scene_tensor):
+        print(f"    Object {i + 1}: {obj_tensor}")
+
+    print("\nDecoded input:")
+    for i, obj in enumerate(demo_scene["objects"]):
+        print(
+            f"  - {obj['color']:7} {obj['shape']:8} at (x={obj['x']:.2f}, y={obj['y']:.2f})"
+        )
+
+    print()
+
+    # Run tests with the pre-generated scene for detailed demo
+    run_tests(shf, params, demo_scene, num_tests=10)
 
 
 if __name__ == "__main__":
