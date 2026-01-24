@@ -8,42 +8,39 @@
 (use ./utils.shf)
 
 
-;; Learnable parameters
+;; Pre-computed optimal parameters
 
 (defn init-clevr-params [key]
-  ; Initialize embeddings and temperatures
-  (let [[k1 k2 k3] (random-split key 3)
-        color-base [[1 0 0 0 0 0 0 0 0]    ;; red
-                    [0 1 0 0 0 0 0 0 0]    ;; green
-                    [0 0 1 0 0 0 0 0 0]    ;; blue
-                    [0 0 0 1 0 0 0 0 0]]   ;; yellow
-        shape-base [[0 0 0 0 1 0 0 0 0]    ;; circle
-                    [0 0 0 0 0 1 0 0 0]    ;; square
-                    [0 0 0 0 0 0 1 0 0]]]  ;; triangle
-    {:color_embeddings color-base
-     :shape_embeddings shape-base
-     :temps {:filter 0.1 :unique 0.5 :leftmost 0.5 :spatial 0.1}
-     :thresholds {:spatial 0.0 :exists 1.72}}))
+  ; Initialize with optimized embeddings and temperatures
+  {:color_embeddings [[1 0 0 0 0 0 0 0 0]    ;; red
+                      [0 1 0 0 0 0 0 0 0]    ;; green
+                      [0 0 1 0 0 0 0 0 0]    ;; blue
+                      [0 0 0 1 0 0 0 0 0]]   ;; yellow
+   :shape_embeddings [[0 0 0 0 1 0 0 0 0]    ;; circle
+                      [0 0 0 0 0 1 0 0 0]    ;; square
+                      [0 0 0 0 0 0 1 0 0]]   ;; triangle
+   :temps {:filter 0.05 :unique 0.1 :leftmost 0.1 :spatial 0.05}
+   :thresholds {:spatial 0.0 :exists 1.72}})
 
 
 ;; Vocabulary mapping
 
-(defn color-idx [name]
-  (case name "red" 0 "green" 1 "blue" 2 "yellow" 3 0))
-
-(defn shape-idx [name]
-  (case name "circle" 0 "square" 1 "triangle" 2 0))
+(defn attr-idx [name]
+  (case name
+    "red" 0 "green" 1 "blue" 2 "yellow" 3
+    "circle" 0 "square" 1 "triangle" 2
+    0))
 
 
 ;; Filters - wrap utils with learned embeddings
 
 (defn filter-color [scene color-kw params]
-  (let [idx (color-idx (slice (str color-kw) 1))
+  (let [idx (attr-idx (slice (str color-kw) 1))
         query (get (get params :color_embeddings) idx)]
     (soft-filter scene query (get-in params [:temps :filter]))))
 
 (defn filter-shape [scene shape-kw params]
-  (let [idx (shape-idx (slice (str shape-kw) 1))
+  (let [idx (attr-idx (slice (str shape-kw) 1))
         query (get (get params :shape_embeddings) idx)]
     (soft-filter scene query (get-in params [:temps :filter]))))
 
@@ -60,27 +57,17 @@
   (soft-rightmost scene (get-in params [:temps :leftmost])))
 
 
-;; Spatial relations
+;; Spatial relations - thin wrappers over utils.shf
 
-(defn left-of [scene ref params]
-  (spatial-left-of scene ref
-    (get-in params [:thresholds :spatial])
-    (get-in params [:temps :spatial])))
+(defn spatial-op [op scene ref params]
+  (op scene ref
+      (get-in params [:thresholds :spatial])
+      (get-in params [:temps :spatial])))
 
-(defn right-of [scene ref params]
-  (spatial-right-of scene ref
-    (get-in params [:thresholds :spatial])
-    (get-in params [:temps :spatial])))
-
-(defn above [scene ref params]
-  (spatial-above scene ref
-    (get-in params [:thresholds :spatial])
-    (get-in params [:temps :spatial])))
-
-(defn below [scene ref params]
-  (spatial-below scene ref
-    (get-in params [:thresholds :spatial])
-    (get-in params [:temps :spatial])))
+(defn left-of [scene ref params]  (spatial-op spatial-left-of scene ref params))
+(defn right-of [scene ref params] (spatial-op spatial-right-of scene ref params))
+(defn above [scene ref params]    (spatial-op spatial-above scene ref params))
+(defn below [scene ref params]    (spatial-op spatial-below scene ref params))
 
 
 ;; Logic & attribute queries
@@ -94,6 +81,7 @@
 (defn query-color [obj]    (query-attribute obj 0 4))
 (defn query-shape [obj]    (query-attribute obj 4 7))
 (defn query-position [obj] (query-attribute obj 7 9))
+
 
 
 ;; Query executor - the core of neuro-symbolic reasoning
@@ -120,52 +108,92 @@
       "query-position" (query-position (rec arg1))
       scene)))
 
+;; Execute query and track intermediate attention steps
+;; Returns [result, [att1, att2, ...]] where atts are pure JAX tensors
 
-;; Loss functions
+;; Helper to extract attention weights from a scene tensor
+(defn scene-to-attention [scene]
+  (sum (abs scene) :axis -1))
 
-(defn clevr-loss [params scene query target]
-  ; Cross-entropy loss for a single query
-  (let [pred (execute-query scene query params)
-        ; For existence queries, pred is [batch] (scalar per batch)
-        ; For attribute queries, pred is [batch, num_classes]
-        pred-ndim (ndim pred)
-        is-existence (== pred-ndim 1)]
-    (if is-existence
-      ; Binary cross-entropy for existence queries
-      ; pred is already a probability (0-1) from sigmoid
-      (let [pred-scalar (get (reshape pred -1) 0)
-            eps 1e-7
-            clipped (maximum (minimum pred-scalar (- 1.0 eps)) eps)
-            ; BCE = -target * log(pred) - (1-target) * log(1-pred)
-            bce (+ (* target (log clipped))
-                   (* (- 1.0 target) (log (- 1.0 clipped))))
-            ce (* -1.0 bce)]
-        ce)
-      ; Cross-entropy for attribute queries
-      (let [pred-shape (shape pred)
-            log-probs (log-softmax pred :axis -1)
-            target-vec (one-hot target (get pred-shape -1))
-            ce (* -1.0 (sum (* log-probs target-vec) :axis -1))]
-        (mean ce)))))
+(defn execute-query-with-steps [scene q params]
+  "Execute query and return result with list of attention tensors"
+  (let [op (first q)
+        arg1 (second q)]
 
-(defn batch-loss [params scenes queries targets]
-  ; Average loss over a batch
-  (let [n (get (shape scenes) 0)]
-    (/ (reduce (fn [acc i]
-                 (+ acc (clevr-loss params
-                          (reshape (get scenes i) 1 -1 9)
-                          (nth queries i)
-                          (get targets i))))
-               0.0
-               (range n))
-       n)))
+    (case op
+      "filter-color"
+      (let [result (filter-color scene arg1 params)
+            att (scene-to-attention result)]
+        [result [att]])
 
+      "filter-shape"
+      (let [result (filter-shape scene arg1 params)
+            att (scene-to-attention result)]
+        [result [att]])
 
-;; Training step
+      "unique"
+      (let [sub-result (execute-query-with-steps scene arg1 params)
+            sub-scene (get sub-result 0)
+            sub-atts (get sub-result 1)
+            result (unique sub-scene params)
+            att (scene-to-attention result)]
+        [result (concat sub-atts [att])])
 
-(defn train-step [params m v t scenes queries targets config]
-  ; Single training step with Adam
-  (let [loss-fn (fn [p] (batch-loss p scenes queries targets))
-        [loss grads] ((value-and-grad loss-fn) params)
-        [new-p new-m new-v new-t] (adam-step params grads m v t (get config :lr) 0.9 0.999 1e-8)]
-    {:loss loss :params new-p :m new-m :v new-v :t new-t}))
+      "leftmost"
+      (let [sub-result (execute-query-with-steps scene arg1 params)
+            sub-scene (get sub-result 0)
+            sub-atts (get sub-result 1)
+            result (leftmost sub-scene params)
+            att (scene-to-attention sub-scene)]
+        [result (concat sub-atts [att])])
+
+      "rightmost"
+      (let [sub-result (execute-query-with-steps scene arg1 params)
+            sub-scene (get sub-result 0)
+            sub-atts (get sub-result 1)
+            result (rightmost sub-scene params)
+            att (scene-to-attention sub-scene)]
+        [result (concat sub-atts [att])])
+
+      "left-of"
+      (let [sub-result (execute-query-with-steps scene arg1 params)
+            sub-scene (get sub-result 0)
+            sub-atts (get sub-result 1)
+            result (left-of scene sub-scene params)
+            att (scene-to-attention result)]
+        [result (concat sub-atts [att])])
+
+      "query-color"
+      (let [sub-result (execute-query-with-steps scene arg1 params)
+            sub-scene (get sub-result 0)
+            sub-atts (get sub-result 1)
+            result (query-color sub-scene)]
+        [result (concat sub-atts [result])])
+
+      "query-shape"
+      (let [sub-result (execute-query-with-steps scene arg1 params)
+            sub-scene (get sub-result 0)
+            sub-atts (get sub-result 1)
+            result (query-shape sub-scene)]
+        [result (concat sub-atts [result])])
+
+      "exists?"
+      (let [sub-result (execute-query-with-steps scene arg1 params)
+            sub-scene (get sub-result 0)
+            sub-atts (get sub-result 1)
+            result (exists? sub-scene params)]
+        [result (concat sub-atts [(scene-to-attention sub-scene)])])
+
+      "intersect"
+      (let [r1 (execute-query-with-steps scene arg1 params)
+            s1 (get r1 0)
+            atts1 (get r1 1)
+            r2 (execute-query-with-steps scene (nth q 2) params)
+            s2 (get r2 0)
+            atts2 (get r2 1)
+            result (intersect s1 s2)
+            att (scene-to-attention result)]
+        [result (concat atts1 atts2 [att])])
+
+      ; Default: just execute query
+      [(execute-query scene q params) []])))
