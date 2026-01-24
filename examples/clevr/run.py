@@ -193,6 +193,9 @@ def run_tests(shf, params, demo_scene, num_tests=10, show_detailed=True):
     passed = 0
     last_result = None
 
+    print("-" * 58)
+    print("Test queries:\n")
+
     for i in range(num_tests):
         key, scene_key, query_key = jax.random.split(key, 3)
         scene = data.generate_scene(scene_key, n_objects=4)
@@ -212,7 +215,7 @@ def run_tests(shf, params, demo_scene, num_tests=10, show_detailed=True):
     # Show detailed pipeline for custom query: "color of rightmost square"
     if show_detailed:
         print("-" * 58)
-        print("Detailed operations for query: 'color of rightmost square'\n")
+        print("\nDetailed operations for query: 'color of rightmost square'\n")
         print("Symbolic attention shaping:")
 
         # Custom query: color of rightmost square
@@ -232,7 +235,6 @@ def run_tests(shf, params, demo_scene, num_tests=10, show_detailed=True):
                 result["steps"],
             )
             print(pipeline)
-        print("=" * 80)
 
     return passed / num_tests
 
@@ -241,7 +243,6 @@ def main():
     print("CLEVR Neuro-Symbolic Reasoning\n")
 
     shf = load_model()
-    print(f"Loaded functions: {list(shf.registry.keys())}\n")
 
     params = load_params(shf)
 
@@ -279,7 +280,7 @@ def main():
     print("\nDecoded input:")
     for i, obj in enumerate(demo_scene["objects"]):
         print(
-            f"  - {obj['color']:7} {obj['shape']:8} at (x={obj['x']:.2f}, y={obj['y']:.2f})"
+            f"  - {obj['color']:7} {obj['shape']:8}   x={obj['x']:.2f}    y={obj['y']:.2f}"
         )
 
     print()
