@@ -686,7 +686,7 @@ Rolls tensor elements along the specified axis. Elements that roll off one end a
 **Type:** function  
 **Signature:** `(concat x1 x2 [...] [:axis axis])`
 
-Concatenate sequences (lists or JAX arrays). Returns a list for list inputs, JAX array for array inputs. Supports `:axis` for array concatenation (default 0).
+Concatenate sequences (lists or arrays). Returns a list for list inputs, tensor for array inputs. Supports `:axis` for array concatenation (default 0).
 
 ```sheaf
 ;; Concatenate lists
@@ -802,7 +802,7 @@ Converts integer indices into a one-hot representation. For an input of shape `(
 **Type:** function  
 **Signature:** `(index-update tensor idx value)`
 
-Returns a new tensor identical to `tensor` except that the slice at position `idx` is replaced by `value`. The index must be a scalar integer — not a single-element vector. This is the standard way to perform functional (out-of-place) updates on tensors, compatible with JAX JIT.
+Returns a new tensor identical to `tensor` except that the slice at position `idx` is replaced by `value`. The index must be a scalar integer — not a single-element vector. This is the standard way to perform functional (out-of-place) updates on tensors.
 
 ```sheaf
 ;; Replace one element in a 1D vector
@@ -820,7 +820,7 @@ Returns a new tensor identical to `tensor` except that the slice at position `id
 **Type:** function  
 **Signature:** `(tensor data)`
 
-Converts a literal list or a dynamically-generated list into a JAX tensor. This function is required when a sequence is built at runtime (via `cons`, `append`, etc.) and needs to enter the computational pipeline. It ensures that host-side structures are explicitly moved to the device for JIT execution.
+Converts a literal list or a dynamically-generated list into a tensor. This function is required when a sequence is built at runtime (via `cons`, `append`, etc.) and needs to enter the computational pipeline.
 
 ```sheaf
 ;; Conversion from a literal list
@@ -840,7 +840,7 @@ Converts a literal list or a dynamically-generated list into a JAX tensor. This 
 **Type:** function  
 **Signature:** `(int x)`, `(float x)`
 
-Cast a scalar tensor or a Python number to a 32-bit integer or 32-bit float, respectively. The result is a scalar JAX array. These are the primary way to extract a concrete numeric value from a tensor for use in indexing or list operations.
+Cast a scalar tensor or number to a 32-bit integer or 32-bit float, respectively. The result is a scalar tensor. These are the primary way to extract a concrete numeric value from a tensor for use in indexing or list operations.
 
 ```sheaf
 (int 3.7)                ; => 3
@@ -1193,7 +1193,7 @@ Returns the first element of `seq` for which `pred` returns a truthy value, or `
 **Type:** function  
 **Signature:** `(index-of seq val)`
 
-Returns the zero-based index of the first occurrence of `val` in `seq`, or `-1` if `val` is not present. Uses Python equality semantics, so it works on both numbers and strings.
+Returns the zero-based index of the first occurrence of `val` in `seq`, or `-1` if `val` is not present. Works on both numbers and strings.
 
 ```sheaf
 (index-of '[10 20 30 40] 30)                           ; => 2
@@ -1846,7 +1846,7 @@ Unpacks the keys of a dictionary into the local scope as bound variables. If a `
 
 ---
 
-## JAX Transforms
+## Transforms
 
 ### vmap
 
@@ -1981,7 +1981,7 @@ A higher-order function that transforms a scalar-valued function `func` into a n
 
 Computes the categorical cross-entropy loss between logits (unnormalized predictions) and targets (integer class indices). This function internally applies a softmax to the logits, making it more numerically stable than manual computation.
 
-Note: `targets` must be integers. Specify the `:i32` type to avoid JAX type errors.
+Note: `targets` must be integers. Specify the `:i32` type to avoid type errors.
 
 ```sheaf
 (sparse-cross-entropy [[0.9 0.1] [0.2 0.8]] [0 1] :i32) ; => 0.40429434
@@ -2047,7 +2047,7 @@ Splits a tensor into `num-sections` sub-tensors along the specified axis. This f
 **Type:** function  
 **Signature:** `(dynamic-slice x start length)`
 
-Extracts a slice of a fixed `length` starting from a dynamic `start` index. Unlike standard Lisp slicing, this operation is compatible with JAX JIT-compilation because the output shape (length) remains constant even when the starting position is a computed value.
+Extracts a slice of a fixed `length` starting from a dynamic `start` index. The output shape (length) remains constant even when the starting position is a computed value.
 
 ```sheaf
 (dynamic-slice (arange 5) 1 3)  ; => [1 2 3]
@@ -2090,7 +2090,7 @@ Scales the elements of a tensor so they sum to 1.0. This is a common utility for
 
 ### Escape sequences
 
-Sheaf strings support Python-style escape sequences. The backslash `\` triggers interpretation of the following character:
+Sheaf strings support standard escape sequences. The backslash `\` triggers interpretation of the following character:
 
 | Sequence | Meaning              |
 | -------- | -------------------- |
@@ -2118,7 +2118,7 @@ The tricky case is `\\n`: the first `\\` resolves to a literal backslash, then `
 **Type:** function  
 **Signature:** `(str-call method target [args ...])`
 
-Calls a Python string method on `target`. This is the primary way to manipulate strings in Sheaf. The method name is passed as a string; subsequent arguments are forwarded directly.
+Calls a string method on `target`. This is the primary way to manipulate strings in Sheaf. The method name is passed as a string; subsequent arguments are forwarded directly.
 
 ```sheaf
 (str-call "replace" "hello world" "world" "sheaf")   ; => "hello sheaf"
@@ -2134,7 +2134,7 @@ Calls a Python string method on `target`. This is the primary way to manipulate 
 **Type:** function  
 **Signature:** `(print msg)`, `(print fmt arg1 arg2 ...)`
 
-Prints a value to stdout. When the first argument is a string containing `{}` placeholders and additional arguments are provided, `print` performs automatic format-string interpolation — equivalent to Python's `str.format()`. This is the idiomatic way to display computed values without an explicit `str-call`.
+Prints a value to stdout. When the first argument is a string containing `{}` placeholders and additional arguments are provided, `print` performs automatic format-string interpolation. This is the idiomatic way to display computed values without an explicit `str-call`.
 
 ```sheaf
 (print "hello")                        ; prints: hello
@@ -2285,10 +2285,10 @@ Loads a library module and imports its public functions into the current global 
 
 Prevents evaluation of `expr`. It treats the expression as raw data (S-expression) instead of code to be executed.
 
-- `[1 2 3]` -> Evaluates immediately into a JAX Tensor.
+- `[1 2 3]` -> Evaluates immediately into a Tensor.
 - `'[1 2 3]` -> Remains a List/Vector of constants.
 
-Quotes are used to pass arguments like shapes to functions like `reshape` or `ones`, which do not accept JAX Tensors as inputs.
+Quotes are used to pass arguments like shapes to functions like `reshape` or `ones`, which do not accept Tensors as inputs.
 
 ```sheaf
 'symbol              ; => symbol (not evaluated)
