@@ -116,6 +116,61 @@ impl StableHLOType {
             }
         }
     }
+
+    /// Parse an MLIR type string back into a StableHLOType.
+    /// Accepts: "tensor<f32>", "tensor<2x3xf32>", "tuple<tensor<2xf32>, tensor<f32>>".
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s.starts_with("tuple<") && s.ends_with('>') {
+            let inner = &s[6..s.len() - 1];
+            let elems = split_tuple_args(inner);
+            let parsed: Option<Vec<Self>> = elems.iter().map(|e| Self::parse(e)).collect();
+            return parsed.map(Self::Tuple);
+        }
+        if s.starts_with("tensor<") && s.ends_with('>') {
+            let inner = &s[7..s.len() - 1]; // e.g. "2x3xf32" or "f32"
+            let parts: Vec<&str> = inner.split('x').collect();
+            if parts.len() == 1 {
+                return match parts[0] {
+                    "f32" => Some(Self::ScalarF32),
+                    "f64" => Some(Self::ScalarF64),
+                    "i64" => Some(Self::ScalarI64),
+                    "i1" => Some(Self::ScalarI1),
+                    _ => None,
+                };
+            }
+            let dtype = parts.last()?.to_string();
+            let shape: Option<Vec<i64>> = parts[..parts.len() - 1]
+                .iter()
+                .map(|d| d.parse::<i64>().ok())
+                .collect();
+            return shape.map(|s| Self::Tensor { shape: s, dtype });
+        }
+        None
+    }
+}
+
+/// Split top-level comma-separated args in a tuple, respecting nesting.
+fn split_tuple_args(s: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut depth = 0;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            ',' if depth == 0 => {
+                result.push(s[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = s[start..].trim();
+    if !last.is_empty() {
+        result.push(last);
+    }
+    result
 }
 
 /// Register name in SSA form: %0, %1, etc. or %arg0, %arg1, etc.
