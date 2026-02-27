@@ -60,9 +60,25 @@ jobs:
           cd iree
           git submodule update --init --depth 1
 
+      - name: Build host flatcc (cross-compilation only)
+        if: steps.cache-iree.outputs.cache-hit != 'true' && matrix.target == 'linux-aarch64'
+        run: |
+          cmake -G Ninja -B iree-host-build -S iree \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DIREE_BUILD_COMPILER=OFF \
+            -DIREE_BUILD_TESTS=OFF \
+            -DIREE_BUILD_SAMPLES=OFF
+          cmake --build iree-host-build --target iree-flatcc-cli
+          mkdir -p iree-host-install/bin
+          find iree-host-build -name "iree-flatcc-cli" -type f -exec cp {} iree-host-install/bin/ \;
+
       - name: Build IREE runtime
         if: steps.cache-iree.outputs.cache-hit != 'true'
         run: |
+          EXTRA_FLAGS="${{ matrix.cmake_extra }}"
+          if [[ "${{ matrix.target }}" == "linux-aarch64" ]]; then
+            EXTRA_FLAGS="$EXTRA_FLAGS -DIREE_HOST_BIN_DIR=${{ github.workspace }}/iree-host-install/bin"
+          fi
           cmake -G Ninja -B iree-build -S iree \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/iree-install \
@@ -72,9 +88,8 @@ jobs:
             -DIREE_HAL_DRIVER_LOCAL_SYNC=ON \
             -DIREE_HAL_DRIVER_LOCAL_TASK=ON \
             -DIREE_HAL_DRIVER_VULKAN=OFF \
-            ${{ matrix.cmake_extra }}
+            $EXTRA_FLAGS
           cmake --build iree-build --target iree_runtime_unified
-          # Collect artifacts into install dir
           mkdir -p iree-install/lib
           find iree-build -name "libiree_runtime_unified.a" -exec cp {} iree-install/lib/ \;
           find iree-build -name "libflatcc_parsing.a" -exec cp {} iree-install/lib/ \; 2>/dev/null || true
@@ -119,7 +134,7 @@ jobs:
         if: matrix.target == 'linux-aarch64'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Download IREE runtime
         uses: actions/download-artifact@v4
