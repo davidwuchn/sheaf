@@ -4,7 +4,7 @@
 //! Control flow special forms: if, do, case, while, repeat, guard
 
 use crate::ast::SheafValue;
-use crate::core::compiler::{CompiledExpr, CompilerContext};
+use crate::core::compiler::{CompiledExpr, CompilerContext, GuardCheck};
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 use crate::forms::base::{SpecialForm, check_arity, check_min_arity, expect_symbol, expect_vector};
 
@@ -236,9 +236,11 @@ impl SpecialForm for RepeatForm {
     }
 }
 
-/// guard - Runtime assertions: (guard :no-nan x) or (guard :shape [64 256] x)
+/// guard - Runtime assertions: (guard :no-nan x) or (guard :range [lo hi] x)
+/// or (guard :shape [d1 d2] x)
 ///
-/// Not yet implemented - placeholder
+/// Evaluates the expression, checks the condition, and returns the value
+/// transparently. Always active when written in source code (not CLI-dependent).
 pub struct GuardForm;
 
 impl SpecialForm for GuardForm {
@@ -248,14 +250,85 @@ impl SpecialForm for GuardForm {
 
     fn compile(
         &self,
-        _compiler: &mut CompilerContext,
-        _args: &[SheafValue],
+        compiler: &mut CompilerContext,
+        args: &[SheafValue],
         loc: &SourceLocation,
     ) -> SheafResult<CompiledExpr> {
-        Err(SheafError::Compile {
-            message: "guard not yet implemented".to_string(),
-            location: loc.clone(),
+        check_min_arity("guard", args, 2, loc)?;
+
+        let check_kw = match &args[0] {
+            SheafValue::Keyword(k, _) => k.as_str(),
+            _ => {
+                return Err(SheafError::Compile {
+                    message: "guard: first argument must be a keyword (:no-nan, :range, :shape)"
+                        .to_string(),
+                    location: loc.clone(),
+                });
+            }
+        };
+
+        let (check, expr_idx) = match check_kw {
+            "no-nan" => {
+                check_arity("guard :no-nan", args, 2, loc)?;
+                (GuardCheck::NoNan, 1)
+            }
+            "range" => {
+                check_arity("guard :range", args, 3, loc)?;
+                let bounds = expect_vector(&args[1], "guard :range bounds [lo hi]", loc)?;
+                if bounds.len() != 2 {
+                    return Err(SheafError::Compile {
+                        message: "guard :range expects [lo hi]".to_string(),
+                        location: loc.clone(),
+                    });
+                }
+                let lo = as_number(&bounds[0], "guard :range lo", loc)?;
+                let hi = as_number(&bounds[1], "guard :range hi", loc)?;
+                (GuardCheck::Range { lo, hi }, 2)
+            }
+            "shape" => {
+                check_arity("guard :shape", args, 3, loc)?;
+                let dims_sv = expect_vector(&args[1], "guard :shape dims [d1 d2 ...]", loc)?;
+                let mut dims = Vec::new();
+                for d in dims_sv {
+                    match d {
+                        SheafValue::Integer(n, _) => dims.push(*n),
+                        _ => {
+                            return Err(SheafError::Compile {
+                                message: "guard :shape dimensions must be integers".to_string(),
+                                location: loc.clone(),
+                            });
+                        }
+                    }
+                }
+                (GuardCheck::Shape(dims), 2)
+            }
+            other => {
+                return Err(SheafError::Compile {
+                    message: format!(
+                        "guard: unknown check type :{} (expected :no-nan, :range, :shape)",
+                        other
+                    ),
+                    location: loc.clone(),
+                });
+            }
+        };
+
+        let expr = compiler.compile(&args[expr_idx])?;
+        Ok(CompiledExpr::Guard {
+            check,
+            expr: Box::new(expr),
         })
+    }
+}
+
+fn as_number(val: &SheafValue, context: &str, loc: &SourceLocation) -> SheafResult<f64> {
+    match val {
+        SheafValue::Float(f, _) => Ok(*f),
+        SheafValue::Integer(n, _) => Ok(*n as f64),
+        _ => Err(SheafError::Compile {
+            message: format!("{}: expected a number", context),
+            location: loc.clone(),
+        }),
     }
 }
 

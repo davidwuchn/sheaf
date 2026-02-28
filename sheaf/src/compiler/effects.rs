@@ -115,6 +115,10 @@ fn collect_effects_rec(expr: &CompiledExpr, out: &mut Vec<EffectSite>) {
             collect_effects_rec(acc_init, out);
             collect_effects_rec(body, out);
         }
+        CompiledExpr::Guard { expr, .. } => {
+            out.push(EffectSite::new("guard"));
+            collect_effects_rec(expr, out);
+        }
         // Leaf nodes and nodes with no sub-expressions
         CompiledExpr::Integer(_)
         | CompiledExpr::Float(_)

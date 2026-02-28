@@ -508,6 +508,21 @@ pub enum CompiledExpr {
         acc_init: Box<CompiledExpr>,
         body: Box<CompiledExpr>,
     },
+    /// Runtime guard assertion: (guard :no-nan expr), (guard :range [lo hi] expr),
+    /// (guard :shape [d1 d2] expr). Evaluates expr, checks the condition, returns
+    /// the value transparently. Always active when written in source code.
+    Guard {
+        check: GuardCheck,
+        expr: Box<CompiledExpr>,
+    },
+}
+
+/// Guard check type for runtime assertions.
+#[derive(Debug, Clone)]
+pub enum GuardCheck {
+    NoNan,
+    Range { lo: f64, hi: f64 },
+    Shape(Vec<i64>),
 }
 
 impl Default for CompilerContext {
