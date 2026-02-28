@@ -6,6 +6,7 @@
 pub mod builtins;
 pub mod env;
 pub mod eval;
+pub mod tracer;
 pub mod value;
 
 use crate::ast::SheafValue;
@@ -158,6 +159,77 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
             env.pop_scope();
             Ok(acc)
         }
+
+        CompiledExpr::Guard { check, expr } => {
+            let val = eval(expr, env)?;
+            if let Err(msg) = apply_guard_check(check, &val) {
+                eprintln!("\x1b[91m/!\\ Guard Breached: {:?}\x1b[0m", check);
+                eprintln!("{}", msg);
+                if let Some(ref tracer) = env.tracer {
+                    tracer.dump_ring_buffer();
+                }
+                std::process::exit(1);
+            }
+            Ok(val)
+        }
+    }
+}
+
+/// Check a guard condition against a value.
+/// Returns Ok(()) if the check passes, Err(message) if it fails.
+pub fn apply_guard_check(
+    check: &crate::core::compiler::GuardCheck,
+    val: &Value,
+) -> Result<(), String> {
+    use crate::core::compiler::GuardCheck;
+    match check {
+        GuardCheck::NoNan => {
+            if let Value::Tensor { data, .. } = val {
+                if data.iter().any(|x| !x.is_finite()) {
+                    let stats = format_value_brief(val);
+                    return Err(format!("Tensor contains NaN or Inf values: {}", stats));
+                }
+            }
+            Ok(())
+        }
+        GuardCheck::Range { lo, hi } => {
+            if let Value::Tensor { data, .. } = val {
+                let v_min = data.iter().cloned().fold(f64::INFINITY, f64::min);
+                let v_max = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                if v_min < *lo || v_max > *hi {
+                    return Err(format!(
+                        "Value range [{:.2e}, {:.2e}] outside allowed [{}, {}]",
+                        v_min, v_max, lo, hi
+                    ));
+                }
+            }
+            Ok(())
+        }
+        GuardCheck::Shape(expected) => {
+            if let Value::Tensor { data, .. } = val {
+                let actual: Vec<i64> = data.shape().iter().map(|&d| d as i64).collect();
+                if actual != *expected {
+                    return Err(format!(
+                        "Shape mismatch: expected {:?}, got {:?}",
+                        expected, actual
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn format_value_brief(val: &Value) -> String {
+    match val {
+        Value::Tensor { data, .. } => {
+            let shape: Vec<usize> = data.shape().to_vec();
+            let shape_str: String = shape.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("x");
+            let v_min = data.iter().cloned().fold(f64::INFINITY, f64::min);
+            let v_max = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            format!("f64[{}] [min:{:.2e} max:{:.2e}]", shape_str, v_min, v_max)
+        }
+        other => format!("{}", other),
     }
 }
 
@@ -369,12 +441,30 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
 
         // Fallback: interpret
         if let Some(ref body) = func_def.body_compiled {
+            // Tracing: log_call before, log_return after
+            let tracing = env.tracer.as_ref().map_or(false, |t| t.is_active(name));
+            if tracing {
+                let mut tracer = env.tracer.take().unwrap();
+                tracer.log_call(name, &pos_args);
+                env.tracer = Some(tracer);
+            }
+
             env.push_scope();
             for (param, val) in func_def.params.iter().zip(pos_args.iter()) {
                 env.set(param, val.clone());
             }
             let result = eval(body, env);
             env.pop_scope();
+
+            if tracing {
+                let mut tracer = env.tracer.take().unwrap();
+                if let Ok(ref val) = result {
+                    tracer.log_return(name, val);
+                    tracer.check_cli_guards(name, val);
+                }
+                env.tracer = Some(tracer);
+            }
+
             return result;
         }
     }

@@ -21,7 +21,6 @@ pub struct CallRecord {
     pub arg_values: Vec<Value>,
 }
 
-#[derive(Clone)]
 pub struct Env {
     scopes: Vec<HashMap<String, Value>>,
     pub registry: HashMap<String, FunctionDef>,
@@ -29,6 +28,8 @@ pub struct Env {
     /// When set, records the first call to each registry function.
     /// Used by `sheaf build --trace-with` to discover concrete param shapes.
     pub call_records: Option<HashMap<String, CallRecord>>,
+    /// Runtime tracer for function call logging and CLI guards.
+    pub tracer: Option<crate::interpreter::tracer::Tracer>,
 }
 
 impl Env {
@@ -38,6 +39,7 @@ impl Env {
             registry: HashMap::new(),
             vmfb_sessions: Vec::new(),
             call_records: None,
+            tracer: None,
         }
     }
 
@@ -47,6 +49,7 @@ impl Env {
             registry,
             vmfb_sessions: Vec::new(),
             call_records: None,
+            tracer: None,
         }
     }
 
