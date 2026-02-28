@@ -84,4 +84,14 @@ impl Env {
             self.scopes.pop();
         }
     }
+
+    pub fn all_names(&self) -> Vec<String> {
+        let mut names = std::collections::HashSet::new();
+        for scope in &self.scopes {
+            names.extend(scope.keys().cloned());
+        }
+        let mut sorted: Vec<String> = names.into_iter().collect();
+        sorted.sort();
+        sorted
+    }
 }

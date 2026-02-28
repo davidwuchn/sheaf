@@ -9,7 +9,7 @@ description = "A functional language for differentiable programming"
 # Binary CLI
 [[bin]]
 name = "sheaf"
-path = "src/bin/sheaf.rs"
+path = "src/bin/sheaf/main.rs"
 
 # Library - sheaf-compiler.so
 [lib]

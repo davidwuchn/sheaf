@@ -166,4 +166,16 @@ impl Interpreter {
         }
         Ok(last)
     }
+
+    pub fn registry_names(&self) -> Vec<String> {
+        self.compiler.registry.keys().cloned().collect()
+    }
+
+    pub fn env(&self) -> &Env {
+        &self.env
+    }
+
+    pub fn env_mut(&mut self) -> &mut Env {
+        &mut self.env
+    }
 }
