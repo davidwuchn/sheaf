@@ -863,3 +863,73 @@ fn test_flatten_leaves() {
     let result = eval("(first (flatten {:a 1.0 :b 2.0}))");
     assert!(result.contains("1.0") && result.contains("2.0"), "flatten: got {}", result);
 }
+
+// Guard tests
+
+#[test]
+fn test_guard_no_nan_passes() {
+    assert_eq!(eval("(guard :no-nan [1.0 2.0 3.0])"), "[1. 2. 3.]");
+}
+
+#[test]
+fn test_guard_shape_passes() {
+    assert_eq!(eval("(guard :shape [3] [1.0 2.0 3.0])"), "[1. 2. 3.]");
+}
+
+#[test]
+fn test_guard_range_passes() {
+    assert_eq!(eval("(guard :range [0.0 10.0] [1.0 5.0 9.0])"), "[1. 5. 9.]");
+}
+
+#[test]
+fn test_guard_no_nan_breach() {
+    // NaN breach causes process::exit(1), so test via subprocess
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_sheaf"))
+        .args(["-c", "(guard :no-nan [1.0 (/ 0.0 0.0)])"])
+        .output()
+        .expect("failed to run sheaf");
+    assert!(!output.status.success(), "Expected exit code 1 for NaN breach");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Guard Breached"), "Expected breach message, got: {}", stderr);
+}
+
+#[test]
+fn test_guard_shape_breach() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_sheaf"))
+        .args(["-c", "(guard :shape [5] [1.0 2.0 3.0])"])
+        .output()
+        .expect("failed to run sheaf");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Shape mismatch"), "Expected shape mismatch, got: {}", stderr);
+}
+
+#[test]
+fn test_guard_range_breach() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_sheaf"))
+        .args(["-c", "(guard :range [0.0 5.0] [1.0 10.0])"])
+        .output()
+        .expect("failed to run sheaf");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Guard Breached"), "Expected breach message, got: {}", stderr);
+}
+
+// Tracing test: eval_source_with_tracing should not crash
+
+#[test]
+fn test_tracing_does_not_crash() {
+    use sheaf_compiler::interpreter::eval::eval_source_with_tracing;
+    use sheaf_compiler::interpreter::tracer::{LogFormat, TraceLevel, TracerConfig};
+
+    let config = TracerConfig {
+        enabled: true,
+        scope_filter: None,
+        level: TraceLevel::Normal,
+        format: LogFormat::Console,
+        cli_guards: Vec::new(),
+    };
+    let source = "(defn f [x] (+ x 1.0))\n(f [1.0 2.0])";
+    let result = eval_source_with_tracing(source, None, config);
+    assert!(result.is_ok(), "tracing eval failed: {:?}", result.err());
+}
