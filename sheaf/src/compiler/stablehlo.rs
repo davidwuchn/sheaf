@@ -951,9 +951,6 @@ impl StableHLOEmitter {
         x_ty: &StableHLOType,
         y_ty: &StableHLOType,
     ) -> (Register, StableHLOType) {
-        // Result type is the same as x and y (they should match)
-        let result_ty = x_ty.clone();
-
         // Use stablehlo.select: select(pred, on_true, on_false)
         self.emit_select(condition, x, y, condition_ty, x_ty, y_ty)
     }
@@ -1158,11 +1155,6 @@ impl StableHLOEmitter {
             keepdim_shape[axis_usize] = 1;
             let keepdim_ty = StableHLOType::f32_tensor(keepdim_shape);
 
-            // broadcast_in_dim to restore the axis
-            let dims: Vec<String> = (0..ndim)
-                .filter(|i| *i != axis_usize)
-                .map(|i| i.to_string())
-                .collect();
             let keepdim_reg = self.fresh_register();
             self.body.push(format!(
                 "    {} = stablehlo.reshape {} : ({}) -> {}",

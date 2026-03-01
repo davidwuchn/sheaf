@@ -222,8 +222,6 @@ fn resolve_module_path(
     raw: &str,
     loc: &SourceLocation,
 ) -> SheafResult<std::path::PathBuf> {
-    use std::path::Path;
-
     // Strip .shf extension for searching, or keep it if explicitly given
     let has_slash = raw.contains('/');
 

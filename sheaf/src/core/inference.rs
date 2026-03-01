@@ -5,7 +5,7 @@
 
 use crate::compiler::stablehlo::StableHLOType;
 use crate::core::compiler::{CompiledExpr, CompilerContext};
-use crate::core::error::{SheafError, SheafResult, SourceLocation};
+use crate::core::error::SheafResult;
 
 /// Function signature (parameter types + return type)
 #[derive(Debug, Clone, PartialEq)]
