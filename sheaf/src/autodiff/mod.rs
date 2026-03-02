@@ -45,9 +45,25 @@ fn transpose(a: CompiledExpr) -> CompiledExpr {
 }
 
 /// Inline let-bindings into the body by replacing symbols with their values.
+///
+/// Handles sequential let semantics: each binding can reference previous ones,
+/// and shadowed names (e.g. from `as->`) resolve to the last binding.
 fn substitute_bindings(body: &CompiledExpr, bindings: &[(String, CompiledExpr)]) -> CompiledExpr {
-    let mut result = body.clone();
+    // Build resolved environment: each binding sees all previous bindings.
+    let mut env: Vec<(String, CompiledExpr)> = Vec::new();
     for (name, value) in bindings {
+        // Substitute all previous bindings into this binding's value
+        let mut resolved = value.clone();
+        for (prev_name, prev_val) in &env {
+            resolved = replace_symbol(&resolved, prev_name, prev_val);
+        }
+        // Remove any previous binding with the same name (shadowing)
+        env.retain(|(n, _)| n != name);
+        env.push((name.clone(), resolved));
+    }
+    // Substitute all final bindings into the body
+    let mut result = body.clone();
+    for (name, value) in &env {
         result = replace_symbol(&result, name, value);
     }
     result
