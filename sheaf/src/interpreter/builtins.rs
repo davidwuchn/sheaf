@@ -118,6 +118,7 @@ pub fn register_builtins(env: &mut Env) {
     env.set_builtin("random-split", builtin_random_split);
     env.set_builtin("random-normal", builtin_random_normal);
     env.set_builtin("random-uniform", builtin_random_uniform);
+    env.set_builtin("random-randint", builtin_random_randint);
 }
 
 fn to_array(val: &Value) -> Result<(ArrayD<f64>, Dtype), crate::core::error::SheafError> {
@@ -126,7 +127,7 @@ fn to_array(val: &Value) -> Result<(ArrayD<f64>, Dtype), crate::core::error::She
         Value::Float(f) => Ok((ArrayD::from_elem(IxDyn(&[]), *f), Dtype::F32)),
         Value::Bool(b) => Ok((ArrayD::from_elem(IxDyn(&[]), if *b { 1.0 } else { 0.0 }), Dtype::I32)),
         Value::Tensor { data, dtype } => Ok((data.clone(), *dtype)),
-        _ => Err(runtime_error(format!("Expected numeric value, got {}", val.type_name()))),
+        _ => Err(runtime_error(format!("Expected numeric value, got {} ({})", val.type_name(), val))),
     }
 }
 
@@ -430,6 +431,17 @@ fn builtin_append_and_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_eq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 2 { return Err(runtime_error("= requires 2 arguments")); }
+    // Handle non-numeric types directly
+    match (&args[0], &args[1]) {
+        (Value::String(a), Value::String(b)) => return Ok(Value::Bool(a == b)),
+        (Value::Keyword(a), Value::Keyword(b)) => return Ok(Value::Bool(a == b)),
+        (Value::Bool(a), Value::Bool(b)) => return Ok(Value::Bool(a == b)),
+        (Value::Nil, Value::Nil) => return Ok(Value::Bool(true)),
+        (Value::Nil, _) | (_, Value::Nil) => return Ok(Value::Bool(false)),
+        (Value::String(_), _) | (_, Value::String(_)) => return Ok(Value::Bool(false)),
+        (Value::Keyword(_), _) | (_, Value::Keyword(_)) => return Ok(Value::Bool(false)),
+        _ => {}
+    }
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
     Ok(Value::Bool(a == b))
@@ -440,13 +452,23 @@ fn builtin_elem_eq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_neq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    if args.len() != 2 { return Err(runtime_error("!= requires 2 arguments")); }
+    // Handle non-numeric types directly
+    match (&args[0], &args[1]) {
+        (Value::String(a), Value::String(b)) => return Ok(Value::Bool(a != b)),
+        (Value::Keyword(a), Value::Keyword(b)) => return Ok(Value::Bool(a != b)),
+        (Value::Bool(a), Value::Bool(b)) => return Ok(Value::Bool(a != b)),
+        (Value::Nil, Value::Nil) => return Ok(Value::Bool(false)),
+        (Value::Nil, _) | (_, Value::Nil) => return Ok(Value::Bool(true)),
+        (Value::String(_), _) | (_, Value::String(_)) => return Ok(Value::Bool(true)),
+        (Value::Keyword(_), _) | (_, Value::Keyword(_)) => return Ok(Value::Bool(true)),
+        _ => {}
+    }
     // For scalars: return Bool
-    if args.len() == 2 {
-        if let (Value::Int(_) | Value::Float(_) | Value::Bool(_), Value::Int(_) | Value::Float(_) | Value::Bool(_)) = (&args[0], &args[1]) {
-            let a = args[0].to_f64().unwrap();
-            let b = args[1].to_f64().unwrap();
-            return Ok(Value::Bool((a - b).abs() > 1e-10));
-        }
+    if let (Value::Int(_) | Value::Float(_) | Value::Bool(_), Value::Int(_) | Value::Float(_) | Value::Bool(_)) = (&args[0], &args[1]) {
+        let a = args[0].to_f64().unwrap();
+        let b = args[1].to_f64().unwrap();
+        return Ok(Value::Bool((a - b).abs() > 1e-10));
     }
     cmp_op(args, |a, b| if (a - b).abs() > 1e-10 { 1.0 } else { 0.0 }, Dtype::I32)
 }
@@ -1009,6 +1031,18 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                 .map_err(|e| runtime_error(e.to_string()))?;
             return Ok(Value::Tensor { data: result, dtype });
         }
+    }
+
+    // String concat: if first arg is a string, join all args as strings
+    if matches!(&args[0], Value::String(_)) {
+        let mut s = String::new();
+        for arg in args {
+            match arg {
+                Value::String(st) => s.push_str(st),
+                other => s.push_str(&format!("{}", other)),
+            }
+        }
+        return Ok(Value::String(s));
     }
 
     // Flat list concat (no axis, lists of non-numeric or heterogeneous)
@@ -1777,6 +1811,40 @@ fn builtin_random_uniform(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let arr = ArrayD::from_shape_vec(IxDyn(&shape), data)
         .map_err(|e| runtime_error(format!("random-uniform: shape error: {}", e)))?;
     Ok(Value::tensor_f32(arr))
+}
+
+/// random-randint - Sample integers in [low, high): (random-randint key shape low high)
+fn builtin_random_randint(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    if args.len() != 4 {
+        return Err(runtime_error("random-randint: expected (random-randint key shape low high)"));
+    }
+    let mut state = key_to_seed(&args[0]);
+    let shape = parse_shape(&args[1])?;
+    let low = match &args[2] {
+        Value::Int(n) => *n,
+        Value::Float(f) => *f as i64,
+        _ => return Err(runtime_error("random-randint: low must be integer")),
+    };
+    let high = match &args[3] {
+        Value::Int(n) => *n,
+        Value::Float(f) => *f as i64,
+        _ => return Err(runtime_error("random-randint: high must be integer")),
+    };
+    if high <= low {
+        return Err(runtime_error("random-randint: high must be > low"));
+    }
+    let range = (high - low) as u64;
+    let n: usize = shape.iter().product();
+    let data: Vec<f64> = (0..n)
+        .map(|_| {
+            let u = splitmix64(&mut state);
+            let idx = (u * range as f64) as i64;
+            (low + idx.min(high - low - 1)) as f64
+        })
+        .collect();
+    let arr = ArrayD::from_shape_vec(IxDyn(&shape), data)
+        .map_err(|e| runtime_error(format!("random-randint: shape error: {}", e)))?;
+    Ok(Value::tensor_i32(arr))
 }
 
 fn parse_shape(val: &Value) -> Result<Vec<usize>, crate::core::error::SheafError> {

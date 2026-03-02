@@ -57,6 +57,7 @@ impl Value {
         match self {
             Value::Int(n) => Some(*n as f64),
             Value::Float(f) => Some(*f),
+            Value::Tensor { data, .. } if data.ndim() == 0 => data.first().copied(),
             _ => None,
         }
     }
