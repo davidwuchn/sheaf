@@ -317,6 +317,39 @@ fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     }
 }
 
+/// Expand `...` in einsum subscripts into explicit batch labels.
+/// E.g. "...nd,d->...n" with shapes [1,5,9] and [9] becomes "And,d->An"
+/// where A is a generated batch label covering the extra dimension.
+fn expand_einsum_ellipsis(subscript: &str, shape_a: &[usize], shape_b: &[usize]) -> String {
+    if !subscript.contains("...") {
+        return subscript.to_string();
+    }
+    let arrow = match subscript.find("->") {
+        Some(i) => i,
+        None => return subscript.replace("...", ""),
+    };
+    let lhs = &subscript[..arrow];
+    let parts: Vec<&str> = lhs.split(',').collect();
+
+    // Count explicit (non-ellipsis) chars in each operand
+    let explicit_a = parts[0].replace("...", "").len();
+    let explicit_b = if parts.len() > 1 { parts[1].replace("...", "").len() } else { 0 };
+
+    // Number of batch dims = actual ndim - explicit dims
+    let batch_a = shape_a.len().saturating_sub(explicit_a);
+    let batch_b = shape_b.len().saturating_sub(explicit_b);
+    let n_batch = batch_a.max(batch_b);
+
+    // Generate batch labels using uppercase letters not in the subscript
+    let batch_labels: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        .chars()
+        .filter(|c| !subscript.contains(*c))
+        .take(n_batch)
+        .collect();
+
+    subscript.replace("...", &batch_labels)
+}
+
 fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 3 {
         return Err(runtime_error("einsum requires exactly 3 arguments: subscript, a, b"));
@@ -328,9 +361,8 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (a, _) = to_array(&args[1])?;
     let (b, _) = to_array(&args[2])?;
 
-    // Normalise ellipsis — for "...i,...i->..." with 1D inputs, ellipsis covers
-    // zero batch dims, reducing to "i,i->"
-    let subscript = subscript.replace("...", "");
+    // Expand ellipsis into explicit batch dimension labels
+    let subscript = expand_einsum_ellipsis(&subscript, a.shape(), b.shape());
 
     let arrow = subscript.find("->")
         .ok_or_else(|| runtime_error("einsum: subscript must contain '->'"))?;
@@ -536,11 +568,17 @@ fn builtin_not(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_shape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    if args.len() != 1 { return Err(runtime_error("shape requires 1 argument")); }
+    if args.is_empty() { return Err(runtime_error("shape requires at least 1 argument")); }
     match &args[0] {
         Value::Tensor { data, .. } => {
-            let shape: Vec<f64> = data.shape().iter().map(|&s| s as f64).collect();
-            Ok(Value::tensor_f32(ArrayD::from_shape_vec(IxDyn(&[shape.len()]), shape).unwrap()))
+            if args.len() >= 2 {
+                // (shape tensor axis) -> size of that dimension
+                let axis = args[1].to_f64().unwrap() as usize;
+                Ok(Value::Int(data.shape()[axis] as i64))
+            } else {
+                let shape: Vec<f64> = data.shape().iter().map(|&s| s as f64).collect();
+                Ok(Value::tensor_f32(ArrayD::from_shape_vec(IxDyn(&[shape.len()]), shape).unwrap()))
+            }
         }
         Value::List(items) => Ok(Value::Int(items.len() as i64)),
         _ => Err(runtime_error(format!("shape: expected tensor, got {}", args[0].type_name()))),
