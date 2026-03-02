@@ -1704,10 +1704,10 @@ Evaluates expressions in a local scope where each variable name is bound to its 
 
 ### defn
 
-**Type:** special-form  
-**Signature:** `(defn name [params] [:jit] body)`
+**Type:** special-form
+**Signature:** `(defn name [params] body ...)`
 
-Binds a global name to a function defined by a parameter vector and a body expression. The optional `:jit` keyword enables XLA compilation for the function, optimizing it for accelerated backends.
+Binds a global name to a function. Multiple body expressions are allowed (implicit `do`): all are evaluated in order, and the last value is returned.
 
 ```sheaf
 (defn square [x]
@@ -1715,9 +1715,10 @@ Binds a global name to a function defined by a parameter vector and a body expre
 
 (square 5)            ; => 25
 
-(defn fast-predict [x w b] :jit
-  (sigmoid (+ (@ x w) b)))
-
+;; Multiple body forms with implicit do
+(defn train-step [model lr]
+  (print "training...")
+  (sgd-update model lr))
 ```
 
 ---
@@ -2146,16 +2147,19 @@ Calls a string method on `target`. This is the primary way to manipulate strings
 
 ### print
 
-**Type:** function  
-**Signature:** `(print msg)`, `(print fmt arg1 arg2 ...)`
+**Type:** function
+**Signature:** `(print arg ...)`, `(print fmt arg1 arg2 ...)`
 
-Prints a value to stdout. When the first argument is a string containing `{}` placeholders and additional arguments are provided, `print` performs automatic format-string interpolation. This is the idiomatic way to display computed values without an explicit `str-call`.
+Prints values to stdout. With multiple arguments, values are space-separated. If the first argument is a format string (contains `{}` or `{:`), uses format-string interpolation instead.
 
 ```sheaf
 (print "hello")                        ; prints: hello
 (print 42)                             ; prints: 42
 
-;; F-string style: placeholders filled by subsequent arguments
+;; Variadic: space-separated
+(print "x=" x "y=" y)                 ; prints: x= 42 y= 7
+
+;; Format string: placeholders filled by subsequent arguments
 (print "x={} y={}" 10 20)             ; prints: x=10 y=20
 (print "loss={:.4f} step={}" 0.0532 100)  ; prints: loss=0.0532 step=100
 ```
