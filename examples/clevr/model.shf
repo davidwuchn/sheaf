@@ -115,7 +115,8 @@
 (defn scene-to-attention [scene]
   (sum (abs scene) :axis -1))
 
-;; Execute query and return [result, [attention-step ...]] for visualization.
+;; Execute query and return {:result tensor :steps [att ...]} for visualization.
+;; Steps are collected as lists to allow heterogeneous tensor shapes.
 (defn execute-query-with-steps [scene q params]
   (let [op (first q)
         arg1 (second q)]
@@ -124,76 +125,58 @@
       "filter-color"
       (let [result (filter-color scene arg1 params)
             att (scene-to-attention result)]
-        [result [att]])
+        {:result result :steps (cons att '[])})
 
       "filter-shape"
       (let [result (filter-shape scene arg1 params)
             att (scene-to-attention result)]
-        [result [att]])
+        {:result result :steps (cons att '[])})
 
       "unique"
-      (let [sub-result (execute-query-with-steps scene arg1 params)
-            sub-scene (get sub-result 0)
-            sub-atts (get sub-result 1)
-            result (unique sub-scene params)
+      (let [sub (execute-query-with-steps scene arg1 params)
+            result (unique (get sub :result) params)
             att (scene-to-attention result)]
-        [result (concat sub-atts [att])])
+        {:result result :steps (append (get sub :steps) att)})
 
       "leftmost"
-      (let [sub-result (execute-query-with-steps scene arg1 params)
-            sub-scene (get sub-result 0)
-            sub-atts (get sub-result 1)
-            result (leftmost sub-scene params)
-            att (scene-to-attention sub-scene)]
-        [result (concat sub-atts [att])])
+      (let [sub (execute-query-with-steps scene arg1 params)
+            result (leftmost (get sub :result) params)
+            att (scene-to-attention (get sub :result))]
+        {:result result :steps (append (get sub :steps) att)})
 
       "rightmost"
-      (let [sub-result (execute-query-with-steps scene arg1 params)
-            sub-scene (get sub-result 0)
-            sub-atts (get sub-result 1)
-            result (rightmost sub-scene params)
-            att (scene-to-attention sub-scene)]
-        [result (concat sub-atts [att])])
+      (let [sub (execute-query-with-steps scene arg1 params)
+            result (rightmost (get sub :result) params)
+            att (scene-to-attention (get sub :result))]
+        {:result result :steps (append (get sub :steps) att)})
 
       "left-of"
-      (let [sub-result (execute-query-with-steps scene arg1 params)
-            sub-scene (get sub-result 0)
-            sub-atts (get sub-result 1)
-            result (left-of scene sub-scene params)
+      (let [sub (execute-query-with-steps scene arg1 params)
+            result (left-of scene (get sub :result) params)
             att (scene-to-attention result)]
-        [result (concat sub-atts [att])])
+        {:result result :steps (append (get sub :steps) att)})
 
       "query-color"
-      (let [sub-result (execute-query-with-steps scene arg1 params)
-            sub-scene (get sub-result 0)
-            sub-atts (get sub-result 1)
-            result (query-color sub-scene)]
-        [result (concat sub-atts [result])])
+      (let [sub (execute-query-with-steps scene arg1 params)
+            result (query-color (get sub :result))]
+        {:result result :steps (append (get sub :steps) result)})
 
       "query-shape"
-      (let [sub-result (execute-query-with-steps scene arg1 params)
-            sub-scene (get sub-result 0)
-            sub-atts (get sub-result 1)
-            result (query-shape sub-scene)]
-        [result (concat sub-atts [result])])
+      (let [sub (execute-query-with-steps scene arg1 params)
+            result (query-shape (get sub :result))]
+        {:result result :steps (append (get sub :steps) result)})
 
       "exists?"
-      (let [sub-result (execute-query-with-steps scene arg1 params)
-            sub-scene (get sub-result 0)
-            sub-atts (get sub-result 1)
-            result (exists? sub-scene params)]
-        [result (concat sub-atts [(scene-to-attention sub-scene)])])
+      (let [sub (execute-query-with-steps scene arg1 params)
+            result (exists? (get sub :result) params)]
+        {:result result :steps (append (get sub :steps) (scene-to-attention (get sub :result)))})
 
       "intersect"
       (let [r1 (execute-query-with-steps scene arg1 params)
-            s1 (get r1 0)
-            atts1 (get r1 1)
             r2 (execute-query-with-steps scene (nth q 2) params)
-            s2 (get r2 0)
-            atts2 (get r2 1)
-            result (intersect s1 s2)
+            result (intersect (get r1 :result) (get r2 :result))
             att (scene-to-attention result)]
-        [result (concat atts1 atts2 [att])])
+        {:result result :steps (append (concat (get r1 :steps) (get r2 :steps)) att)})
 
       ; Default: just execute query
-      [(execute-query scene q params) []])))
+      {:result (execute-query scene q params) :steps '[]})))

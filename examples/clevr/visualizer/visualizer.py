@@ -1,265 +1,141 @@
 """
-CLEVR Visualizer
+CLEVR Neuro-Symbolic Visualizer (V2)
 
-Dependencies: streamlit, matplotlib
-Run: streamlit run app.py
+Uses Sheaf V2 Rust backend via subprocess.
+Dependencies: streamlit, matplotlib, numpy
+Run: cd examples/clevr/visualizer && streamlit run visualizer.py
 """
 
 import os
-import sys
+import shutil
+import subprocess
+import random
 
-import jax
-import jax.numpy as jnp
+import numpy as np
 import matplotlib.pyplot as plt
 import streamlit as st
 
-# Add parent directory to path for data module
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, parent_dir)
+COLORS = ["red", "green", "blue", "yellow"]
+SHAPES = ["circle", "square", "triangle"]
+N_OBJECTS = 5
+N_FEATURES = 9
 
-# Add sheaf root to path
-sheaf_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "/../.."))
-sys.path.insert(0, sheaf_root)
-
-from sheaf import Sheaf
-
-# Load data module from data.shf
-data = Sheaf()
-data_path = os.path.join(parent_dir, "data.shf")
-with open(data_path, "r") as f:
-    data.load(f.read())
-
-# Pre-configured queries
-
-example_queries = {
-    "Color of leftmost circle": [
-        "query-color",
-        ["leftmost", ["filter-shape", ":circle"]],
-    ],
-    "Exists red square?": [
-        "exists?",
-        ["intersect", ["filter-color", ":red"], ["filter-shape", ":square"]],
-    ],
-    "Shape left of blue object": [
-        "query-shape",
-        ["left-of", ["unique", ["filter-color", ":blue"]]],
-    ],
-    "Color of rightmost object": [
-        "query-color",
-        ["rightmost", ["filter-shape", ":square"]],
-    ],
-    "Exists yellow triangle?": [
-        "exists?",
-        ["intersect", ["filter-color", ":yellow"], ["filter-shape", ":triangle"]],
-    ],
-}
-
-
-# Color mappings
-COLOR_MAP = {
+COLOR_HEX = {
     "red": "#FF4444",
     "green": "#44FF44",
     "blue": "#4444FF",
     "yellow": "#FFFF44",
 }
+SHAPE_MARKER = {"circle": "o", "square": "s", "triangle": "^"}
 
-SHAPE_SYMBOLS = {
-    "circle": "o",
-    "square": "s",
-    "triangle": "^",
+EXAMPLE_QUERIES = {
+    "Color of leftmost circle": [
+        "query-color", ["leftmost", ["filter-shape", ":circle"]],
+    ],
+    "Exists red square?": [
+        "exists?", ["intersect", ["filter-color", ":red"], ["filter-shape", ":square"]],
+    ],
+    "Shape left of blue object": [
+        "query-shape", ["left-of", ["unique", ["filter-color", ":blue"]]],
+    ],
+    "Color of rightmost square": [
+        "query-color", ["rightmost", ["filter-shape", ":square"]],
+    ],
+    "Exists yellow triangle?": [
+        "exists?", ["intersect", ["filter-color", ":yellow"], ["filter-shape", ":triangle"]],
+    ],
 }
 
-
-def load_sheaf_model():
-    shf = Sheaf()
-    model_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    model_path = os.path.join(model_dir, "model.shf")
-    old_cwd = os.getcwd()
-    os.chdir(model_dir)
-    try:
-        with open(model_path, "r") as f:
-            shf.load(f.read())
-    finally:
-        os.chdir(old_cwd)
-
-    # Initialize parameters with optimized values
-    init_key = jax.random.PRNGKey(42)
-    params = shf.init_clevr_params(init_key)
-
-    return shf, params
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CLEVR_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+PROJECT_ROOT = os.path.abspath(os.path.join(CLEVR_DIR, "..", ".."))
 
 
-def plot_scene(scene_dict, attention_weights=None, title="Scene"):
-    """
-    Plot 2D scene with objects as colored shapes.
-
-    Args:
-        scene_dict: Scene dictionary from data.py
-        attention_weights: Optional [N_objects] array for highlighting
-        title: Plot title
-
-    Returns:
-        matplotlib figure
-    """
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_aspect("equal")
-    ax.set_xlabel("X Position")
-    ax.set_ylabel("Y Position")
-    ax.set_title(title)
-    ax.grid(True, alpha=0.3)
-
-    objects = scene_dict["objects"]
-    n_objects = len(objects)
-
-    # Normalize attention weights if provided
-    if attention_weights is not None:
-        # Convert JAX array to numpy
-        attention_weights = jnp.array(attention_weights)
-        # Normalize to [0, 1]
-        att_min = jnp.min(attention_weights)
-        att_max = jnp.max(attention_weights)
-        if att_max > att_min:
-            attention_norm = (attention_weights - att_min) / (att_max - att_min)
-        else:
-            attention_norm = jnp.ones_like(attention_weights)
-    else:
-        attention_norm = jnp.ones(n_objects)
-
-    # Plot each object
-    for i, obj in enumerate(objects):
-        x, y = obj["x"], obj["y"]
-        color = COLOR_MAP[obj["color"]]
-        shape = obj["shape"]
-        marker = SHAPE_SYMBOLS[shape]
-
-        # Alpha based on attention weight
-        alpha = float(attention_norm[i]) * 0.8 + 0.2  # Min alpha = 0.2
-        size = 200 + float(attention_norm[i]) * 400  # Size based on attention
-
-        # Plot marker
-        ax.scatter(
-            x,
-            y,
-            c=color,
-            marker=marker,
-            s=size,
-            alpha=alpha,
-            edgecolors="black",
-            linewidths=2,
-        )
-
-        # Add label
-        label = f"{obj['color']}\n{obj['shape']}"
-        if attention_weights is not None:
-            label += f"\n{float(attention_weights[i]):.2f}"
-
-        ax.text(
-            x,
-            y - 0.08,
-            label,
-            ha="center",
-            va="top",
-            fontsize=8,
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.7),
-        )
-
-    return fig
+def find_sheaf_binary():
+    path_bin = shutil.which("sheaf")
+    if path_bin:
+        return path_bin
+    cargo_bin = os.path.join(PROJECT_ROOT, "sheaf", "target", "release", "sheaf")
+    if os.path.exists(cargo_bin):
+        return cargo_bin
+    return None
 
 
-def decode_answer(prediction, query_type):
-    """
-    Decode prediction to human-readable answer.
-
-    Args:
-        prediction: Model output [Batch, D]
-        query_type: "color", "shape", or "boolean"
-
-    Returns:
-        answer string, probabilities dict
-    """
-    pred = prediction[0]  # Remove batch dimension
-
-    if query_type == "color":
-        probs = jax.nn.softmax(pred)
-        colors = list(data.colors())
-        answer_idx = int(jnp.argmax(probs))
-        answer = colors[answer_idx]
-        prob_dict = {colors[i]: float(probs[i]) for i in range(len(colors))}
-        return answer, prob_dict
-
-    elif query_type == "shape":
-        probs = jax.nn.softmax(pred)
-        shapes = list(data.shapes())
-        answer_idx = int(jnp.argmax(probs))
-        answer = shapes[answer_idx]
-        prob_dict = {shapes[i]: float(probs[i]) for i in range(len(shapes))}
-        return answer, prob_dict
-
-    elif query_type == "boolean":
-        # pred is already a probability (0-1) from sigmoid in the model
-        prob_yes = float(pred)
-        answer = "Yes" if prob_yes > 0.5 else "No"
-        prob_dict = {"Yes": prob_yes, "No": 1 - prob_yes}
-        return answer, prob_dict
-
-    return "Unknown", {}
-
-
-def generate_fixed_scene():
-    """Generate a scene with 5 objects: all colors and shapes represented."""
-    import random
-    import time
-
-    # Fixed positions that are well-distributed and visible
-    base_positions = [
-        (0.2, 0.75),
-        (0.5, 0.8),
-        (0.8, 0.75),
-        (0.35, 0.3),
-        (0.65, 0.25),
-    ]
-
-    # Ensure we have all colors and shapes represented
-    colors = list(data.colors())  # [red, green, blue, yellow]
-    shapes = list(data.shapes())  # [circle, square, triangle]
-
-    # Shuffle colors and shapes to create different combinations
-    seed = int(time.time() * 1000) % 100000
-    random.seed(seed)
-    colors_shuffled = colors.copy()
-    shapes_shuffled = shapes.copy()
-    random.shuffle(colors_shuffled)
-    random.shuffle(shapes_shuffled)
-
-    # Create objects with shuffled colors and shapes
+def generate_scene():
     objects = []
-    colors_cycle = (colors_shuffled + colors_shuffled)[:5]  # Repeat to get 5
-    shapes_cycle = (shapes_shuffled + shapes_shuffled)[:5]  # Repeat to get 5
+    for _ in range(N_OBJECTS):
+        objects.append({
+            "color": random.choice(COLORS),
+            "shape": random.choice(SHAPES),
+            "x": round(random.uniform(0.1, 0.9), 4),
+            "y": round(random.uniform(0.1, 0.9), 4),
+        })
+    return {"objects": objects, "n_objects": N_OBJECTS}
 
-    for i, (x, y) in enumerate(base_positions):
-        objects.append(
-            {
-                "color": colors_cycle[i],
-                "shape": shapes_cycle[i],
-                "x": x,
-                "y": y,
-            }
-        )
 
-    # Add small random jitter to positions
-    key = jax.random.PRNGKey(seed)
-    keys = jax.random.split(key, 5)
-    for i, obj in enumerate(objects):
-        x_noise = float(jax.random.uniform(keys[i], minval=-0.05, maxval=0.05))
-        y_noise = float(jax.random.uniform(keys[i], minval=-0.05, maxval=0.05))
-        obj["x"] = max(0.1, min(0.9, obj["x"] + x_noise))
-        obj["y"] = max(0.1, min(0.9, obj["y"] + y_noise))
+def scene_to_tensor(scene):
+    tensor = np.zeros((N_OBJECTS, N_FEATURES), dtype=np.float32)
+    for i, obj in enumerate(scene["objects"]):
+        tensor[i, COLORS.index(obj["color"])] = 1.0
+        tensor[i, 4 + SHAPES.index(obj["shape"])] = 1.0
+        tensor[i, 7] = obj["x"]
+        tensor[i, 8] = obj["y"]
+    return tensor
 
-    scene = {"objects": objects, "n_objects": 5}
-    scene_tensor = data.scene_to_tensor(scene)
-    return scene, scene_tensor
+
+def format_query_sheaf(query):
+    """Convert Python query list to Sheaf vector notation."""
+    if isinstance(query, str):
+        return f'"{query}"'
+    elif isinstance(query, list):
+        return "[" + " ".join(format_query_sheaf(e) for e in query) + "]"
+    return str(query)
+
+
+def run_sheaf_query(sheaf_bin, scene_tensor, query):
+    tensor_str = " ".join(f"{x:.6f}" for x in scene_tensor.flatten())
+    query_str = format_query_sheaf(query)
+    code = f'(use ./bridge.shf) (run-bridge (tensor [{tensor_str}]) {query_str})'
+
+    proc = subprocess.run(
+        [sheaf_bin, "-c", code],
+        capture_output=True, text=True, cwd=CLEVR_DIR, timeout=30,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"Sheaf error:\n{proc.stderr}\n{proc.stdout}")
+
+    return parse_output(proc.stdout)
+
+
+def parse_output(text):
+    result = {"steps": []}
+    for line in text.strip().split("\n"):
+        line = line.strip()
+        if line.startswith("RESULT:"):
+            _, rtype, answer = line.split(":", 2)
+            result["type"] = rtype
+            result["answer"] = answer
+        elif line.startswith("LOGITS:"):
+            result["logits"] = [float(x) for x in line[7:].split(",") if x]
+        elif line.startswith("STEP:"):
+            result["steps"].append([float(x) for x in line[5:].split(",") if x])
+    return result
+
+
+def extract_op_names(query):
+    """Extract operation names in depth-first order (matching step order)."""
+    ops = []
+
+    def walk(q):
+        if not isinstance(q, list) or len(q) == 0:
+            return
+        for arg in q[1:]:
+            if isinstance(arg, list) and len(arg) > 1 and not str(arg[0]).startswith(":"):
+                walk(arg)
+        ops.append(q[0])
+
+    walk(query)
+    return ops
 
 
 def infer_query_type(query):
@@ -268,270 +144,254 @@ def infer_query_type(query):
         return "color"
     elif op == "query-shape":
         return "shape"
-    elif op == "exists?":
-        return "boolean"
-    return "color"  # default
+    return "boolean"
 
 
-def extract_operation_names(query):
-    """
-    Extract operation names from query in depth-first order.
-    This matches the order that execute-query-with-steps returns attention tensors.
-    """
-    ops = []
-
-    def traverse(q):
-        if not isinstance(q, list) or len(q) == 0:
-            return
-
-        op = q[0]
-
-        # Process all sub-queries first (depth-first)
-        for i in range(1, len(q)):
-            arg = q[i]
-            if isinstance(arg, list):
-                traverse(arg)
-
-        # Add this operation
-        ops.append(op)
-
-    traverse(query)
-    return ops
-
-
-def plot_probability_distribution(prob_dict, title="Answer Probabilities"):
-    fig, ax = plt.subplots(figsize=(8, 4))
-
-    labels = list(prob_dict.keys())
-    values = list(prob_dict.values())
-
-    bars = ax.bar(labels, values, color="skyblue", edgecolor="black")
-
-    # Highlight max
-    max_idx = values.index(max(values))
-    bars[max_idx].set_color("lightcoral")
-
-    ax.set_ylabel("Probability")
-    ax.set_title(title)
+def plot_scene(scene, title=""):
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
-    ax.grid(axis="y", alpha=0.3)
+    ax.set_aspect("equal")
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+    ax.set_xlabel("X Position")
+    ax.set_ylabel("Y Position")
 
-    # Add value labels on bars
-    for i, (label, value) in enumerate(zip(labels, values)):
-        ax.text(i, value + 0.02, f"{value:.3f}", ha="center", va="bottom")
+    for obj in scene["objects"]:
+        ax.scatter(
+            obj["x"], obj["y"],
+            c=COLOR_HEX[obj["color"]], marker=SHAPE_MARKER[obj["shape"]],
+            s=400, alpha=0.9, edgecolors="black", linewidths=2,
+        )
+        ax.text(
+            obj["x"], obj["y"] - 0.07,
+            f"{obj['color']}\n{obj['shape']}",
+            ha="center", va="top", fontsize=8,
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.7),
+        )
 
     return fig
 
 
-def format_pipeline_text(scene, query, steps, answer):
-    """
-    Format the query execution pipeline as readable text with attention values.
-
-    Args:
-        scene: Original scene dict
-        query: The symbolic query
-        steps: List of {"op": op_name, "attention": attention_weights}
-        answer: The final answer
-
-    Returns:
-        Formatted string showing the pipeline
-    """
-    lines = []
-
-    # Header
-    lines.append(f"Query: {query}\n")
-
-    # Input tensor
-    n_objects = len(scene["objects"])
-    lines.append(f"Input: Scene [batch=1, n_objects={n_objects}, features=9]")
-    lines.append("    ↓")
-
-    # Steps with attention values
-    for step_idx, step in enumerate(steps):
-        op_name = step["op"]
-        attention = jnp.array(step["attention"])
-
-        # Handle batch/scalar dimensions
-        if attention.ndim == 2:
-            attention = attention[0]
-        if attention.ndim == 0:
-            attention = jnp.ones(n_objects)
-
-        # Format the step - use just the operation name
-        step_title = op_name.capitalize()
-        lines.append(f"[{step_title}] {op_name}")
-
-        # Add operation description
-        if "filter" in op_name:
-            lines.append("  Operation: Dot product (scene @ W_embed) + Sigmoid")
-        elif op_name in ["leftmost", "rightmost"]:
-            coord_name = "x" if "leftmost" in op_name else "x"
-            direction = "smallest" if "leftmost" in op_name else "largest"
-            lines.append(
-                f"  Operation: Softmax over {coord_name}-coordinates (weighted by attention)"
-            )
-        elif op_name == "unique":
-            lines.append("  Operation: Softmax over objectness")
-        elif "query" in op_name:
-            attr_type = op_name.replace("query-", "").upper()
-            lines.append(
-                f"  Operation: Extract {attr_type} logits (scene @ W_{attr_type.lower()})"
-            )
-
-        # Add attention/logits values
-        if "query" in op_name:
-            # For query operations, show logits with attribute names
-            attr_type = op_name.replace("query-", "").lower()
-            if attr_type == "color":
-                attr_names = ["red", "green", "blue", "yellow"]
-            elif attr_type == "shape":
-                attr_names = ["circle", "square", "triangle"]
-            elif attr_type == "position":
-                attr_names = ["x", "y"]
-            else:
-                attr_names = [f"dim_{i}" for i in range(len(attention))]
-
-            logit_labels = []
-            for i, name in enumerate(attr_names):
-                if i < len(attention):
-                    logit_labels.append(f"{name}: {float(attention[i]):.2f}")
-            lines.append(f"  Logits: [{', '.join(logit_labels)}]")
-        else:
-            # For filter/selection operations, show attention per object
-            objects = scene["objects"]
-            att_labels = []
-            for i, obj in enumerate(objects):
-                if i < len(attention):
-                    label = f"{obj['color']}_{obj['shape']}"
-                    att_val = float(attention[i])
-                    att_labels.append(f"{label}: {att_val:.2f}")
-            lines.append(f"  Attention: [{', '.join(att_labels)}]")
-
-        lines.append("    ↓")
-
-    # Final answer
-    lines.append(f"[Decision] argmax(logits): {answer.upper()}")
-    return "\n".join(lines)
+def plot_probabilities(prob_dict, title="Probabilities"):
+    fig, ax = plt.subplots(figsize=(6, 3))
+    labels = list(prob_dict.keys())
+    values = list(prob_dict.values())
+    bars = ax.bar(labels, values, color="skyblue", edgecolor="black")
+    max_idx = values.index(max(values))
+    bars[max_idx].set_color("lightcoral")
+    ax.set_ylim(0, 1.1)
+    ax.set_title(title)
+    ax.grid(axis="y", alpha=0.3)
+    for i, v in enumerate(values):
+        ax.text(i, v + 0.02, f"{v:.3f}", ha="center", va="bottom")
+    return fig
 
 
-def plot_symbolic_visualization(scene, steps, scene_tensor):
-    """
-    Visualize how symbolic operations progressively shape the neural network's attention.
-
-    Args:
-        scene: Original scene dict
-        steps: List of {"op": op_name, "attention": attention_weights}
-        scene_tensor: Original scene tensor for rendering
-
-    Returns:
-        matplotlib figure with progressive attention visualization
-    """
-    n_objects = len(scene["objects"])
-    n_steps = len(steps)
-
-    if n_steps == 0:
+def plot_attention_steps(scene, op_names, steps):
+    n = len(steps)
+    if n == 0:
         return None
 
-    # Create figure with subplots: one for each step
-    fig, axes = plt.subplots(1, n_steps, figsize=(4 * n_steps, 5))
-
-    # Handle single step case
-    if n_steps == 1:
+    fig, axes = plt.subplots(1, n, figsize=(3.5 * n, 4))
+    if n == 1:
         axes = [axes]
 
-    for step_idx, step in enumerate(steps):
-        ax = axes[step_idx]
-        op_name = step["op"]
-        attention = jnp.array(step["attention"])
+    objects = scene["objects"]
 
-        # Handle batch dimension if present
-        if attention.ndim == 2:
-            attention = attention[0]
+    for i, (op, att_values) in enumerate(zip(op_names, steps)):
+        ax = axes[i]
 
-        # Handle scalar case (if attention is 0-dimensional, use uniform attention)
-        if attention.ndim == 0:
-            n_objects = len(scene["objects"])
-            attention = jnp.ones(n_objects)
+        is_per_object = len(att_values) >= len(objects) and "query" not in op
 
-        # Normalize attention for visualization
-        att_min = jnp.min(attention)
-        att_max = jnp.max(attention)
-        if att_max > att_min:
-            attention_norm = (attention - att_min) / (att_max - att_min)
+        if not is_per_object:
+            # Bar chart for logits or aggregated outputs
+            if "color" in op:
+                names = COLORS
+            elif "shape" in op:
+                names = SHAPES
+            else:
+                names = [f"d{j}" for j in range(len(att_values))]
+            ax.barh(names, att_values, color="salmon", edgecolor="black")
+            ax.set_xlim(0, max(max(att_values), 0.01) * 1.2)
         else:
-            attention_norm = jnp.ones_like(attention)
+            # Scene attention heatmap
+            att = np.array(att_values[:len(objects)])
+            att_min, att_max = att.min(), att.max()
+            if att_max > att_min:
+                att_norm = (att - att_min) / (att_max - att_min)
+            else:
+                att_norm = np.ones(len(objects))
 
-        # Plot objects with attention-based sizing
-        objects = scene["objects"]
-        for i, obj in enumerate(objects):
-            x, y = obj["x"], obj["y"]
-            color = COLOR_MAP[obj["color"]]
-            shape = obj["shape"]
-            marker = SHAPE_SYMBOLS[shape]
+            for j, obj in enumerate(objects):
+                alpha = float(att_norm[j]) * 0.8 + 0.2
+                size = 100 + float(att_norm[j]) * 350
+                ax.scatter(
+                    obj["x"], obj["y"],
+                    c=COLOR_HEX[obj["color"]], marker=SHAPE_MARKER[obj["shape"]],
+                    s=size, alpha=alpha, edgecolors="black", linewidths=1.5,
+                )
+                ax.text(
+                    obj["x"], obj["y"] - 0.07, f"{att_values[j]:.2f}",
+                    ha="center", va="top", fontsize=8,
+                    bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+                )
 
-            # Size and alpha based on attention
-            alpha = float(attention_norm[i]) * 0.8 + 0.2
-            size = 150 + float(attention_norm[i]) * 350
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.set_aspect("equal")
+            ax.grid(True, alpha=0.2)
+            ax.set_xticks([])
+            ax.set_yticks([])
 
-            ax.scatter(
-                x,
-                y,
-                c=color,
-                marker=marker,
-                s=size,
-                alpha=alpha,
-                edgecolors="black",
-                linewidths=2,
-            )
-
-            # Add attention value as label
-            ax.text(
-                x,
-                y - 0.08,
-                f"{float(attention[i]):.2f}",
-                ha="center",
-                va="top",
-                fontsize=9,
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
-            )
-
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.set_aspect("equal")
-        ax.set_title(op_name, fontsize=11, fontweight="bold")
-        ax.grid(True, alpha=0.3)
-        ax.set_xticks([])
-        ax.set_yticks([])
+        ax.set_title(op, fontsize=10, fontweight="bold")
 
     plt.tight_layout()
     return fig
 
 
-# STREAMLIT APP
+OP_DETAILS = {
+    "filter-color": {
+        "desc": "Soft attribute filter",
+        "math": "scores = einsum('...nd,d->...n', scene, W_color[idx])\n"
+                "         att = sigmoid((scores - 0.5) / temperature)\n"
+                "         out = scene * att",
+    },
+    "filter-shape": {
+        "desc": "Soft attribute filter",
+        "math": "scores = einsum('...nd,d->...n', scene, W_shape[idx])\n"
+                "         att = sigmoid((scores - 0.5) / temperature)\n"
+                "         out = scene * att",
+    },
+    "unique": {
+        "desc": "Soft single-object selection",
+        "math": "objectness = sum(|scene|, axis=-1)\n"
+                "         att = softmax(objectness / temperature, axis=-1)\n"
+                "         out = einsum('...n,...nd->...d', att, scene)",
+    },
+    "leftmost": {
+        "desc": "Argmin-x via softmax",
+        "math": "x = scene[..., 7];  mask = sum(|scene|, axis=-1) > 1e-3\n"
+                "         att = softmax(where(mask, -x / temperature, -1e10), axis=-1)\n"
+                "         out = einsum('...n,...nd->...d', att, scene)",
+    },
+    "rightmost": {
+        "desc": "Argmax-x via softmax",
+        "math": "x = scene[..., 7];  mask = sum(|scene|, axis=-1) > 1e-3\n"
+                "         att = softmax(where(mask, x / temperature, -1e10), axis=-1)\n"
+                "         out = einsum('...n,...nd->...d', att, scene)",
+    },
+    "left-of": {
+        "desc": "Spatial relation (x < ref_x)",
+        "math": "relative = scene_x - ref_x\n"
+                "         scores = sigmoid(-(relative + threshold) / temperature)\n"
+                "         out = scene * scores",
+    },
+    "right-of": {
+        "desc": "Spatial relation (x > ref_x)",
+        "math": "relative = scene_x - ref_x\n"
+                "         scores = sigmoid((relative - threshold) / temperature)\n"
+                "         out = scene * scores",
+    },
+    "intersect": {
+        "desc": "Element-wise intersection",
+        "math": "out = minimum(scene_a, scene_b)",
+    },
+    "exists?": {
+        "desc": "Existence test",
+        "math": "objectness = sum(|scene|, axis=-1)\n"
+                "         total = sum(objectness, axis=-1)\n"
+                "         out = sigmoid(5.0 * (total - threshold))",
+    },
+    "query-color": {
+        "desc": "Attribute extraction [0:4]",
+        "math": "aggregated = sum(scene, axis=-2)  (if batched)\n"
+                "         out = aggregated[..., 0:4]",
+    },
+    "query-shape": {
+        "desc": "Attribute extraction [4:7]",
+        "math": "aggregated = sum(scene, axis=-2)  (if batched)\n"
+                "         out = aggregated[..., 4:7]",
+    },
+}
+
+
+def format_pipeline_text(scene, query, op_names, steps, answer, scene_tensor):
+    objects = scene["objects"]
+
+    lines = [f"Query: {query}\n"]
+
+    # Raw tensor
+    lines.append(f"Input: Scene tensor [1, {N_OBJECTS}, {N_FEATURES}]")
+    lines.append(f"  Axes: [red, green, blue, yellow, circle, square, triangle, x, y]")
+    for i in range(N_OBJECTS):
+        row = scene_tensor[i]
+        vals = "  ".join(f"{v:5.2f}" for v in row)
+        lines.append(f"  [{vals}]")
+
+    # Decoded
+    lines.append("")
+    lines.append("Decoded:")
+    for i, obj in enumerate(objects):
+        lines.append(
+            f"  Object {i+1}: {obj['color']:7s} {obj['shape']:8s}  "
+            f"x={obj['x']:.2f}  y={obj['y']:.2f}"
+        )
+    lines.append("    \u2193")
+
+    # Steps
+    for op, att in zip(op_names, steps):
+        detail = OP_DETAILS.get(op, {})
+        desc = detail.get("desc", op)
+        math = detail.get("math", "")
+
+        lines.append(f"[{op}] {desc}")
+        if math:
+            lines.append(f"  Math: {math}")
+
+        is_per_object = len(att) >= len(objects) and "query" not in op
+
+        if not is_per_object:
+            if "color" in op:
+                names = COLORS
+            elif "shape" in op:
+                names = SHAPES
+            else:
+                names = [f"d{j}" for j in range(len(att))]
+            val_str = ", ".join(f"{n}: {v:.2f}" for n, v in zip(names, att))
+            lines.append(f"  Output: [{val_str}]")
+        else:
+            att_str = ", ".join(
+                f"{obj['color']}_{obj['shape']}: {att[j]:.2f}"
+                for j, obj in enumerate(objects)
+            )
+            lines.append(f"  Attention: [{att_str}]")
+
+        lines.append("    \u2193")
+
+    lines.append(f"[Decision] argmax(logits): {answer.upper()}")
+    return "\n".join(lines)
 
 
 def main():
     st.set_page_config(page_title="CLEVR Visualizer", layout="wide")
-
     st.title("CLEVR Neuro-Symbolic Visualizer")
 
-    # Load model (cached)
-    if "shf" not in st.session_state:
-        with st.spinner("Loading Sheaf model..."):
-            st.session_state.shf, st.session_state.params = load_sheaf_model()
-        st.success("Model loaded")
+    sheaf_bin = find_sheaf_binary()
+    if not sheaf_bin:
+        st.error(
+            "Sheaf binary not found. "
+            "Build with: `cd sheaf && cargo build --release`"
+        )
+        return
 
-    shf = st.session_state.shf
-    params = st.session_state.params
-
-    # Generate initial scene if not exists
     if "scene" not in st.session_state:
-        st.session_state.scene, st.session_state.scene_tensor = generate_fixed_scene()
+        st.session_state.scene = generate_scene()
+        st.session_state.scene_tensor = scene_to_tensor(st.session_state.scene)
 
     scene = st.session_state.scene
     scene_tensor = st.session_state.scene_tensor
 
-    # Top layout: Query on left, Scene on right
     query_col, scene_col = st.columns(2)
 
     with query_col:
@@ -539,103 +399,82 @@ def main():
 
         example_name = st.selectbox(
             "Choose a query:",
-            ["Custom"] + list(example_queries.keys()),
-            key="query_selector",
+            ["Custom"] + list(EXAMPLE_QUERIES.keys()),
         )
 
         if example_name != "Custom":
-            default_query = str(example_queries[example_name])
+            default_query = str(EXAMPLE_QUERIES[example_name])
         else:
             default_query = '["query-color", ["leftmost", ["filter-shape", ":circle"]]]'
 
         query_str = st.text_area(
-            "Sheaf Query:", value=default_query, height=80, label_visibility="collapsed"
+            "Query:", value=default_query, height=80,
+            label_visibility="collapsed",
         )
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Execute Query", type="primary", width="stretch"):
-                st.session_state.execute_query = True
+            execute = st.button("Execute Query", type="primary", use_container_width=True)
         with col2:
-            if st.button("Generate Random Scene", width="stretch"):
-                st.session_state.scene, st.session_state.scene_tensor = (
-                    generate_fixed_scene()
-                )
+            if st.button("New Scene", use_container_width=True):
+                st.session_state.scene = generate_scene()
+                st.session_state.scene_tensor = scene_to_tensor(st.session_state.scene)
+                st.session_state.pop("last_result", None)
+                st.session_state.pop("last_query", None)
                 st.rerun()
 
-        if st.session_state.get("execute_query", False):
+        if execute:
             try:
                 query = eval(query_str)
-
-                # Execute query
-                scene_batch = jnp.expand_dims(scene_tensor, axis=0)
-
-                with st.spinner("Executing query..."):
-                    prediction = shf.execute_query(scene_batch, query, params)
-                    # Get attention tensors from execute-query-with-steps
-                    query_result = shf.execute_query_with_steps(
-                        scene_batch, query, params
-                    )
-
-                # Decode answer
-                query_type = infer_query_type(query)
-                answer, prob_dict = decode_answer(prediction, query_type)
-
-                # Extract operation names and match with attention tensors
-                op_names = extract_operation_names(query)
-                steps = []
-
-                if isinstance(query_result, (list, tuple)) and len(query_result) > 1:
-                    attention_list = query_result[1]
-                    # Match operation names with attention tensors
-                    for i, op_name in enumerate(op_names):
-                        if i < len(attention_list):
-                            steps.append(
-                                {"op": op_name, "attention": attention_list[i]}
-                            )
-
-                # Store in session for display
+                with st.spinner("Running Sheaf query..."):
+                    result = run_sheaf_query(sheaf_bin, scene_tensor, query)
+                st.session_state.last_result = result
                 st.session_state.last_query = query
-                st.session_state.last_answer = answer
-                st.session_state.last_prob_dict = prob_dict
-                st.session_state.last_steps = steps
-
-                st.session_state.execute_query = False
-
             except Exception as e:
-                st.error(f"Error executing query: {e}")
-                import traceback
+                st.error(f"Error: {e}")
 
-                st.text(traceback.format_exc())
-                st.session_state.execute_query = False
-
-        # Display result in query column only
-        if st.session_state.get("last_answer"):
+        if "last_result" in st.session_state:
+            r = st.session_state.last_result
             st.divider()
-            st.info(f"**Result: {st.session_state.last_answer.upper()}**")
+            st.info(f"**Result: {r['answer'].upper()}**")
+
+            if r["type"] == "color":
+                probs = dict(zip(COLORS, r["logits"]))
+            elif r["type"] == "shape":
+                probs = dict(zip(SHAPES, r["logits"]))
+            else:
+                p = r["logits"][0]
+                probs = {"Yes": p, "No": 1 - p}
+
+            fig_prob = plot_probabilities(probs)
+            st.pyplot(fig_prob)
+            plt.close()
 
     with scene_col:
         st.subheader("Scene")
-
         fig_scene = plot_scene(scene, title="")
-        st.pyplot(fig_scene, width="stretch")
+        st.pyplot(fig_scene)
         plt.close()
 
-    # Divider between top and bottom sections
-    st.divider()
-
-    # Symbolic execution pipeline at the bottom
-    if st.session_state.get("last_query"):
+    if "last_result" in st.session_state and "last_query" in st.session_state:
+        st.divider()
         st.subheader("Symbolic Attention Shaping")
 
-        # Display pipeline as formatted text
-        pipeline_text = format_pipeline_text(
-            scene,
-            st.session_state.last_query,
-            st.session_state.last_steps,
-            st.session_state.last_answer,
+        r = st.session_state.last_result
+        query = st.session_state.last_query
+        op_names = extract_op_names(query)
+        steps = r["steps"]
+
+        pipeline = format_pipeline_text(
+            scene, query, op_names, steps, r["answer"], scene_tensor,
         )
-        st.code(pipeline_text, language="text")
+        st.code(pipeline, language="text")
+
+        if steps:
+            fig_att = plot_attention_steps(scene, op_names, steps)
+            if fig_att:
+                st.pyplot(fig_att)
+                plt.close()
 
 
 if __name__ == "__main__":

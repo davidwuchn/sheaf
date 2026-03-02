@@ -2,7 +2,7 @@
 
 if ! python -c "import streamlit" 2>/dev/null; then
     echo "Streamlit not found."
-    echo "Install dependancies with: pip install streamlit matplotlib data"
+    echo "Install with: pip install streamlit matplotlib numpy"
     exit 1
 fi
 

@@ -25,8 +25,7 @@
 ;; Extract op names from a query tree in depth-first order (leaves first).
 ;; Matches the order that execute-query-with-steps returns attention tensors.
 (defn is-subquery [arg]
-  (and (> (count arg) 1)
-       (!= (slice (str (first arg)) 0 1) ":")))
+  (!= (slice (str arg) 0 1) ":"))
 
 (defn extract-op-names [q]
   (let [op   (first q)
@@ -132,8 +131,8 @@
     ;; --- Detailed pipeline for "color of rightmost square" ---
     (let [custom-query ["query-color" ["rightmost" ["filter-shape" ":square"]]]
           qr           (execute-query-with-steps demo-batch custom-query params)
-          steps        (get qr 1)
-          predicted    (nth (colors) (int (argmax (get (get qr 0) 0))))
+          steps        (get qr :steps)
+          predicted    (nth (colors) (int (argmax (get (get qr :result) 0))))
           op-names     (extract-op-names custom-query)
           n-steps      (len steps)]
 
