@@ -599,6 +599,12 @@
 - name: var
   test: (var [1 2 3])
   expected: '0.6666667'
+- name: clamp
+  test: (use nn) (clamp 300 0 255)
+  expected: '255'
+- name: clamp
+  test: (use nn) (clamp [-50 100 300] 0 255)
+  expected: '[  0. 100. 255.]'
 - name: mse-loss
   test: (mse-loss [1.0 2.0 3.0] [1.1 1.9 3.1])
   expected: '0.009999997'

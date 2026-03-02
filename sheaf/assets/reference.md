@@ -2491,6 +2491,18 @@ Default epsilon is `1e-6`.
 ; => [0.36514837 0.73029673 1.095445   1.4605935 ]
 ```
 
+#### clamp
+
+**Type:** function
+**Signature:** `(clamp x lo hi)`
+
+Clamps values element-wise to the range [lo, hi]. Supports broadcasting between scalars and tensors.
+
+```sheaf
+(clamp 300 0 255)           ; => 255
+(clamp [-50 100 300] 0 255) ; => [0. 100. 255.]
+```
+
 #### xavier-init
 
 **Type:** function  
