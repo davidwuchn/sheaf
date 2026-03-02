@@ -116,16 +116,26 @@ impl SpecialForm for DefnForm {
             }
         }
 
-        // Body is the third argument, or fourth if legacy :jit annotation is present
-        let body_ast = if let SheafValue::Keyword(k, _) = &args[2] {
+        // Body is everything after [params], with optional :jit skip.
+        // Multiple body forms get an implicit (do ...) wrapper.
+        let body_start = if let SheafValue::Keyword(k, _) = &args[2] {
             if k == "jit" && args.len() > 3 {
                 eprintln!("warning: :jit annotation is deprecated in Sheaf v2 (all functions are AOT-compiled via `sheaf build`)");
-                args[3].clone()
+                3
             } else {
-                args[2].clone()
+                2
             }
         } else {
-            args[2].clone()
+            2
+        };
+
+        let body_ast = if args.len() - body_start == 1 {
+            args[body_start].clone()
+        } else {
+            // Multiple body forms → implicit do
+            let mut do_forms = vec![SheafValue::Symbol("do".to_string(), loc.clone())];
+            do_forms.extend(args[body_start..].iter().cloned());
+            SheafValue::List(do_forms, loc.clone())
         };
 
         // Add parameters to local scope temporarily
