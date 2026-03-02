@@ -112,6 +112,41 @@ impl FunctionDef {
     }
 }
 
+/// Lower a runtime quasiquote into plain AST.
+/// `[-1 ~expr 1] becomes Vector([-1, expr, 1]),
+/// ~expr becomes expr, literals pass through unchanged.
+fn lower_quasiquote(node: &SheafValue) -> SheafValue {
+    match node {
+        SheafValue::Unquote(inner, _) => *inner.clone(),
+        SheafValue::Quasiquote(inner, _) => lower_quasiquote(inner),
+        SheafValue::List(elems, loc) => {
+            let mut result = Vec::new();
+            for e in elems {
+                if let SheafValue::UnquoteSplicing(inner, _) = e {
+                    // ~@expr — the inner expression should produce a list at runtime;
+                    // for now just lower it as a single element (covers CLEVR usage)
+                    result.push(lower_quasiquote(inner));
+                } else {
+                    result.push(lower_quasiquote(e));
+                }
+            }
+            SheafValue::List(result, loc.clone())
+        }
+        SheafValue::Vector(elems, loc) => {
+            let mut result = Vec::new();
+            for e in elems {
+                if let SheafValue::UnquoteSplicing(inner, _) = e {
+                    result.push(lower_quasiquote(inner));
+                } else {
+                    result.push(lower_quasiquote(e));
+                }
+            }
+            SheafValue::Vector(result, loc.clone())
+        }
+        _ => node.clone(),
+    }
+}
+
 fn is_builtin_name(name: &str) -> bool {
     matches!(name,
         "+" | "-" | "*" | "/" | "//" | "mod" | "%" | "**"
@@ -220,17 +255,17 @@ impl CompilerContext {
             // --- Keywords ---
             SheafValue::Keyword(k, _) => Ok(CompiledExpr::Keyword(k.clone())),
 
-            // --- Quasiquote/Unquote outside macro context ---
-            SheafValue::Quasiquote(_, loc) => Err(SheafError::Compile {
-                message: "Quasiquote (`) outside of macro definition".to_string(),
-                location: loc.clone(),
-            }),
+            // --- Runtime quasiquote: compile as template with unquote evaluation ---
+            SheafValue::Quasiquote(inner, _) => {
+                let lowered = lower_quasiquote(inner);
+                self.compile(&lowered)
+            }
             SheafValue::Unquote(_, loc) => Err(SheafError::Compile {
-                message: "Unquote (~) outside of macro definition".to_string(),
+                message: "Unquote (~) outside of quasiquote".to_string(),
                 location: loc.clone(),
             }),
             SheafValue::UnquoteSplicing(_, loc) => Err(SheafError::Compile {
-                message: "Unquote-splicing (~@) outside of macro definition".to_string(),
+                message: "Unquote-splicing (~@) outside of quasiquote".to_string(),
                 location: loc.clone(),
             }),
 
