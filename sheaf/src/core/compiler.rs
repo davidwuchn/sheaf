@@ -388,6 +388,11 @@ impl CompilerContext {
             return Ok(CompiledExpr::Symbol(name.to_string()));
         }
 
+        // Ellipsis marker for advanced indexing: (get tensor ... idx)
+        if name == "..." {
+            return Ok(CompiledExpr::Symbol("...".to_string()));
+        }
+
         Err(SheafError::Compile {
             message: format!("Undefined symbol: {}", name),
             location: loc.clone(),

@@ -26,7 +26,10 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
         CompiledExpr::String(s) => Ok(Value::String(s.clone())),
         CompiledExpr::Keyword(k) => Ok(Value::Keyword(k.clone())),
 
-        CompiledExpr::Symbol(name) => env.get(name),
+        CompiledExpr::Symbol(name) => {
+            if name == "..." { return Ok(Value::Keyword("...".to_string())); }
+            env.get(name)
+        }
 
         CompiledExpr::Vector(elements) => eval_vector(elements, env),
 

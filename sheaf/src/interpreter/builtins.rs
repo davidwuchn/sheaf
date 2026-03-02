@@ -1108,6 +1108,28 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             }
         }
         Value::Tensor { data, .. } => {
+            // Ellipsis indexing: (get tensor ... idx) or (get tensor ... (range s e))
+            if matches!(&args[1], Value::Keyword(k) if k == "...") {
+                if args.len() < 3 { return Err(runtime_error("get: ... requires an index argument")); }
+                let last_axis = ndarray::Axis(data.ndim() - 1);
+                return match &args[2] {
+                    // (get tensor ... 7) → select single index on last axis
+                    v if v.to_f64().is_some() => {
+                        let idx = v.to_f64().unwrap() as usize;
+                        let sliced = data.index_axis(last_axis, idx).to_owned();
+                        Ok(Value::tensor_f32(sliced))
+                    }
+                    // (get tensor ... (range s e)) → slice on last axis
+                    // range produces [s, s+1, ..., e-1]; use first..last+1 as slice bounds
+                    Value::Tensor { data: range_t, .. } if range_t.ndim() == 1 && range_t.len() > 0 => {
+                        let start = range_t.first().unwrap().clone() as usize;
+                        let end = range_t.iter().last().unwrap().clone() as usize + 1;
+                        let sliced = data.slice_axis(last_axis, ndarray::Slice::from(start..end));
+                        Ok(Value::tensor_f32(sliced.to_owned()))
+                    }
+                    other => Err(runtime_error(format!("get: ... index must be int or range, got {}", other.type_name()))),
+                };
+            }
             let idx = args[1].to_f64().unwrap() as usize;
             let sliced = data.index_axis(ndarray::Axis(0), idx).to_owned();
             if sliced.shape().is_empty() {
@@ -1119,6 +1141,14 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         Value::List(items) => {
             let idx = args[1].to_f64().unwrap() as usize;
             items.get(idx).cloned().ok_or_else(|| runtime_error("get: index out of bounds"))
+        }
+        Value::String(s) => {
+            let idx = args[1].to_f64()
+                .ok_or_else(|| runtime_error(format!("get: cannot index string '{}' with {}", s, args[1])))?
+                as usize;
+            s.chars().nth(idx)
+                .map(|c| Value::String(c.to_string()))
+                .ok_or_else(|| runtime_error("get: string index out of bounds"))
         }
         _ => Err(runtime_error(format!("get: expected dict/tensor/list, got {} (key: {})", args[0].type_name(), args.get(1).map(|v| format!("{}", v)).unwrap_or_default()))),
     }
