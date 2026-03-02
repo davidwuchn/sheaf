@@ -1110,8 +1110,10 @@ impl StableHLOEmitter {
         keepdims: bool,
     ) -> (Register, StableHLOType) {
         let shape = input_ty.shape();
-        // Treat scalar as 1D tensor of size 1
-        let shape = if shape.is_empty() { vec![1i64] } else { shape };
+        // Scalar reduce is a no-op: nothing to sum over
+        if shape.is_empty() {
+            return (input.clone(), input_ty.clone());
+        }
         let ndim = shape.len();
         let axis_usize = if axis < 0 {
             (ndim as i64 + axis) as usize
