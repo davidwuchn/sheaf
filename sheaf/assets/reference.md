@@ -121,6 +121,21 @@ Computes the element-wise absolute value of the input. For complex inputs, this 
 
 ---
 
+### ash
+
+**Type:** function
+**Signature:** `(ash value shift)`
+
+Arithmetic shift. Positive shift means left shift (multiply by 2^n), negative shift means right shift (divide by 2^n, floor toward negative infinity). Matches Common Lisp `ash` semantics. Works element-wise on tensors.
+
+```sheaf
+(ash 1 8)            ; => 256
+(ash 256 -3)         ; => 32
+(ash [512 1024] -8)  ; => [2 4]
+```
+
+---
+
 ### exp
 
 **Type:** function  

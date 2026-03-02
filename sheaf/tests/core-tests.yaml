@@ -61,6 +61,15 @@
 - name: abs
   test: (abs [-3 2 -1])
   expected: '[3. 2. 1.]'
+- name: ash
+  test: (ash 1 8)
+  expected: '256'
+- name: ash
+  test: (ash 256 -3)
+  expected: '32'
+- name: ash
+  test: (ash [512 1024] -8)
+  expected: '[2 4]'
 - name: exp
   test: (exp 0.0)
   expected: '1.0'
