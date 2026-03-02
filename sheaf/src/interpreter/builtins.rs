@@ -1481,7 +1481,12 @@ fn builtin_dict(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_str(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.is_empty() { return Ok(Value::String(String::new())); }
-    Ok(Value::String(format!("{}", args[0])))
+    let mut s = String::new();
+    for a in args {
+        use std::fmt::Write;
+        write!(s, "{}", a).unwrap();
+    }
+    Ok(Value::String(s))
 }
 
 fn builtin_tensor(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
