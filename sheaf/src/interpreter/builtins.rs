@@ -1673,24 +1673,35 @@ fn builtin_tree_map_zeros(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     Ok(tree_zeros(&args[0]))
 }
 
-/// print - Formatted output: (print "Epoch {} | loss: {:.6f}" epoch loss)
+/// print - Variadic output with space-separated args.
 ///
-/// Supports Python-style {} and {:.Nf} format specifiers.
+/// (print "x=" x "y=" y)  → "x= 42 y= 7"
+/// If the first arg is a format string (contains {}), uses format mode:
+/// (print "Step {} loss {:.3f}" step loss)  → "Step 5 loss 0.123"
 fn builtin_print(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.is_empty() {
         println!();
         return Ok(Value::Nil);
     }
-    let fmt = match &args[0] {
-        Value::String(s) => s.clone(),
-        other => {
-            println!("{}", other);
+
+    // Single arg: print directly
+    if args.len() == 1 {
+        println!("{}", args[0]);
+        return Ok(Value::Nil);
+    }
+
+    // Multiple args: if first is a format string (contains {} or {:), use format mode
+    if let Value::String(s) = &args[0] {
+        if s.contains("{}") || s.contains("{:") {
+            let result = format_string(s, &args[1..]);
+            println!("{}", result);
             return Ok(Value::Nil);
         }
-    };
-    let vals = &args[1..];
-    let result = format_string(&fmt, vals);
-    println!("{}", result);
+    }
+
+    // Otherwise: space-separated output
+    let parts: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
+    println!("{}", parts.join(" "));
     Ok(Value::Nil)
 }
 
