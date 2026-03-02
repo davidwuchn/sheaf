@@ -372,15 +372,20 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
         _ => {}
     }
 
-    // Some functions treat keywords as positional args (not kwargs)
-    let no_kwargs = matches!(name, "get" | "get-in" | "assoc" | "dissoc" | "dict");
+    // Only functions that declare keyword params consume :kw val pairs.
+    // All others treat keywords as positional values (Clojure semantics).
+    let has_kwargs = matches!(name,
+        "softmax" | "log-softmax" | "sum" | "mean" | "product"
+        | "min" | "max" | "argmax" | "argmin" | "concat"
+        | "leaky-relu" | "celu" | "var" | "normalize" | "range"
+    );
 
-    // Evaluate args, splitting kwargs
-    let (pos_args, kwargs) = if no_kwargs {
+    // Evaluate args, splitting kwargs only for functions that use them
+    let (pos_args, kwargs) = if has_kwargs {
+        split_kwargs(args, env)?
+    } else {
         let pos: Result<Vec<Value>, _> = args.iter().map(|a| eval(a, env)).collect();
         (pos?, BTreeMap::new())
-    } else {
-        split_kwargs(args, env)?
     };
 
     // Higher-order functions need &mut Env to call lambdas

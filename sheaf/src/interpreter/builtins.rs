@@ -495,14 +495,21 @@ fn builtin_append_and_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 fn builtin_eq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 2 { return Err(runtime_error("= requires 2 arguments")); }
     // Handle non-numeric types directly
+    // Keywords and strings are interchangeable for equality (`:foo` evaluates to `"foo"`)
+    fn str_val(v: &Value) -> Option<&str> {
+        match v {
+            Value::String(s) | Value::Keyword(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
     match (&args[0], &args[1]) {
-        (Value::String(a), Value::String(b)) => return Ok(Value::Bool(a == b)),
-        (Value::Keyword(a), Value::Keyword(b)) => return Ok(Value::Bool(a == b)),
+        (a, b) if str_val(a).is_some() && str_val(b).is_some() =>
+            return Ok(Value::Bool(str_val(a) == str_val(b))),
         (Value::Bool(a), Value::Bool(b)) => return Ok(Value::Bool(a == b)),
         (Value::Nil, Value::Nil) => return Ok(Value::Bool(true)),
         (Value::Nil, _) | (_, Value::Nil) => return Ok(Value::Bool(false)),
-        (Value::String(_), _) | (_, Value::String(_)) => return Ok(Value::Bool(false)),
-        (Value::Keyword(_), _) | (_, Value::Keyword(_)) => return Ok(Value::Bool(false)),
+        (a, _) if str_val(a).is_some() => return Ok(Value::Bool(false)),
+        (_, b) if str_val(b).is_some() => return Ok(Value::Bool(false)),
         _ => {}
     }
     let (a, _) = to_array(&args[0])?;
@@ -512,11 +519,17 @@ fn builtin_eq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_elem_eq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() == 2 {
+        fn str_val_eq(v: &Value) -> Option<&str> {
+            match v {
+                Value::String(s) | Value::Keyword(s) => Some(s.as_str()),
+                _ => None,
+            }
+        }
         match (&args[0], &args[1]) {
-            (Value::String(a), Value::String(b)) => return Ok(Value::Bool(a == b)),
-            (Value::Keyword(a), Value::Keyword(b)) => return Ok(Value::Bool(a == b)),
-            (Value::String(_), _) | (_, Value::String(_)) => return Ok(Value::Bool(false)),
-            (Value::Keyword(_), _) | (_, Value::Keyword(_)) => return Ok(Value::Bool(false)),
+            (a, b) if str_val_eq(a).is_some() && str_val_eq(b).is_some() =>
+                return Ok(Value::Bool(str_val_eq(a) == str_val_eq(b))),
+            (a, _) if str_val_eq(a).is_some() => return Ok(Value::Bool(false)),
+            (_, b) if str_val_eq(b).is_some() => return Ok(Value::Bool(false)),
             _ => {}
         }
     }
