@@ -448,6 +448,15 @@ fn builtin_eq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_elem_eq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    if args.len() == 2 {
+        match (&args[0], &args[1]) {
+            (Value::String(a), Value::String(b)) => return Ok(Value::Bool(a == b)),
+            (Value::Keyword(a), Value::Keyword(b)) => return Ok(Value::Bool(a == b)),
+            (Value::String(_), _) | (_, Value::String(_)) => return Ok(Value::Bool(false)),
+            (Value::Keyword(_), _) | (_, Value::Keyword(_)) => return Ok(Value::Bool(false)),
+            _ => {}
+        }
+    }
     cmp_op(args, |a, b| if (a - b).abs() < 1e-10 { 1.0 } else { 0.0 }, Dtype::I32)
 }
 
@@ -1068,9 +1077,15 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_slice(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    // String slicing: (slice s start) or (slice s start end)
+    if let Value::String(s) = &args[0] {
+        let start = args[1].to_f64().unwrap() as usize;
+        let end = if args.len() > 2 { args[2].to_f64().unwrap() as usize } else { s.len() };
+        return Ok(Value::String(s[start..end.min(s.len())].to_string()));
+    }
     let (arr, _dt) = to_array(&args[0])?;
     let start = args[1].to_f64().unwrap() as usize;
-    let end = args[2].to_f64().unwrap() as usize;
+    let end = if args.len() > 2 { args[2].to_f64().unwrap() as usize } else { arr.shape()[0] };
     let sliced = arr.slice_axis(ndarray::Axis(0), ndarray::Slice::from(start..end));
     Ok(Value::tensor_f32(sliced.to_owned()))
 }
