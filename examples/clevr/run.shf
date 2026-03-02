@@ -1,6 +1,6 @@
 ;; -*- mode: clojure -*-
 ;; CLEVR Neuro-Symbolic Reasoning
-;; Run with: cd examples/clevr && python -m sheaf run.shf
+;; Run with: cd examples/clevr && sheaf run.shf
 
 (use ./model.shf)
 (use ./data.shf)

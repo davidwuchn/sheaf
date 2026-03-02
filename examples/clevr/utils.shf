@@ -8,25 +8,25 @@
 
 
 ;; Soft filtering - uses sigmoid for independent object selection
+;; Filters objects by similarity to query vector.
 
 (defn soft-filter [scene query-vec temperature]
-  "Filter objects by similarity to query vector."
   (let [scores (einsum "...nd,d->...n" scene query-vec)
-        ;; Biais de -0.5 pour que score=0 donne attention~0, score=1 donne attention~1
+        ;; Bias of -0.5 so score=0 -> attention~0, score=1 -> attention~1
         attention (sigmoid (/ (- scores 0.5) temperature))]
     (* scene (reshape attention '[-1 1]))))
 
 
 ;; Soft selection - uses softmax for mutual exclusion
 
+;; Select single object via softmax over presence scores.
 (defn soft-unique [scene temperature]
-  "Select single object via softmax over presence scores."
   (let [objectness (sum (abs scene) :axis -1)
         attention (softmax (/ objectness temperature) :axis -1)]
     (einsum "...n,...nd->...d" attention scene)))
 
+;; Select leftmost object (smallest x) via softmax.
 (defn soft-leftmost [scene temperature]
-  "Select leftmost object (smallest x) via softmax."
   (let [x-coords (get scene ... 7)
         objectness (sum (abs scene) :axis -1)
         is-present (> objectness 1e-3)
@@ -35,8 +35,8 @@
         attention (softmax masked-scores :axis -1)]
     (einsum "...n,...nd->...d" attention scene)))
 
+;; Select rightmost object (largest x) via softmax.
 (defn soft-rightmost [scene temperature]
-  "Select rightmost object (largest x) via softmax."
   (let [x-coords (get scene ... 7)
         objectness (sum (abs scene) :axis -1)
         is-present (> objectness 1e-3)
@@ -72,22 +72,21 @@
 
 ;; Logic operations
 
+;; Check if any object exists (returns probability).
 (defn exists-any [scene threshold]
-  "Check if any object exists (returns probability)."
   (let [objectness (sum (abs scene) :axis -1)
         total-presence (sum objectness :axis -1)]
     (sigmoid (* 5.0 (- total-presence threshold)))))
 
+;; Intersection of two filtered scenes.
 (defn intersect-scenes [scene1 scene2]
-  "Intersection of two filtered scenes."
   (minimum scene1 scene2))
 
 
 ;; Attribute extraction
 
+;; Extract attribute slice as logits (not normalized).
 (defn query-attribute [obj start end]
-  "Extract attribute slice as logits (not normalized)."
   (let [aggregated (if (== (ndim obj) 3) (sum obj :axis -2) obj)
         attribute (get aggregated ... (range start end))]
-    ;; Retourne les valeurs brutes comme logits pour cross-entropy
     attribute))

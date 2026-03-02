@@ -1,6 +1,6 @@
 ;; CLEVR Neuro-Symbolic Reasoning Model
 ;;
-;; Differentiable visual reasoning: symbolic queries -> JAX computation.
+;; Differentiable visual reasoning: symbolic queries -> soft tensor operations.
 ;; Scene tensor: [Batch, N_objects, 9] = [color(4), shape(3), x, y]
 
 (use nn)
@@ -108,15 +108,15 @@
       "query-position" (query-position (rec arg1))
       scene)))
 
-;; Execute query and track intermediate attention steps
-;; Returns [result, [att1, att2, ...]] where atts are pure JAX tensors
+;; Execute query and track intermediate attention steps.
+;; Returns [result, [att1, att2, ...]] where atts are attention tensors.
 
-;; Helper to extract attention weights from a scene tensor
+;; Extract attention weights from a scene tensor.
 (defn scene-to-attention [scene]
   (sum (abs scene) :axis -1))
 
+;; Execute query and return [result, [attention-step ...]] for visualization.
 (defn execute-query-with-steps [scene q params]
-  "Execute query and return result with list of attention tensors"
   (let [op (first q)
         arg1 (second q)]
 
