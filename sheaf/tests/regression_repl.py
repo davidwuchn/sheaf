@@ -80,7 +80,7 @@ def eval_expr(binary: str, expr: str) -> tuple[bool, str]:
 
 # Tests to skip: not yet implemented in the V2 interpreter.
 SKIP_PATTERNS = [
-    r"^(vmap|scan|random-key|random-normal|random-uniform|random-randint|choice|init-zeros|init-ones|io|use|str-call)\b",
+    r"^(scan|random-key|random-normal|random-uniform|random-randint|choice|init-zeros|init-ones|io|use|str-call)\b",
     r"\(str-call\b",
 ]
 

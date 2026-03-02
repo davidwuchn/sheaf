@@ -393,6 +393,7 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
         "tree-map" => return eval_tree_map(&pos_args, env),
         "tree-reduce" => return eval_tree_reduce(&pos_args, env),
         "flatten" => return eval_flatten(&pos_args),
+        "vmap" => return eval_vmap(&pos_args, env),
         "__value-and-grad-hof__" => return eval_value_and_grad_hof(&pos_args, env),
         _ => {}
     }
@@ -536,6 +537,11 @@ fn split_kwargs(args: &[CompiledExpr], env: &mut Env) -> Result<(Vec<Value>, BTr
 fn call_function(func: &Value, args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
     match func {
         Value::Function { params: _, body: _, closure } => {
+            // Detect vmap HOF closure: contains __vmap_fn__
+            if let Some((_, vmap_fn)) = closure.iter().find(|(k, _)| k == "__vmap_fn__") {
+                let axes = closure.iter().find(|(k, _)| k == "__vmap_axes__").map(|(_, v)| v.clone());
+                return eval_vmap_call(vmap_fn, axes.as_ref(), args, env);
+            }
             // Detect value-and-grad HOF closure: contains __vag_fn__
             if let Some((_, vag_fn)) = closure.iter().find(|(k, _)| k == "__vag_fn__") {
                 if args.len() != 1 {
@@ -805,6 +811,109 @@ fn eval_flatten(args: &[Value]) -> Result<Value, SheafError> {
     // Returns (leaves_list, reconstruct_fn) — we return a list of [leaves, nil] for now
     // The test only uses (first (flatten params)) → the leaves list
     Ok(Value::List(vec![Value::List(leaves), Value::Nil]))
+}
+
+/// (vmap f) or (vmap f in-axes) → returns a vmapped function.
+/// When called, slices inputs along the mapped axes, applies f to each slice, and stacks results.
+fn eval_vmap(args: &[Value], _env: &mut Env) -> Result<Value, SheafError> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(runtime_error("vmap requires 1 or 2 arguments: (vmap fn) or (vmap fn in-axes)"));
+    }
+    let func = args[0].clone();
+    let mut closure = vec![("__vmap_fn__".to_string(), func)];
+    if args.len() == 2 {
+        closure.push(("__vmap_axes__".to_string(), args[1].clone()));
+    }
+    Ok(Value::Function {
+        params: vec!["__vmap_arg__".to_string()],
+        body: crate::core::compiler::CompiledExpr::Symbol("__vmap_arg__".to_string()),
+        closure,
+    })
+}
+
+/// Execute a vmapped function call.
+fn eval_vmap_call(
+    vmap_fn: &Value,
+    axes: Option<&Value>,
+    args: &[Value],
+    env: &mut Env,
+) -> Result<Value, SheafError> {
+    if args.is_empty() {
+        return Err(runtime_error("vmap: called with no arguments"));
+    }
+
+    // Parse in-axes: None means axis 0 for all args
+    let in_axes: Vec<Option<usize>> = match axes {
+        None => args.iter().map(|_| Some(0)).collect(),
+        Some(Value::Int(n)) => args.iter().map(|_| Some(*n as usize)).collect(),
+        Some(Value::Float(n)) => args.iter().map(|_| Some(*n as usize)).collect(),
+        Some(Value::List(ax_list)) => {
+            ax_list.iter().map(|a| match a {
+                Value::Nil => None,
+                Value::Int(n) => Some(*n as usize),
+                Value::Float(n) => Some(*n as usize),
+                _ => Some(0),
+            }).collect()
+        }
+        _ => args.iter().map(|_| Some(0)).collect(),
+    };
+
+    // Find batch size from first mapped arg
+    let batch_size = args.iter().zip(in_axes.iter())
+        .find_map(|(arg, axis)| {
+            axis.and_then(|ax| match arg {
+                Value::Tensor { data, .. } => Some(data.shape()[ax]),
+                _ => None,
+            })
+        })
+        .ok_or_else(|| runtime_error("vmap: no mapped tensor argument found"))?;
+
+    // Slice, apply, collect
+    let mut results = Vec::with_capacity(batch_size);
+    for i in 0..batch_size {
+        let mut sliced = Vec::with_capacity(args.len());
+        for (arg, axis) in args.iter().zip(in_axes.iter()) {
+            match axis {
+                Some(ax) => match arg {
+                    Value::Tensor { data, dtype } => {
+                        let row = data.index_axis(ndarray::Axis(*ax), i).to_owned();
+                        sliced.push(Value::Tensor { data: row, dtype: *dtype });
+                    }
+                    _ => sliced.push(arg.clone()),
+                },
+                None => sliced.push(arg.clone()),
+            }
+        }
+        results.push(call_function(vmap_fn, &sliced, env)?);
+    }
+
+    // Stack results: if all are tensors, stack into a tensor; otherwise return list
+    if results.iter().all(|r| matches!(r, Value::Tensor { .. })) {
+        let arrays: Vec<_> = results.iter().map(|r| match r {
+            Value::Tensor { data, .. } => data.view(),
+            _ => unreachable!(),
+        }).collect();
+        let views: Vec<_> = arrays.iter().map(|a| a.clone().insert_axis(ndarray::Axis(0))).collect();
+        let stacked = ndarray::concatenate(ndarray::Axis(0), &views)
+            .map_err(|e| runtime_error(format!("vmap: failed to stack results: {}", e)))?;
+        let dtype = match &results[0] {
+            Value::Tensor { dtype, .. } => *dtype,
+            _ => unreachable!(),
+        };
+        Ok(Value::Tensor { data: stacked, dtype })
+    } else if results.iter().all(|r| matches!(r, Value::Float(_) | Value::Int(_))) {
+        // Scalar results → 1D tensor
+        let vals: Vec<f64> = results.iter().map(|r| match r {
+            Value::Float(f) => *f,
+            Value::Int(n) => *n as f64,
+            _ => 0.0,
+        }).collect();
+        let arr = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[vals.len()]), vals)
+            .map_err(|e| runtime_error(format!("vmap: {}", e)))?;
+        Ok(Value::Tensor { data: arr, dtype: value::Dtype::F32 })
+    } else {
+        Ok(Value::List(results))
+    }
 }
 
 /// (value-and-grad f) → returns a function that, given params, returns [loss, grad_params].

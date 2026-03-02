@@ -686,3 +686,15 @@
 - name: f-string padding
   test: (str-call "format" "[{:>3}] {:.2f}" 7 3.14159)
   expected: '[  7] 3.14'
+- name: vmap sum rows
+  test: ((vmap (fn [x] (sum x))) (tensor [[1 2 3] [4 5 6]]))
+  expected: '[ 6. 15.]'
+- name: vmap element-wise
+  test: ((vmap (fn [x] (* x 2)) 0) (tensor [[1 2 3] [4 5 6]]))
+  expected: "[[ 2.  4.  6.]\n [ 8. 10. 12.]]"
+- name: vmap axis 1
+  test: ((vmap (fn [x] (sum x)) 1) (tensor [[1 2] [3 4]]))
+  expected: '[4. 6.]'
+- name: vmap multi-arg
+  test: ((vmap (fn [x w] (+ x w)) (quote [0 nil])) (tensor [[1 2] [3 4]]) 10)
+  expected: "[[11. 12.]\n [13. 14.]]"
