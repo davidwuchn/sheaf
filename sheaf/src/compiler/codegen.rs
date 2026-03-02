@@ -469,6 +469,32 @@ impl CodeGenerator {
             let result_reg = nn_ops::emit_tanh(&mut self.emitter, &operand_reg, &operand_ty);
             Ok((result_reg, operand_ty))
         }
+        // gelu: (gelu x)
+        else if name == "gelu" && args.len() == 1 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let (result_reg, result_ty) = nn_ops::emit_gelu(&mut self.emitter, &operand_reg, &operand_ty);
+            Ok((result_reg, result_ty))
+        }
+        // softmax: (softmax x :axis N)
+        else if name == "softmax" && !args.is_empty() {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let mut axis: i64 = -1; // default: last axis
+            let mut i = 1;
+            while i + 1 < args.len() {
+                if let CompiledExpr::Keyword(k) = &args[i] {
+                    if k == "axis" {
+                        if let CompiledExpr::Integer(n) = &args[i + 1] {
+                            axis = *n;
+                        }
+                        i += 2;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+            let (result_reg, result_ty) = nn_ops::emit_softmax(&mut self.emitter, &operand_reg, &operand_ty, axis);
+            Ok((result_reg, result_ty))
+        }
         // zeros: (zeros [M N])
         else if name == "zeros" && args.len() == 1 {
             // Extract shape from vector
