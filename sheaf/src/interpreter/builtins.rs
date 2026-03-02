@@ -20,6 +20,7 @@ pub fn register_builtins(env: &mut Env) {
     env.set_builtin("%", builtin_mod);
     env.set_builtin("**", builtin_pow);
     env.set_builtin("abs", builtin_abs);
+    env.set_builtin("ash", builtin_ash);
     env.set_builtin("exp", builtin_exp);
     env.set_builtin("log", builtin_log);
     env.set_builtin("sqrt", builtin_sqrt);
@@ -264,6 +265,36 @@ fn builtin_pow(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_abs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     unary_op(args, f64::abs)
+}
+
+fn builtin_ash(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    if args.len() != 2 {
+        return Err(runtime_error("ash requires exactly 2 arguments: (ash value shift)"));
+    }
+    let shift = match &args[1] {
+        Value::Int(n) => *n,
+        Value::Float(f) => *f as i64,
+        _ => return Err(runtime_error(format!("ash: shift amount must be a number, got {}", args[1].type_name()))),
+    };
+    match &args[0] {
+        Value::Int(n) => {
+            let result = if shift >= 0 { n << shift } else { n >> (-shift) };
+            Ok(Value::Int(result))
+        }
+        Value::Float(f) => {
+            let n = *f as i64;
+            let result = if shift >= 0 { n << shift } else { n >> (-shift) };
+            Ok(Value::Int(result))
+        }
+        Value::Tensor { data, .. } => {
+            let result = data.mapv(|x| {
+                let n = x as i64;
+                if shift >= 0 { (n << shift) as f64 } else { (n >> (-shift)) as f64 }
+            });
+            Ok(Value::Tensor { data: result, dtype: Dtype::I32 })
+        }
+        _ => Err(runtime_error(format!("ash: expected number or tensor, got {}", args[0].type_name()))),
+    }
 }
 
 fn builtin_exp(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
