@@ -7,6 +7,7 @@
 
 use crate::ast::SheafValue;
 use crate::core::error::{SheafError, SheafResult};
+use crate::core::macro_engine::MacroEngine;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -79,6 +80,9 @@ pub struct CompilerContext {
 
     /// Loaded IREE VMFB sessions (indexed by FunctionDef.vmfb_session_idx)
     pub vmfb_sessions: Vec<VmfbSession>,
+
+    /// Macro expansion engine
+    pub macro_engine: MacroEngine,
 }
 
 /// Function definition
@@ -145,6 +149,7 @@ impl CompilerContext {
             loaded_modules: HashSet::new(),
             current_dir: None,
             vmfb_sessions: Vec::new(),
+            macro_engine: MacroEngine::new(),
         }
     }
 
@@ -215,6 +220,20 @@ impl CompilerContext {
             // --- Keywords ---
             SheafValue::Keyword(k, _) => Ok(CompiledExpr::Keyword(k.clone())),
 
+            // --- Quasiquote/Unquote outside macro context ---
+            SheafValue::Quasiquote(_, loc) => Err(SheafError::Compile {
+                message: "Quasiquote (`) outside of macro definition".to_string(),
+                location: loc.clone(),
+            }),
+            SheafValue::Unquote(_, loc) => Err(SheafError::Compile {
+                message: "Unquote (~) outside of macro definition".to_string(),
+                location: loc.clone(),
+            }),
+            SheafValue::UnquoteSplicing(_, loc) => Err(SheafError::Compile {
+                message: "Unquote-splicing (~@) outside of macro definition".to_string(),
+                location: loc.clone(),
+            }),
+
             // --- Lists (function calls, special forms) ---
             SheafValue::List(elements, loc) => {
                 if elements.is_empty() {
@@ -222,6 +241,14 @@ impl CompilerContext {
                         message: "Cannot compile empty list".to_string(),
                         location: loc.clone(),
                     });
+                }
+
+                // Check for macro expansion before special forms
+                if let Some(op_name) = elements[0].as_symbol() {
+                    if self.macro_engine.macros.contains_key(op_name) {
+                        let expanded = self.macro_engine.expand(exp, &self.env, &self.registry)?;
+                        return self.compile(&expanded);
+                    }
                 }
 
                 // Check for special forms
@@ -282,11 +309,6 @@ impl CompilerContext {
                 // Quote prevents evaluation
                 Ok(CompiledExpr::Quoted(inner.clone()))
             }
-
-            _ => Err(SheafError::Compile {
-                message: format!("Unsupported expression type: {}", exp),
-                location: exp.location().clone(),
-            }),
         }
     }
 
@@ -353,6 +375,7 @@ impl CompilerContext {
 
         let result = match op {
             "defn" => DefnForm.compile(self, args, loc),
+            "defmacro" => binding::DefmacroForm.compile(self, args, loc),
             "let" => LetForm.compile(self, args, loc),
             "fn" => FnForm.compile(self, args, loc),
             "if" => IfForm.compile(self, args, loc),

@@ -6,6 +6,7 @@
 use crate::ast::SheafValue;
 use crate::core::compiler::{CompiledExpr, CompilerContext, FunctionDef};
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
+use crate::core::macro_engine::MacroDef;
 use crate::forms::base::{SpecialForm, check_min_arity, expect_symbol, expect_vector};
 
 /// defn - Function definition: (defn name [params] body)
@@ -142,58 +143,77 @@ impl SpecialForm for DefnForm {
                 .insert(key, SheafValue::Symbol(type_name.clone(), loc.clone()));
         }
 
-        // Compile body
-        let body_compiled = compiler.compile(&body_ast)?;
+        // Compile body. May fail for macro helper functions that reference
+        // symbols only available at macro expansion time (e.g., transform-layer
+        // uses bare `p` as AST data). In that case, register with body_compiled: None;
+        // the mini-eval can still call the function via its AST body.
+        let compile_result = compiler.compile(&body_ast);
 
-        // Restore local scope
+        // Restore local scope (must happen even if compile failed)
         compiler.local_vars = saved_locals;
 
-        // Build known param types from defparams and shape annotations
-        let mut known_param_types: Vec<(String, crate::compiler::stablehlo::StableHLOType)> =
-            Vec::new();
-        for (param, type_name) in &type_annotations {
-            if let Some(layout) = compiler.param_types.get(type_name) {
-                let tuple_ty = crate::forms::ml::param_layout_to_stablehlo_type(layout);
-                known_param_types.push((param.clone(), tuple_ty));
-            }
-        }
-        for (param, shape) in &shape_annotations {
-            known_param_types.push((
-                param.clone(),
-                crate::compiler::stablehlo::StableHLOType::f32_tensor(shape.clone()),
-            ));
-        }
-
-        // Infer function signature with known types for typed params
-        let mut signature = crate::core::inference::infer_function_signature_with_known(
-            compiler,
-            &params,
-            &body_compiled,
-            &known_param_types,
-        )?;
-
-        // Override param types from known_param_types (infer may have defaulted them)
-        for (param, tuple_ty) in &known_param_types {
-            if let Some(idx) = params.iter().position(|p| p == param) {
-                signature.param_types[idx] = tuple_ty.clone();
-            }
-        }
-
-        // If body returns a Dict, store sorted keys for IREE result reconstruction
-        if let CompiledExpr::Dict(pairs) = &body_compiled {
-            let mut keys: Vec<String> = pairs
-                .iter()
-                .filter_map(|(k, _)| {
-                    if let CompiledExpr::Keyword(s) = k {
-                        Some(s.clone())
-                    } else {
-                        None
+        let (body_compiled_opt, signature_opt, known_param_types) = match compile_result {
+            Ok(body_compiled) => {
+                // Build known param types from defparams and shape annotations
+                let mut known_param_types: Vec<(
+                    String,
+                    crate::compiler::stablehlo::StableHLOType,
+                )> = Vec::new();
+                for (param, type_name) in &type_annotations {
+                    if let Some(layout) = compiler.param_types.get(type_name) {
+                        let tuple_ty = crate::forms::ml::param_layout_to_stablehlo_type(layout);
+                        known_param_types.push((param.clone(), tuple_ty));
                     }
-                })
-                .collect();
-            keys.sort();
-            signature.return_dict_keys = Some(keys);
-        }
+                }
+                for (param, shape) in &shape_annotations {
+                    known_param_types.push((
+                        param.clone(),
+                        crate::compiler::stablehlo::StableHLOType::f32_tensor(shape.clone()),
+                    ));
+                }
+
+                // Infer function signature with known types for typed params
+                let mut signature =
+                    crate::core::inference::infer_function_signature_with_known(
+                        compiler,
+                        &params,
+                        &body_compiled,
+                        &known_param_types,
+                    )
+                    .ok();
+
+                if let Some(ref mut sig) = signature {
+                    // Override param types from known_param_types
+                    for (param, tuple_ty) in &known_param_types {
+                        if let Some(idx) = params.iter().position(|p| p == param) {
+                            sig.param_types[idx] = tuple_ty.clone();
+                        }
+                    }
+
+                    // If body returns a Dict, store sorted keys for IREE result reconstruction
+                    if let CompiledExpr::Dict(pairs) = &body_compiled {
+                        let mut keys: Vec<String> = pairs
+                            .iter()
+                            .filter_map(|(k, _)| {
+                                if let CompiledExpr::Keyword(s) = k {
+                                    Some(s.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        keys.sort();
+                        sig.return_dict_keys = Some(keys);
+                    }
+                }
+
+                (Some(body_compiled), signature, known_param_types)
+            }
+            Err(_) => {
+                // Body compilation failed — register as AST-only function
+                (None, None, vec![])
+            }
+        };
 
         // Register the function in the compiler with compiled body and signature
         compiler.registry.insert(
@@ -202,8 +222,8 @@ impl SpecialForm for DefnForm {
                 name: name.to_string(),
                 params,
                 body: body_ast,
-                body_compiled: Some(body_compiled),
-                signature: Some(signature),
+                body_compiled: body_compiled_opt,
+                signature: signature_opt,
                 vmfb_session_idx: None,
                 known_param_types,
             },
@@ -305,6 +325,58 @@ impl SpecialForm for LetForm {
             bindings: compiled_bindings,
             body: Box::new(compiled_body),
         })
+    }
+}
+
+/// defmacro - Macro definition: (defmacro name [params] body-template)
+pub struct DefmacroForm;
+
+impl SpecialForm for DefmacroForm {
+    fn name(&self) -> &'static str {
+        "defmacro"
+    }
+
+    fn compile(
+        &self,
+        compiler: &mut CompilerContext,
+        args: &[SheafValue],
+        loc: &SourceLocation,
+    ) -> SheafResult<CompiledExpr> {
+        check_min_arity("defmacro", args, 3, loc)?;
+
+        let name = expect_symbol(&args[0], "defmacro name", loc)?;
+        let params_vec = expect_vector(&args[1], "defmacro parameters", loc)?;
+
+        // Parse parameters, separating positional from rest (&)
+        let mut positional_params = Vec::new();
+        let mut rest_param = None;
+        let mut saw_ampersand = false;
+
+        for p in params_vec {
+            let sym = expect_symbol(p, "defmacro parameter", loc)?;
+            if sym == "&" {
+                saw_ampersand = true;
+            } else if saw_ampersand {
+                rest_param = Some(sym.to_string());
+                break;
+            } else {
+                positional_params.push(sym.to_string());
+            }
+        }
+
+        let body_template = args[2].clone();
+
+        compiler.macro_engine.macros.insert(
+            name.to_string(),
+            MacroDef {
+                name: name.to_string(),
+                positional_params,
+                rest_param,
+                body_template,
+            },
+        );
+
+        Ok(CompiledExpr::Nil)
     }
 }
 

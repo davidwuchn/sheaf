@@ -22,7 +22,7 @@ pub mod utils;
 use std::collections::HashMap;
 
 pub use base::SpecialForm;
-pub use binding::{DefnForm, FnForm, LetForm};
+pub use binding::{DefmacroForm, DefnForm, FnForm, LetForm};
 pub use control::{CaseForm, DoForm, GuardForm, IfForm, RepeatForm, WhileForm};
 pub use flow::{ThreadAsForm, ThreadFirstForm};
 pub use ml::{DefparamsForm, WithParamsForm};

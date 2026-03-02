@@ -6,6 +6,7 @@
 pub mod compiler;
 pub mod error;
 pub mod inference;
+pub mod macro_engine;
 pub mod parser;
 pub mod trace;
 
