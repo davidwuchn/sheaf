@@ -134,6 +134,8 @@ Always quote shapes for functions that expect static data:
 - `when` - conditional execution (returns nil if false)
 - `unless` - inverse conditional
 - `comment` - comment out code blocks
+- `defmodel` - define a neural network as a sequence of named layers
+- `defbatch` - define a function that auto-vectorizes over batch dimensions via `vmap`
 
 ---
 

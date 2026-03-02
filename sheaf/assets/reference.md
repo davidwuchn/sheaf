@@ -2580,14 +2580,14 @@ Conditional execution without else branch. Expands to `(if condition body nil)`.
 **Type:** macro  
 **Signature:** `(unless condition body)`
 
-Negated conditional. Expands to `(if (not condition) body nil)`.
+Negated conditional. Expands to `(if condition nil body)`.
 
 ```sheaf
 (unless (zero? x)
   (/ 1 x))
 
 ;; Expands to:
-(if (not (zero? x)) (/ 1 x) nil)
+(if (zero? x) nil (/ 1 x))
 ```
 
 #### comment
@@ -2608,32 +2608,37 @@ Ignores expressions and returns nil. Useful for multi-line comments.
 
 #### defmodel
 
-**Type:** macro  
-**Signature:** `(defmodel name params body)`
+**Type:** macro
+**Signature:** `(defmodel name [input-params] (layer :name) (layer :name :activation) ...)`
 
-Convenience macro for defining model functions with parameter destructuring.
+Defines a neural network as a sequence of named layers with optional activations. Each layer spec generates a `with-params` block that binds `W` and `b` from the parameter dictionary, applies `(+ (@ _ W) b)`, and optionally wraps it in an activation function. The input is threaded through layers via `as->`.
 
 ```sheaf
-(defmodel forward [x params]
-  (with-params [params :layers]
-    (-> x
-      (linear W1 b1)
-      (relu)
-      (linear W2 b2))))
+(defmodel forward [x]
+  (layer :hidden1 relu)
+  (layer :output))
+
+;; Expands to:
+(defn forward [x p]
+  (as-> x _
+    (with-params [p :hidden1] (relu (+ (@ _ W) b)))
+    (with-params [p :output] (+ (@ _ W) b))))
 ```
 
 #### defbatch
 
-**Type:** macro  
-**Signature:** `(defbatch name func)`
+**Type:** macro
+**Signature:** `(defbatch name [params] [axes] & body)`
 
-Wraps a function with automatic batching via `vmap` over the first dimension.
+Defines a function that auto-vectorizes over batch dimensions via `vmap`. The axes spec indicates which arguments are batched (`0`) vs shared (`nil`).
 
 ```sheaf
-(defbatch process-batch process-single-item)
+(defbatch linear-layer [x w b] [0 nil nil]
+  (+ (@ x w) b))
 
-;; Now process-batch can handle batches of items
-(process-batch [[1 2] [3 4] [5 6]])
+;; Expands to:
+(defn linear-layer [x w b]
+  ((vmap (lambda [x w b] (+ (@ x w) b)) [0 nil nil]) x w b))
 ```
 
 ---
