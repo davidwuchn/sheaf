@@ -1,10 +1,9 @@
 ;; Neural network library for Sheaf
 
 (defn cross-entropy-loss [logits targets]
-  (let [;; Using runtime log-softmax directly
-        log-p (log-softmax (reshape logits -1 (get (shape logits) -1)))
-        V (get (shape log-p) -1)
-        flat-targets (reshape targets -1)
+  (let [V (int (last (shape logits)))
+        log-p (log-softmax (reshape logits (cons -1 (cons V '[]))) :axis -1)
+        flat-targets (reshape targets (cons -1 '[]))
         target-mask (one-hot flat-targets V)
         target-log-probs (sum (* log-p target-mask) :axis -1)]
     (* (mean target-log-probs) -1.0)))
