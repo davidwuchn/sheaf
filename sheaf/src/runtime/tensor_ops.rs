@@ -194,13 +194,64 @@ pub fn emit_one_hot(
     emitter.emit_one_hot(indices, indices_ty, num_classes)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Emit variance: var(x, axis) = mean((x - mean(x, axis, keepdims=true))^2, axis)
+pub fn emit_var(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    axis: i64,
+    keepdims: bool,
+) -> (Register, StableHLOType) {
+    // mean(x, axis, keepdims=true) for broadcasting
+    let (mean_reg, mean_ty) = emitter.emit_reduce_mean(operand, operand_ty, axis, true);
+    // x - mean
+    let (diff, diff_ty) = emitter.emit_binop("-", operand, &mean_reg, operand_ty, &mean_ty);
+    // (x - mean)^2
+    let (sq, sq_ty) = emitter.emit_binop("*", &diff, &diff, &diff_ty, &diff_ty);
+    // mean of squared diffs
+    emitter.emit_reduce_mean(&sq, &sq_ty, axis, keepdims)
+}
 
-    #[test]
-    fn test_tensor_ops_exist() {
-        // Just verify the module compiles
-        assert!(true);
-    }
+/// Emit normalize: normalize(x, axis) = x / sum(x, axis, keepdims=true)
+pub fn emit_normalize(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    axis: i64,
+) -> (Register, StableHLOType) {
+    let (sum_reg, sum_ty) = emitter.emit_reduce_sum(operand, operand_ty, axis, true);
+    emitter.emit_binop("/", operand, &sum_reg, operand_ty, &sum_ty)
+}
+
+/// Emit dynamic-slice: (dynamic-slice tensor start end) — 1D slice with inclusive end
+pub fn emit_dynamic_slice(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    start: i64,
+    end: i64,
+) -> (Register, StableHLOType) {
+    emitter.emit_slice_range(operand, operand_ty, start, end)
+}
+
+/// Emit roll: (roll tensor shift) — circular shift along flat dimension
+pub fn emit_roll(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    shift: i64,
+) -> (Register, StableHLOType) {
+    emitter.emit_roll(operand, operand_ty, shift)
+}
+
+/// Emit index-update: (index-update tensor idx new-value)
+pub fn emit_index_update(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    index: i64,
+    value: &Register,
+    value_ty: &StableHLOType,
+) -> (Register, StableHLOType) {
+    emitter.emit_index_update(operand, operand_ty, index, value, value_ty)
 }

@@ -517,4 +517,160 @@ impl StableHLOEmitter {
             self.emit_select(&mask_reg, &ones_reg, &zeros_reg, &mask_ty, &out_ty, &out_ty)
         }
     }
+
+    /// Emit slice along axis 0: (dynamic-slice tensor start end)
+    /// start is inclusive, end is inclusive (matches interpreter semantics)
+    pub fn emit_slice_range(
+        &mut self,
+        input: &Register,
+        input_ty: &StableHLOType,
+        start: i64,
+        end: i64,
+    ) -> (Register, StableHLOType) {
+        let shape = input_ty.shape();
+        let ndim = shape.len();
+
+        let mut start_indices = vec![0i64; ndim];
+        let mut limit_indices = shape.to_vec();
+        let strides = vec![1i64; ndim];
+        start_indices[0] = start;
+        limit_indices[0] = end + 1; // inclusive end
+
+        let start_str = start_indices.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+        let limit_str = limit_indices.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+        let strides_str = strides.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+
+        let mut result_shape = shape.to_vec();
+        result_shape[0] = end + 1 - start;
+        let result_ty = StableHLOType::f32_tensor(result_shape);
+
+        let result_reg = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.slice {} [{}] to [{}] step [{}] : ({}) -> {}",
+            result_reg.to_mlir(),
+            input.to_mlir(),
+            start_str,
+            limit_str,
+            strides_str,
+            input_ty.to_mlir(),
+            result_ty.to_mlir(),
+        ));
+        (result_reg, result_ty)
+    }
+
+    /// Emit roll (circular shift): (roll tensor shift)
+    /// Positive shift moves elements forward (right), wrapping around.
+    /// Implemented as: concat(slice[n-shift:], slice[:n-shift])
+    pub fn emit_roll(
+        &mut self,
+        input: &Register,
+        input_ty: &StableHLOType,
+        shift: i64,
+    ) -> (Register, StableHLOType) {
+        let shape = input_ty.shape();
+        let n = shape[0];
+        let shift = ((shift % n) + n) % n; // normalize to [0, n)
+
+        if shift == 0 {
+            return (input.clone(), input_ty.clone());
+        }
+
+        // Split point: elements from [n-shift..n-1] go first, then [0..n-shift-1]
+        let split = n - shift;
+
+        // slice [split:n-1] (inclusive end)
+        let (tail, tail_ty) = self.emit_slice_range(input, input_ty, split, n - 1);
+        // slice [0:split-1] (inclusive end)
+        let (head, _head_ty) = self.emit_slice_range(input, input_ty, 0, split - 1);
+
+        // concat tail + head along axis 0
+        self.emit_concatenate(&[tail, head], &[tail_ty.clone(), input_ty.clone()], 0)
+    }
+
+    /// Emit index-update: (index-update tensor idx new-value)
+    /// Returns a new tensor with tensor[idx] replaced by new-value.
+    /// Uses stablehlo.dynamic_update_slice.
+    pub fn emit_index_update(
+        &mut self,
+        input: &Register,
+        input_ty: &StableHLOType,
+        index: i64,
+        value: &Register,
+        value_ty: &StableHLOType,
+    ) -> (Register, StableHLOType) {
+        let shape = input_ty.shape();
+        let ndim = shape.len();
+
+        // Reshape value to have leading dim of 1 for the update slice
+        let mut update_shape = vec![1i64];
+        update_shape.extend_from_slice(&value_ty.shape());
+        // If value is scalar and tensor is 1D, update_shape = [1]
+        if value_ty.shape().is_empty() && ndim == 1 {
+            // scalar update into 1D tensor
+            let update_ty = StableHLOType::f32_tensor(vec![1]);
+            let update_reg = self.fresh_register();
+            self.body.push(format!(
+                "    {} = stablehlo.reshape {} : ({}) -> {}",
+                update_reg.to_mlir(),
+                value.to_mlir(),
+                value_ty.to_mlir(),
+                update_ty.to_mlir(),
+            ));
+
+            let idx_reg = self.emit_constant_i64(index);
+            let result_reg = self.fresh_register();
+            self.body.push(format!(
+                "    {} = stablehlo.dynamic_update_slice {}, {}, {} : ({}, {}, {}) -> {}",
+                result_reg.to_mlir(),
+                input.to_mlir(),
+                update_reg.to_mlir(),
+                idx_reg.to_mlir(),
+                input_ty.to_mlir(),
+                update_ty.to_mlir(),
+                StableHLOType::ScalarI64.to_mlir(),
+                input_ty.to_mlir(),
+            ));
+            (result_reg, input_ty.clone())
+        } else {
+            // N-D: value has shape [D1, D2, ...], update slice has shape [1, D1, D2, ...]
+            let update_ty = StableHLOType::f32_tensor(update_shape);
+            let update_reg = self.fresh_register();
+            self.body.push(format!(
+                "    {} = stablehlo.reshape {} : ({}) -> {}",
+                update_reg.to_mlir(),
+                value.to_mlir(),
+                value_ty.to_mlir(),
+                update_ty.to_mlir(),
+            ));
+
+            // Start indices: [index, 0, 0, ...]
+            let idx_reg = self.emit_constant_i64(index);
+            let zero_idx = self.emit_constant_i64(0);
+            let mut start_regs = vec![idx_reg.to_mlir()];
+            for _ in 1..ndim {
+                start_regs.push(zero_idx.to_mlir());
+            }
+            let start_str = start_regs.join(", ");
+
+            let mut start_types = vec![StableHLOType::ScalarI64.to_mlir()];
+            for _ in 1..ndim {
+                start_types.push(StableHLOType::ScalarI64.to_mlir());
+            }
+            let start_types_str = start_types.join(", ");
+
+            let result_reg = self.fresh_register();
+            self.body.push(format!(
+                "    {} = stablehlo.dynamic_update_slice {}, {}, {} : ({}, {}, {}) -> {}",
+                result_reg.to_mlir(),
+                input.to_mlir(),
+                update_reg.to_mlir(),
+                start_str,
+                input_ty.to_mlir(),
+                update_ty.to_mlir(),
+                start_types_str,
+                input_ty.to_mlir(),
+            ));
+            (result_reg, input_ty.clone())
+        }
+    }
 }

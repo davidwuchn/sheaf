@@ -1244,6 +1244,133 @@ impl CodeGenerator {
             let reg = self.emitter.emit_constant_i64(ndim);
             Ok((reg, StableHLOType::ScalarI64))
         }
+        // var: (var x :axis N) or (var x)
+        else if name == "var" && !args.is_empty() {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+
+            let mut axis: Option<i64> = None;
+            let mut keepdims = false;
+            let mut i = 1;
+            while i + 1 < args.len() {
+                match &args[i] {
+                    CompiledExpr::Keyword(k) if k == "axis" => {
+                        if let CompiledExpr::Integer(n) = &args[i + 1] {
+                            axis = Some(*n);
+                        }
+                        i += 2;
+                    }
+                    CompiledExpr::Keyword(k) if k == "keepdims" => {
+                        if let CompiledExpr::Boolean(b) = &args[i + 1] {
+                            keepdims = *b;
+                        }
+                        i += 2;
+                    }
+                    _ => { i += 1; }
+                }
+            }
+
+            let (reg, ty) = match axis {
+                Some(ax) => {
+                    tensor_ops::emit_var(&mut self.emitter, &operand_reg, &operand_ty, ax, keepdims)
+                }
+                None => {
+                    // No axis → reduce all dimensions sequentially
+                    let ndim = operand_ty.shape().len();
+                    if ndim == 0 {
+                        // var of scalar = 0
+                        let reg = self.emitter.emit_constant_f32(0.0);
+                        (reg, StableHLOType::scalar_f32())
+                    } else {
+                        let mut cur_reg = operand_reg;
+                        let mut cur_ty = operand_ty;
+                        for _ in (0..ndim).rev() {
+                            let (r, t) = tensor_ops::emit_var(&mut self.emitter, &cur_reg, &cur_ty, -1, false);
+                            cur_reg = r;
+                            cur_ty = t;
+                        }
+                        (cur_reg, cur_ty)
+                    }
+                }
+            };
+            Ok((reg, ty))
+        }
+        // normalize: (normalize x :axis N) or (normalize x)
+        else if name == "normalize" && !args.is_empty() {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+
+            let mut axis: Option<i64> = None;
+            let mut i = 1;
+            while i + 1 < args.len() {
+                match &args[i] {
+                    CompiledExpr::Keyword(k) if k == "axis" => {
+                        if let CompiledExpr::Integer(n) = &args[i + 1] {
+                            axis = Some(*n);
+                        }
+                        i += 2;
+                    }
+                    _ => { i += 1; }
+                }
+            }
+
+            let ax = axis.unwrap_or(-1);
+            let (reg, ty) = tensor_ops::emit_normalize(&mut self.emitter, &operand_reg, &operand_ty, ax);
+            Ok((reg, ty))
+        }
+        // dynamic-slice: (dynamic-slice tensor start end)
+        else if name == "dynamic-slice" && args.len() == 3 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let start = match &args[1] {
+                CompiledExpr::Integer(n) => *n,
+                _ => {
+                    return Err(SheafError::Compile {
+                        message: "dynamic-slice: start must be integer".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    });
+                }
+            };
+            let end = match &args[2] {
+                CompiledExpr::Integer(n) => *n,
+                _ => {
+                    return Err(SheafError::Compile {
+                        message: "dynamic-slice: end must be integer".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    });
+                }
+            };
+            let (reg, ty) = tensor_ops::emit_dynamic_slice(&mut self.emitter, &operand_reg, &operand_ty, start, end);
+            Ok((reg, ty))
+        }
+        // roll: (roll tensor shift)
+        else if name == "roll" && args.len() == 2 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let shift = match &args[1] {
+                CompiledExpr::Integer(n) => *n,
+                _ => {
+                    return Err(SheafError::Compile {
+                        message: "roll: shift must be integer".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    });
+                }
+            };
+            let (reg, ty) = tensor_ops::emit_roll(&mut self.emitter, &operand_reg, &operand_ty, shift);
+            Ok((reg, ty))
+        }
+        // index-update: (index-update tensor idx new-value)
+        else if name == "index-update" && args.len() == 3 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let idx = match &args[1] {
+                CompiledExpr::Integer(n) => *n,
+                _ => {
+                    return Err(SheafError::Compile {
+                        message: "index-update: index must be integer".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    });
+                }
+            };
+            let (value_reg, value_ty) = self.generate(&args[2])?;
+            let (reg, ty) = tensor_ops::emit_index_update(&mut self.emitter, &operand_reg, &operand_ty, idx, &value_reg, &value_ty);
+            Ok((reg, ty))
+        }
         else {
             Err(SheafError::Compile {
                 message: format!("Function call not yet supported: {}", name),
