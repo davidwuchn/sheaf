@@ -495,6 +495,26 @@ impl CodeGenerator {
             let (result_reg, result_ty) = nn_ops::emit_softmax(&mut self.emitter, &operand_reg, &operand_ty, axis);
             Ok((result_reg, result_ty))
         }
+        // einsum: (einsum "spec" lhs rhs)
+        else if name == "einsum" && args.len() >= 3 {
+            let spec = match &args[0] {
+                CompiledExpr::String(s) => s.clone(),
+                _ => {
+                    return Err(SheafError::Compile {
+                        message: "einsum: first argument must be a string spec".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    });
+                }
+            };
+            let (lhs_reg, lhs_ty) = self.generate(&args[1])?;
+            let (rhs_reg, rhs_ty) = self.generate(&args[2])?;
+            self.emitter
+                .emit_einsum(&lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty, &spec)
+                .map_err(|msg| SheafError::Compile {
+                    message: msg,
+                    location: crate::core::error::SourceLocation::unknown(),
+                })
+        }
         // shape: (shape tensor) or (shape tensor axis)
         else if name == "shape" && !args.is_empty() {
             let (_, operand_ty) = self.generate(&args[0])?;
