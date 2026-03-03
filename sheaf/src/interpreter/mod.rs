@@ -378,6 +378,7 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
         "softmax" | "log-softmax" | "sum" | "mean" | "product"
         | "min" | "max" | "argmax" | "argmin" | "concat"
         | "leaky-relu" | "celu" | "var" | "normalize" | "range"
+        | "print" | "choice"
     );
 
     // Evaluate args, splitting kwargs only for functions that use them
