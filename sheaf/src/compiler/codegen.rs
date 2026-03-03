@@ -475,6 +475,42 @@ impl CodeGenerator {
             let (result_reg, result_ty) = nn_ops::emit_gelu(&mut self.emitter, &operand_reg, &operand_ty);
             Ok((result_reg, result_ty))
         }
+        // silu: (silu x)
+        else if name == "silu" && args.len() == 1 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let (result_reg, result_ty) = nn_ops::emit_silu(&mut self.emitter, &operand_reg, &operand_ty);
+            Ok((result_reg, result_ty))
+        }
+        // leaky-relu: (leaky-relu x :negative_slope 0.01)
+        else if name == "leaky-relu" && !args.is_empty() {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let mut alpha = 0.01;
+            if args.len() >= 3 {
+                if let (CompiledExpr::Keyword(k), CompiledExpr::Float(v)) = (&args[1], &args[2]) {
+                    if k == "negative_slope" { alpha = *v; }
+                }
+            }
+            let (result_reg, result_ty) = nn_ops::emit_leaky_relu(&mut self.emitter, &operand_reg, &operand_ty, alpha);
+            Ok((result_reg, result_ty))
+        }
+        // selu: (selu x)
+        else if name == "selu" && args.len() == 1 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let (result_reg, result_ty) = nn_ops::emit_selu(&mut self.emitter, &operand_reg, &operand_ty);
+            Ok((result_reg, result_ty))
+        }
+        // celu: (celu x :alpha 1.0)
+        else if name == "celu" && !args.is_empty() {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let mut alpha = 1.0;
+            if args.len() >= 3 {
+                if let (CompiledExpr::Keyword(k), CompiledExpr::Float(v)) = (&args[1], &args[2]) {
+                    if k == "alpha" { alpha = *v; }
+                }
+            }
+            let (result_reg, result_ty) = nn_ops::emit_celu(&mut self.emitter, &operand_reg, &operand_ty, alpha);
+            Ok((result_reg, result_ty))
+        }
         // softmax: (softmax x :axis N)
         else if name == "softmax" && !args.is_empty() {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
@@ -493,6 +529,26 @@ impl CodeGenerator {
                 i += 1;
             }
             let (result_reg, result_ty) = nn_ops::emit_softmax(&mut self.emitter, &operand_reg, &operand_ty, axis);
+            Ok((result_reg, result_ty))
+        }
+        // log-softmax: (log-softmax x :axis N)
+        else if name == "log-softmax" && !args.is_empty() {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let mut axis: i64 = -1;
+            let mut i = 1;
+            while i + 1 < args.len() {
+                if let CompiledExpr::Keyword(k) = &args[i] {
+                    if k == "axis" {
+                        if let CompiledExpr::Integer(n) = &args[i + 1] {
+                            axis = *n;
+                        }
+                        i += 2;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+            let (result_reg, result_ty) = nn_ops::emit_log_softmax(&mut self.emitter, &operand_reg, &operand_ty, axis);
             Ok((result_reg, result_ty))
         }
         // einsum: (einsum "spec" lhs rhs)

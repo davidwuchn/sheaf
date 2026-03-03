@@ -112,3 +112,83 @@ pub fn emit_softmax(
     // Step 5: exp / sum (broadcast handled by emit_binop)
     emitter.emit_binop("/", &exp_reg, &sum_reg, &shifted_ty, &sum_ty)
 }
+
+/// Emit log-softmax: x - log(sum(exp(x - max(x))))
+pub fn emit_log_softmax(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    ty: &StableHLOType,
+    axis: i64,
+) -> (Register, StableHLOType) {
+    let (max_reg, max_ty) = emitter.emit_reduce_max(operand, ty, axis, true);
+    let (shifted, shifted_ty) = emitter.emit_binop("-", operand, &max_reg, ty, &max_ty);
+    let exp_reg = emitter.emit_unary("exp", &shifted, &shifted_ty);
+    let (sum_reg, sum_ty) = emitter.emit_reduce_sum(&exp_reg, &shifted_ty, axis, true);
+    let log_sum = emitter.emit_unary("log", &sum_reg, &sum_ty);
+    emitter.emit_binop("-", &shifted, &log_sum, &shifted_ty, &sum_ty)
+}
+
+/// Emit SiLU (swish): x * sigmoid(x)
+pub fn emit_silu(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    ty: &StableHLOType,
+) -> (Register, StableHLOType) {
+    let sig = emitter.emit_unary("sigmoid", operand, ty);
+    emitter.emit_binop("*", operand, &sig, ty, ty)
+}
+
+/// Emit leaky-ReLU: where(x > 0, x, alpha * x)
+pub fn emit_leaky_relu(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    ty: &StableHLOType,
+    alpha: f64,
+) -> (Register, StableHLOType) {
+    let zero = emitter.emit_constant_f32(0.0);
+    let zero_ty = StableHLOType::scalar_f32();
+    let (cond, cond_ty) = emitter.emit_compare(">", operand, &zero, ty, &zero_ty);
+    let alpha_reg = emitter.emit_constant_f32(alpha);
+    let (ax, ax_ty) = emitter.emit_binop("*", &alpha_reg, operand, &zero_ty, ty);
+    emitter.emit_select(&cond, operand, &ax, &cond_ty, ty, &ax_ty)
+}
+
+/// Emit SELU: scale * where(x > 0, x, alpha * (exp(x) - 1))
+pub fn emit_selu(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    ty: &StableHLOType,
+) -> (Register, StableHLOType) {
+    let alpha = 1.6732632423543772;
+    let scale = 1.0507009873554805;
+    let zero = emitter.emit_constant_f32(0.0);
+    let zero_ty = StableHLOType::scalar_f32();
+    let (cond, cond_ty) = emitter.emit_compare(">", operand, &zero, ty, &zero_ty);
+    let exp_x = emitter.emit_unary("exp", operand, ty);
+    let one = emitter.emit_constant_f32(1.0);
+    let (exp_minus_1, em1_ty) = emitter.emit_binop("-", &exp_x, &one, ty, &zero_ty);
+    let alpha_reg = emitter.emit_constant_f32(alpha);
+    let (alpha_em1, alpha_em1_ty) = emitter.emit_binop("*", &alpha_reg, &exp_minus_1, &zero_ty, &em1_ty);
+    let (inner, inner_ty) = emitter.emit_select(&cond, operand, &alpha_em1, &cond_ty, ty, &alpha_em1_ty);
+    let scale_reg = emitter.emit_constant_f32(scale);
+    emitter.emit_binop("*", &scale_reg, &inner, &zero_ty, &inner_ty)
+}
+
+/// Emit CELU: where(x > 0, x, alpha * (exp(x/alpha) - 1))
+pub fn emit_celu(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    ty: &StableHLOType,
+    alpha: f64,
+) -> (Register, StableHLOType) {
+    let zero = emitter.emit_constant_f32(0.0);
+    let zero_ty = StableHLOType::scalar_f32();
+    let (cond, cond_ty) = emitter.emit_compare(">", operand, &zero, ty, &zero_ty);
+    let alpha_reg = emitter.emit_constant_f32(alpha);
+    let (x_over_a, xoa_ty) = emitter.emit_binop("/", operand, &alpha_reg, ty, &zero_ty);
+    let exp_xoa = emitter.emit_unary("exp", &x_over_a, &xoa_ty);
+    let one = emitter.emit_constant_f32(1.0);
+    let (exp_minus_1, em1_ty) = emitter.emit_binop("-", &exp_xoa, &one, &xoa_ty, &zero_ty);
+    let (alpha_em1, alpha_em1_ty) = emitter.emit_binop("*", &alpha_reg, &exp_minus_1, &zero_ty, &em1_ty);
+    emitter.emit_select(&cond, operand, &alpha_em1, &cond_ty, ty, &alpha_em1_ty)
+}

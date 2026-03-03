@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Reduction operations (sum, mean, max) for StableHLO.
+//! Reduction operations (sum, mean, max, min, product, argmax, argmin) for StableHLO.
 
 use super::{Register, StableHLOEmitter, StableHLOType};
 
