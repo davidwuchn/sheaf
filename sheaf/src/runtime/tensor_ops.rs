@@ -126,6 +126,74 @@ pub fn emit_mean(
     emitter.emit_reduce_mean(operand, operand_ty, axis, keepdims)
 }
 
+/// Emit product reduction: (product x :axis 1)
+pub fn emit_product(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    axis: i64,
+    keepdims: bool,
+) -> (Register, StableHLOType) {
+    emitter.emit_reduce_product(operand, operand_ty, axis, keepdims)
+}
+
+/// Emit min reduction: (min x :axis 1)
+pub fn emit_min_reduce(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    axis: i64,
+    keepdims: bool,
+) -> (Register, StableHLOType) {
+    emitter.emit_reduce_min(operand, operand_ty, axis, keepdims)
+}
+
+/// Emit max reduction: (max x :axis 1)
+pub fn emit_max_reduce(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    axis: i64,
+    keepdims: bool,
+) -> (Register, StableHLOType) {
+    emitter.emit_reduce_max(operand, operand_ty, axis, keepdims)
+}
+
+/// Emit argmax: (argmax x :axis 1)
+pub fn emit_argmax(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    axis: i64,
+) -> (Register, StableHLOType) {
+    emitter.emit_argmax(operand, operand_ty, axis)
+}
+
+/// Emit argmin: (argmin x :axis 1)
+pub fn emit_argmin(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    axis: i64,
+) -> (Register, StableHLOType) {
+    emitter.emit_argmin(operand, operand_ty, axis)
+}
+
+/// Emit identity matrix: (eye N) or (eye N M)
+pub fn emit_eye(emitter: &mut StableHLOEmitter, n: i64, m: i64) -> (Register, StableHLOType) {
+    emitter.emit_eye(n, m)
+}
+
+/// Emit one-hot encoding: (one-hot indices num_classes)
+pub fn emit_one_hot(
+    emitter: &mut StableHLOEmitter,
+    indices: &Register,
+    indices_ty: &StableHLOType,
+    num_classes: i64,
+) -> (Register, StableHLOType) {
+    emitter.emit_one_hot(indices, indices_ty, num_classes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

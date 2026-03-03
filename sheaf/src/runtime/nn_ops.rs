@@ -192,3 +192,79 @@ pub fn emit_celu(
     let (alpha_em1, alpha_em1_ty) = emitter.emit_binop("*", &alpha_reg, &exp_minus_1, &zero_ty, &em1_ty);
     emitter.emit_select(&cond, operand, &alpha_em1, &cond_ty, ty, &alpha_em1_ty)
 }
+
+/// Emit MSE loss: mean((pred - target)^2)
+pub fn emit_mse_loss(
+    emitter: &mut StableHLOEmitter,
+    pred: &Register,
+    target: &Register,
+    pred_ty: &StableHLOType,
+    target_ty: &StableHLOType,
+) -> (Register, StableHLOType) {
+    let (diff, diff_ty) = emitter.emit_binop("-", pred, target, pred_ty, target_ty);
+    let (sq, sq_ty) = emitter.emit_binop("*", &diff, &diff, &diff_ty, &diff_ty);
+    // Reduce all dimensions to scalar via mean
+    let ndim = sq_ty.shape().len();
+    let mut cur_reg = sq;
+    let mut cur_ty = sq_ty;
+    for _ in (0..ndim).rev() {
+        let (r, t) = emitter.emit_reduce_mean(&cur_reg, &cur_ty, -1, false);
+        cur_reg = r;
+        cur_ty = t;
+    }
+    (cur_reg, cur_ty)
+}
+
+/// Emit MAE loss: mean(|pred - target|)
+pub fn emit_mae_loss(
+    emitter: &mut StableHLOEmitter,
+    pred: &Register,
+    target: &Register,
+    pred_ty: &StableHLOType,
+    target_ty: &StableHLOType,
+) -> (Register, StableHLOType) {
+    let (diff, diff_ty) = emitter.emit_binop("-", pred, target, pred_ty, target_ty);
+    let abs_diff = emitter.emit_unary("abs", &diff, &diff_ty);
+    let abs_ty = diff_ty;
+    let ndim = abs_ty.shape().len();
+    let mut cur_reg = abs_diff;
+    let mut cur_ty = abs_ty;
+    for _ in (0..ndim).rev() {
+        let (r, t) = emitter.emit_reduce_mean(&cur_reg, &cur_ty, -1, false);
+        cur_reg = r;
+        cur_ty = t;
+    }
+    (cur_reg, cur_ty)
+}
+
+/// Emit sparse cross-entropy loss: -mean(sum(one_hot(labels, C) * log_softmax(logits), axis=-1))
+/// logits: [batch, classes], labels: [batch] (integer indices as f32)
+pub fn emit_sparse_cross_entropy(
+    emitter: &mut StableHLOEmitter,
+    logits: &Register,
+    labels: &Register,
+    logits_ty: &StableHLOType,
+    labels_ty: &StableHLOType,
+) -> (Register, StableHLOType) {
+    let shape = logits_ty.shape();
+    let num_classes = *shape.last().unwrap();
+
+    // log-softmax along last axis
+    let (log_sm, log_sm_ty) = emit_log_softmax(emitter, logits, logits_ty, -1);
+
+    // one-hot encoding of labels → [batch, classes]
+    let (oh, oh_ty) = emitter.emit_one_hot(labels, labels_ty, num_classes);
+
+    // Multiply: pick correct class log-probs
+    let (prod, prod_ty) = emitter.emit_binop("*", &oh, &log_sm, &oh_ty, &log_sm_ty);
+
+    // Sum along class axis (-1) → [batch]
+    let (batch_loss, batch_loss_ty) = emitter.emit_reduce_sum(&prod, &prod_ty, -1, false);
+
+    // Negate
+    let neg_one = emitter.emit_constant_f32(-1.0);
+    let (neg_loss, neg_loss_ty) = emitter.emit_binop("*", &neg_one, &batch_loss, &StableHLOType::scalar_f32(), &batch_loss_ty);
+
+    // Mean over batch
+    emitter.emit_reduce_mean(&neg_loss, &neg_loss_ty, 0, false)
+}
