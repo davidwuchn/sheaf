@@ -255,3 +255,29 @@ pub fn emit_index_update(
 ) -> (Register, StableHLOType) {
     emitter.emit_index_update(operand, operand_ty, index, value, value_ty)
 }
+
+/// Emit append-and-roll: shift 1D tensor left by 1, append new value at end.
+/// (append-and-roll [a b c d] x) → [b c d x]
+pub fn emit_append_and_roll(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    value: &Register,
+    value_ty: &StableHLOType,
+) -> (Register, StableHLOType) {
+    let n = operand_ty.shape()[0];
+    // slice [1:n-1] (inclusive end) = elements 1..n-1
+    let (tail, tail_ty) = emitter.emit_slice_range(operand, operand_ty, 1, n - 1);
+    // Reshape scalar value to [1] tensor
+    let val_1d_ty = StableHLOType::f32_tensor(vec![1]);
+    let val_1d = emitter.fresh_register();
+    emitter.body.push(format!(
+        "    {} = stablehlo.reshape {} : ({}) -> {}",
+        val_1d.to_mlir(),
+        value.to_mlir(),
+        value_ty.to_mlir(),
+        val_1d_ty.to_mlir(),
+    ));
+    // concat tail ++ [value]
+    emitter.emit_concatenate(&[tail, val_1d], &[tail_ty, val_1d_ty], 0)
+}

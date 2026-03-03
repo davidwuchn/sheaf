@@ -1371,6 +1371,49 @@ impl CodeGenerator {
             let (reg, ty) = tensor_ops::emit_index_update(&mut self.emitter, &operand_reg, &operand_ty, idx, &value_reg, &value_ty);
             Ok((reg, ty))
         }
+        // append-and-roll: (append-and-roll tensor value)
+        else if name == "append-and-roll" && args.len() == 2 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let (value_reg, value_ty) = self.generate(&args[1])?;
+            let (reg, ty) = tensor_ops::emit_append_and_roll(&mut self.emitter, &operand_reg, &operand_ty, &value_reg, &value_ty);
+            Ok((reg, ty))
+        }
+        // last: (last x) — last element along axis 0
+        else if name == "last" && args.len() == 1 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let shape = operand_ty.shape();
+            if shape.is_empty() {
+                return Err(SheafError::Compile {
+                    message: "last: cannot index a scalar".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                });
+            }
+            let last_idx = shape[0] - 1;
+            let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, last_idx);
+            Ok((reg, ty))
+        }
+        // int: (int x) — cast to integer (identity in codegen, shape info is already i64)
+        else if name == "int" && args.len() == 1 {
+            self.generate(&args[0])
+        }
+        // float: (float x) — cast to float (identity in codegen)
+        else if name == "float" && args.len() == 1 {
+            self.generate(&args[0])
+        }
+        // count/len: (count x) or (len x) — compile-time length
+        else if (name == "count" || name == "len") && args.len() == 1 {
+            let (_, operand_ty) = self.generate(&args[0])?;
+            let shape = operand_ty.shape();
+            if shape.is_empty() {
+                return Err(SheafError::Compile {
+                    message: format!("{}: cannot get length of scalar", name),
+                    location: crate::core::error::SourceLocation::unknown(),
+                });
+            }
+            let len = shape[0];
+            let reg = self.emitter.emit_constant_i64(len);
+            Ok((reg, StableHLOType::ScalarI64))
+        }
         else {
             Err(SheafError::Compile {
                 message: format!("Function call not yet supported: {}", name),
