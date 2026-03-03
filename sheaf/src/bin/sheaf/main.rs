@@ -505,10 +505,13 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         let body_hash = func_def.body_hash();
         let mut body = match func_def.body_compiled {
             Some(b) => b,
-            None => {
-                if verbose { eprintln!("warning: '{}' has no compiled body, skipping", name); }
-                continue;
-            }
+            None => continue, // internal functions (use-imported), not user-defined
+        };
+        let src_file_for_skip = || -> String {
+            file_functions.iter()
+                .find(|(_, names)| names.contains(name))
+                .map(|(p, _)| p.display().to_string())
+                .unwrap_or_else(|| "?".to_string())
         };
         let mut sig = match func_def.signature {
             Some(s) => s,
@@ -531,11 +534,11 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
                             return_dict_keys: None,
                         }
                     } else {
-                        if verbose { eprintln!("warning: '{}' has no inferred signature, skipping", name); }
+                        skipped_fns.push((src_file_for_skip(), name.clone(), "no type info".to_string()));
                         continue;
                     }
                 } else {
-                    if verbose { eprintln!("warning: '{}' has no inferred signature, skipping", name); }
+                    skipped_fns.push((src_file_for_skip(), name.clone(), "no type info".to_string()));
                     continue;
                 }
             }
@@ -648,31 +651,61 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
                 compiled_per_file.entry(src_file).or_default().push(name.clone());
             }
             Err(e) => {
-                if verbose {
-                    eprintln!("warning: skipping '{}': {}", name, e);
+                let src_file = file_functions.iter()
+                    .find(|(_, names)| names.contains(name))
+                    .map(|(p, _)| p.display().to_string())
+                    .unwrap_or_else(|| "?".to_string());
+                let reason = if verbose {
+                    format!("codegen: {}", e)
                 } else {
-                    eprintln!("warning: skipping '{}' (use -v for details)", name);
-                }
+                    "codegen error (use -v for details)".to_string()
+                };
+                skipped_fns.push((src_file, name.clone(), reason));
             }
         }
     }
 
     if all_decls.is_empty() {
-        eprintln!("sheaf build: no compilable functions found");
-        if !skipped_fns.is_empty() {
-            for (file, name, reason) in &skipped_fns {
-                eprintln!("  skipped {}/{} ({})", file, name, reason);
-            }
+        eprintln!("\nsheaf build: no compilable functions found\n");
+        let max_name = skipped_fns.iter().map(|(_, n, _)| n.len()).max().unwrap_or(0);
+        for (_, name, reason) in &skipped_fns {
+            eprintln!("  {:<width$}  skipped  ({})", name, reason, width = max_name);
+        }
+        let has_no_types = skipped_fns.iter().any(|(_, _, r)| r == "no type info");
+        let has_effects = skipped_fns.iter().any(|(_, _, r)| r.starts_with("side effects"));
+        if has_no_types {
+            eprintln!();
+            eprintln!("hint: use --trace-with <runner.shf> or --config to provide tensor shapes");
+        }
+        if has_effects && !has_no_types {
+            eprintln!();
+            eprintln!("hint: all functions have side effects — only pure functions can be compiled");
         }
         exit(1);
     }
 
     // Print build summary
-    for (file, names) in &compiled_per_file {
-        eprintln!("  {} → {}", file, names.join(", "));
-    }
-    for (file, name, reason) in &skipped_fns {
-        eprintln!("  skipped: {}/{} ({})", file, name, reason);
+    let n_compiled = compiled_functions.len();
+    let n_interpreted = skipped_fns.len();
+    {
+        // Collect all entries: (name, status, detail)
+        let mut entries: Vec<(String, &str, String)> = Vec::new();
+        for mf in &compiled_functions {
+            entries.push((mf.name.clone(), "compiled", String::new()));
+        }
+        for (_, name, reason) in &skipped_fns {
+            entries.push((name.clone(), "interpreted", format!("({})", reason)));
+        }
+        let max_name = entries.iter().map(|(n, _, _)| n.len()).max().unwrap_or(0);
+        eprintln!();
+        for (name, status, detail) in &entries {
+            if detail.is_empty() {
+                eprintln!("  {:<width$}  {}", name, status, width = max_name);
+            } else {
+                eprintln!("  {:<width$}  {}  {}", name, status, detail, width = max_name);
+            }
+        }
+        eprintln!();
     }
 
     let mlir = StableHLOEmitter::emit_module(&all_decls);
@@ -682,7 +715,7 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
             eprintln!("error writing '{}': {}", output.display(), e);
             exit(1);
         });
-        eprintln!("compiled {} function(s) → {}", compiled_functions.len(), output.display());
+        eprintln!("{} compiled, {} interpreted → {}", n_compiled, n_interpreted, output.display());
         return;
     }
 
@@ -723,7 +756,7 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
     // Write manifest with function hashes
     write_manifest(&output, &compiled_functions, verbose);
 
-    eprintln!("compiled {} function(s) → {}", compiled_functions.len(), output.display());
+    eprintln!("{} compiled, {} interpreted → {}", n_compiled, n_interpreted, output.display());
 }
 
 /// Manifest entry for a compiled function.
