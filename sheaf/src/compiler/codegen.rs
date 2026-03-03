@@ -704,17 +704,47 @@ impl CodeGenerator {
             );
             Ok((reg, ty))
         }
-        // arange: (arange N) -> tensor<Nxf32> with [0, 1, 2, ..., N-1]
-        else if name == "arange" && args.len() == 1 {
-            if let CompiledExpr::Integer(n) = &args[0] {
-                let shape = vec![*n];
-                let (reg, ty) = tensor_ops::emit_arange(&mut self.emitter, &shape, 0);
-                Ok((reg, ty))
+        // arange/range: (arange N), (range N), (range start end)
+        else if (name == "arange" || name == "range") && (args.len() == 1 || args.len() == 2) {
+            if args.len() == 1 {
+                // (range N) or (arange N) -> tensor<Nxf32> [0, 1, ..., N-1]
+                if let CompiledExpr::Integer(n) = &args[0] {
+                    let shape = vec![*n];
+                    let (reg, ty) = tensor_ops::emit_arange(&mut self.emitter, &shape, 0);
+                    Ok((reg, ty))
+                } else {
+                    Err(SheafError::Compile {
+                        message: format!("{} expects an integer argument", name),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })
+                }
             } else {
-                Err(SheafError::Compile {
-                    message: "arange expects an integer argument".to_string(),
-                    location: crate::core::error::SourceLocation::unknown(),
-                })
+                // (range start end) -> tensor<(end-start)xf32> [start, start+1, ..., end-1]
+                match (&args[0], &args[1]) {
+                    (CompiledExpr::Integer(start), CompiledExpr::Integer(end)) => {
+                        let len = end - start;
+                        if len <= 0 {
+                            return Err(SheafError::Compile {
+                                message: format!("range: end ({}) must be greater than start ({})", end, start),
+                                location: crate::core::error::SourceLocation::unknown(),
+                            });
+                        }
+                        let shape = vec![len];
+                        // iota gives [0, 1, ..., len-1], then add start
+                        let (iota_reg, iota_ty) = tensor_ops::emit_arange(&mut self.emitter, &shape, 0);
+                        if *start == 0 {
+                            return Ok((iota_reg, iota_ty));
+                        }
+                        let start_reg = self.emitter.emit_constant_f32(*start as f64);
+                        let start_ty = StableHLOType::scalar_f32();
+                        let (reg, ty) = self.emitter.emit_binop("add", &iota_reg, &start_reg, &iota_ty, &start_ty);
+                        Ok((reg, ty))
+                    }
+                    _ => Err(SheafError::Compile {
+                        message: "range expects integer arguments".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    }),
+                }
             }
         }
         // concat: (concat [tensor1 tensor2 ...] dim)
