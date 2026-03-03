@@ -128,9 +128,18 @@ fn trace_rec(
                 });
             }
 
+            // (first (scan f init coll)) → unroll scan, return carry only
+            if name == "first" && args.len() == 1 {
+                if let CompiledExpr::FunctionCall { name: inner, args: inner_args } = &args[0] {
+                    if inner == "scan" {
+                        return trace_reduce(inner_args, env, leaf_map, sym_env);
+                    }
+                }
+            }
+
             match name.as_str() {
                 "get" => trace_get(args, env, leaf_map, sym_env),
-                "reduce" => trace_reduce(args, env, leaf_map, sym_env),
+                "reduce" | "scan" => trace_reduce(args, env, leaf_map, sym_env),
                 _ => {
                     let val = eval(expr, env)?;
                     if is_tensor_leaf(&val) {
