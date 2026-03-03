@@ -428,4 +428,93 @@ impl StableHLOEmitter {
             (slice_reg, slice_ty)
         }
     }
+
+    /// Emit identity matrix: (eye N) or (eye N M)
+    /// Strategy: iota(dim=0) == iota(dim=1) → select(mask, 1.0, 0.0)
+    pub fn emit_eye(&mut self, n: i64, m: i64) -> (Register, StableHLOType) {
+        let shape = vec![n, m];
+        let result_ty = StableHLOType::f32_tensor(shape.clone());
+
+        // Row indices: [0,0,...; 1,1,...; 2,2,...] shape [N,M]
+        let (row_iota, _) = self.emit_iota(&shape, 0);
+        // Col indices: [0,1,2...; 0,1,2...; ...] shape [N,M]
+        let (col_iota, iota_ty) = self.emit_iota(&shape, 1);
+
+        // Compare row == col → bool mask [N, M]
+        let (mask_reg, mask_ty) = self.emit_compare("==", &row_iota, &col_iota, &iota_ty, &iota_ty);
+
+        // ones and zeros tensors
+        let one_scalar = self.emit_constant_f32(1.0);
+        let zero_scalar = self.emit_constant_f32(0.0);
+        let ones_reg = self.emit_broadcast(&one_scalar, &StableHLOType::scalar_f32(), &result_ty);
+        let zeros_reg = self.emit_broadcast(&zero_scalar, &StableHLOType::scalar_f32(), &result_ty);
+
+        // select(mask, 1.0, 0.0)
+        self.emit_select(&mask_reg, &ones_reg, &zeros_reg, &mask_ty, &result_ty, &result_ty)
+    }
+
+    /// Emit one-hot encoding: (one-hot indices num_classes)
+    /// indices: tensor<Nxf32> (integer values as f32), num_classes: static int
+    /// Returns tensor<NxCxf32>
+    pub fn emit_one_hot(
+        &mut self,
+        indices: &Register,
+        indices_ty: &StableHLOType,
+        num_classes: i64,
+    ) -> (Register, StableHLOType) {
+        let indices_shape = indices_ty.shape();
+
+        if indices_shape.is_empty() {
+            // Scalar index → output [C]
+            let out_shape = vec![num_classes];
+            let out_ty = StableHLOType::f32_tensor(out_shape.clone());
+
+            // iota [C] along dim 0
+            let (class_iota, iota_ty) = self.emit_iota(&out_shape, 0);
+
+            // Broadcast scalar index to [C]
+            let idx_broadcast = self.emit_broadcast(indices, indices_ty, &iota_ty);
+
+            // Compare indices == iota
+            let (mask_reg, mask_ty) = self.emit_compare("==", &idx_broadcast, &class_iota, &iota_ty, &iota_ty);
+
+            let one_scalar = self.emit_constant_f32(1.0);
+            let zero_scalar = self.emit_constant_f32(0.0);
+            let ones_reg = self.emit_broadcast(&one_scalar, &StableHLOType::scalar_f32(), &out_ty);
+            let zeros_reg = self.emit_broadcast(&zero_scalar, &StableHLOType::scalar_f32(), &out_ty);
+
+            self.emit_select(&mask_reg, &ones_reg, &zeros_reg, &mask_ty, &out_ty, &out_ty)
+        } else {
+            // Tensor indices [N] → output [N, C]
+            let n = indices_shape[0];
+            let out_shape = vec![n, num_classes];
+            let out_ty = StableHLOType::f32_tensor(out_shape.clone());
+
+            // iota [N, C] along dim 1 → class indices
+            let (class_iota, iota_ty) = self.emit_iota(&out_shape, 1);
+
+            // Reshape indices [N] → [N, 1] then broadcast to [N, C]
+            let idx_2d_shape = vec![n, 1];
+            let idx_2d_ty = StableHLOType::f32_tensor(idx_2d_shape);
+            let idx_2d = self.fresh_register();
+            self.body.push(format!(
+                "    {} = stablehlo.reshape {} : ({}) -> {}",
+                idx_2d.to_mlir(),
+                indices.to_mlir(),
+                indices_ty.to_mlir(),
+                idx_2d_ty.to_mlir(),
+            ));
+            let idx_broadcast = self.emit_broadcast(&idx_2d, &idx_2d_ty, &iota_ty);
+
+            // Compare indices == iota
+            let (mask_reg, mask_ty) = self.emit_compare("==", &idx_broadcast, &class_iota, &iota_ty, &iota_ty);
+
+            let one_scalar = self.emit_constant_f32(1.0);
+            let zero_scalar = self.emit_constant_f32(0.0);
+            let ones_reg = self.emit_broadcast(&one_scalar, &StableHLOType::scalar_f32(), &out_ty);
+            let zeros_reg = self.emit_broadcast(&zero_scalar, &StableHLOType::scalar_f32(), &out_ty);
+
+            self.emit_select(&mask_reg, &ones_reg, &zeros_reg, &mask_ty, &out_ty, &out_ty)
+        }
+    }
 }
