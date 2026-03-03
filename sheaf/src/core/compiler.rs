@@ -81,6 +81,9 @@ pub struct CompilerContext {
     /// Loaded IREE VMFB sessions (indexed by FunctionDef.vmfb_session_idx)
     pub vmfb_sessions: Vec<VmfbSession>,
 
+    /// When true, skip VMFB loading (used during sheaf build --trace-with)
+    pub disable_vmfb: bool,
+
     /// Macro expansion engine
     pub macro_engine: MacroEngine,
 }
@@ -184,6 +187,7 @@ impl CompilerContext {
             loaded_modules: HashSet::new(),
             current_dir: None,
             vmfb_sessions: Vec::new(),
+            disable_vmfb: false,
             macro_engine: MacroEngine::new(),
         }
     }

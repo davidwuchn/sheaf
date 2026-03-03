@@ -28,6 +28,9 @@ pub fn try_load_vmfb(
     shf_path: &Path,
     candidate_fns: &[String],
 ) -> bool {
+    if compiler.disable_vmfb {
+        return false;
+    }
     let dir = shf_path.parent().unwrap_or_else(|| Path::new("."));
 
     // Filter to pure functions only

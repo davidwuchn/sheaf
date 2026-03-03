@@ -805,6 +805,7 @@ fn trace_with_runner(
 
     // Compile the runner file (which will (use ...) the target module)
     let mut trace_compiler = sheaf_compiler::core::compiler::CompilerContext::new();
+    trace_compiler.disable_vmfb = true; // pure interpreter during tracing
     if let Some(dir) = runner_abs.parent() {
         trace_compiler.current_dir = Some(dir.to_path_buf());
     }

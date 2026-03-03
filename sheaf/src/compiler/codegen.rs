@@ -534,6 +534,12 @@ impl CodeGenerator {
                     let reg = self.emitter.emit_get_tuple_element(&operand_reg, &operand_ty, 0, &elem_ty);
                     Ok((reg, elem_ty))
                 }
+                _ if operand_ty.shape().is_empty() => {
+                    Err(SheafError::Compile {
+                        message: "first: cannot index a scalar".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })
+                }
                 _ => {
                     let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, 0);
                     Ok((reg, ty))
@@ -548,6 +554,12 @@ impl CodeGenerator {
                     let elem_ty = elems[1].clone();
                     let reg = self.emitter.emit_get_tuple_element(&operand_reg, &operand_ty, 1, &elem_ty);
                     Ok((reg, elem_ty))
+                }
+                _ if operand_ty.shape().is_empty() => {
+                    Err(SheafError::Compile {
+                        message: "second: cannot index a scalar".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })
                 }
                 _ => {
                     let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, 1);
