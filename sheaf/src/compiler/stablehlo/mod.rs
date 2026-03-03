@@ -179,7 +179,7 @@ fn split_tuple_args(s: &str) -> Vec<&str> {
 }
 
 /// Register name in SSA form: %0, %1, etc. or %arg0, %arg1, etc.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Register {
     /// Regular SSA register: %0, %1, etc.
     Reg(usize),

@@ -4,21 +4,22 @@
 //! Error types for Sheaf compiler
 
 use std::fmt;
+use std::rc::Rc;
 
 /// Source location for error reporting
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceLocation {
     pub line: usize,
     pub column: usize,
-    pub filename: String,
+    pub filename: Rc<str>,
 }
 
 impl SourceLocation {
-    pub fn new(line: usize, column: usize, filename: impl Into<String>) -> Self {
+    pub fn new(line: usize, column: usize, filename: Rc<str>) -> Self {
         Self {
             line,
             column,
-            filename: filename.into(),
+            filename,
         }
     }
 
@@ -26,7 +27,7 @@ impl SourceLocation {
         Self {
             line: 0,
             column: 0,
-            filename: "<unknown>".to_string(),
+            filename: Rc::from("<unknown>"),
         }
     }
 }

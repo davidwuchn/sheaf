@@ -520,7 +520,7 @@ fn infer_function_call_type(name: &str, args: &[CompiledExpr]) -> SheafResult<St
             };
             let axis_usize = axis_usize.min(ndim.saturating_sub(1));
             if keepdims {
-                let mut out_shape = shape.clone();
+                let mut out_shape = shape.to_vec();
                 out_shape[axis_usize] = 1;
                 Ok(StableHLOType::f32_tensor(out_shape))
             } else {

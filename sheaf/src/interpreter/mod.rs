@@ -249,10 +249,9 @@ fn bind_pattern(name: &str, val: Value, env: &mut Env) -> Result<(), SheafError>
         // Destructuring pattern: extract symbol names
         let inner = &name[1..name.len() - 1];
         let names: Vec<&str> = inner.split_whitespace().collect();
-        let items = match &val {
-            Value::List(items) => items.clone(),
-            Value::Tuple(items) => items.clone(),
-            Value::Tensor { data, .. } => {
+        let items = match val {
+            Value::List(items) | Value::Tuple(items) => items,
+            Value::Tensor { ref data, .. } => {
                 if data.ndim() == 1 {
                     data.iter().map(|&x| Value::Float(x)).collect()
                 } else {
@@ -265,12 +264,12 @@ fn bind_pattern(name: &str, val: Value, env: &mut Env) -> Result<(), SheafError>
                 "let destructuring: expected list or tuple, got {}", other.type_name()
             ))),
         };
-        for (n, v) in names.iter().zip(items.iter()) {
-            env.set(n, v.clone());
-        }
-        // If fewer values than names, bind remaining to Nil
-        for n in names.iter().skip(items.len()) {
-            env.set(n, Value::Nil);
+        let mut items_iter = items.into_iter();
+        for n in &names {
+            match items_iter.next() {
+                Some(v) => env.set(n, v),
+                None => env.set(n, Value::Nil),
+            }
         }
     } else {
         env.set(name, val);
@@ -687,12 +686,14 @@ fn eval_apply(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
         return Err(runtime_error("apply requires 2 arguments: (apply fn args)"));
     }
     let func = &args[0];
-    let call_args = match &args[1] {
-        Value::List(items) => items.clone(),
-        Value::Tensor { data, .. } => data.iter().map(|&x| Value::Float(x)).collect(),
-        _ => return Err(runtime_error("apply: expected list or tensor")),
-    };
-    call_function(func, &call_args, env)
+    match &args[1] {
+        Value::List(items) => call_function(func, items, env),
+        Value::Tensor { data, .. } => {
+            let call_args: Vec<_> = data.iter().map(|&x| Value::Float(x)).collect();
+            call_function(func, &call_args, env)
+        }
+        _ => Err(runtime_error("apply: expected list or tensor")),
+    }
 }
 
 fn eval_find(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {

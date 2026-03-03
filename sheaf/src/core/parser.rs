@@ -5,6 +5,7 @@
 
 use crate::ast::{SheafValue, SourceLocation};
 use crate::core::error::{SheafError, SheafResult};
+use std::rc::Rc;
 
 type ParseResult<T> = SheafResult<T>;
 
@@ -48,11 +49,11 @@ struct Tokenizer {
     pos: usize,
     line: usize,
     column: usize,
-    filename: String,
+    filename: Rc<str>,
 }
 
 impl Tokenizer {
-    fn new(source: &str, filename: impl Into<String>) -> Self {
+    fn new(source: &str, filename: impl Into<Rc<str>>) -> Self {
         Self {
             source: source.chars().collect(),
             pos: 0,
@@ -63,7 +64,7 @@ impl Tokenizer {
     }
 
     fn location(&self) -> SourceLocation {
-        SourceLocation::new(self.line, self.column, self.filename.clone())
+        SourceLocation::new(self.line, self.column, Rc::clone(&self.filename))
     }
 
     fn peek(&self) -> Option<char> {

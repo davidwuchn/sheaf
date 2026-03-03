@@ -305,7 +305,7 @@ fn eval_at_compile_time(
         | SheafValue::Nil(_) => Ok(expr.clone()),
 
         // Quoted expressions return their content
-        SheafValue::Quote(inner, _) => Ok(*inner.clone()),
+        SheafValue::Quote(inner, _) => Ok((**inner).clone()),
 
         // Vectors: eval each element
         SheafValue::Vector(elems, vloc) => {

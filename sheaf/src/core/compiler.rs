@@ -120,7 +120,7 @@ impl FunctionDef {
 /// ~expr becomes expr, literals pass through unchanged.
 fn lower_quasiquote(node: &SheafValue) -> SheafValue {
     match node {
-        SheafValue::Unquote(inner, _) => *inner.clone(),
+        SheafValue::Unquote(inner, _) => (**inner).clone(),
         SheafValue::Quasiquote(inner, _) => lower_quasiquote(inner),
         SheafValue::List(elems, loc) => {
             let mut result = Vec::new();

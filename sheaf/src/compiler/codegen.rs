@@ -90,8 +90,8 @@ impl CodeGenerator {
 
             CompiledExpr::Symbol(name) => {
                 // Look up symbol in bindings
-                if let Some((reg, ty)) = self.bindings.get(name) {
-                    Ok((reg.clone(), ty.clone()))
+                if let Some(&(reg, ref ty)) = self.bindings.get(name) {
+                    Ok((reg, ty.clone()))
                 } else {
                     Err(SheafError::Compile {
                         message: format!("Undefined symbol in codegen: {}", name),
@@ -278,14 +278,14 @@ impl CodeGenerator {
                 let mut sorted: Vec<_> = pairs.iter().collect();
                 sorted.sort_by(|(k1, _), (k2, _)| {
                     let key1 = match k1 {
-                        CompiledExpr::Keyword(k) => k.clone(),
-                        _ => format!("{:?}", k1),
+                        CompiledExpr::Keyword(k) => k.as_str(),
+                        _ => "",
                     };
                     let key2 = match k2 {
-                        CompiledExpr::Keyword(k) => k.clone(),
-                        _ => format!("{:?}", k2),
+                        CompiledExpr::Keyword(k) => k.as_str(),
+                        _ => "",
                     };
-                    key1.cmp(&key2)
+                    key1.cmp(key2)
                 });
                 let mut regs = Vec::new();
                 let mut tys = Vec::new();
@@ -343,7 +343,7 @@ impl CodeGenerator {
                         .zip(arg_registers.iter().zip(arg_types.iter()))
                     {
                         self.bindings
-                            .insert(param.clone(), (reg.clone(), ty.clone()));
+                            .insert(param.clone(), (*reg, ty.clone()));
                     }
                     let body = body.clone();
                     let result = self.generate(&body);
@@ -1031,7 +1031,7 @@ impl CodeGenerator {
         let saved = self.bindings.clone();
         for (param, (reg, ty)) in params.iter().zip(arg_regs.iter().zip(arg_tys.iter())) {
             self.bindings
-                .insert(param.clone(), (reg.clone(), ty.clone()));
+                .insert(param.clone(), (*reg, ty.clone()));
         }
         let result = self.generate(&body);
         self.bindings = saved;
@@ -1073,7 +1073,7 @@ impl CodeGenerator {
         let saved = self.bindings.clone();
         for (param, (reg, ty)) in params.iter().zip(arg_regs.iter().zip(arg_tys.iter())) {
             self.bindings
-                .insert(param.clone(), (reg.clone(), ty.clone()));
+                .insert(param.clone(), (*reg, ty.clone()));
         }
 
         // Inline user-defined functions so autodiff can differentiate through them
@@ -1097,7 +1097,7 @@ impl CodeGenerator {
 
                     // Bind each synthetic leaf symbol to the corresponding register
                     for leaf in &leaves {
-                        let mut current_reg = arg_regs[idx].clone();
+                        let mut current_reg = arg_regs[idx];
                         let mut current_ty = param_ty.clone();
                         for &i in &leaf.indices {
                             let elem_ty = match &current_ty {
@@ -1193,7 +1193,7 @@ impl CodeGenerator {
                 // Reduce broadcast dims: if the gradient has more dims than the
                 // parameter (e.g. batch dim from broadcasting b:[8] to [4,8]),
                 // reduce_sum over the leading extra dimensions.
-                self.reduce_broadcast_grad(&grad_reg, &grad_ty, ty)
+                self.reduce_broadcast_grad(grad_reg, &grad_ty, ty)
             }
         }
     }
@@ -1202,7 +1202,7 @@ impl CodeGenerator {
     /// extra leading dimensions. E.g. grad is [4,8] but param is [8] → reduce_sum axis 0.
     fn reduce_broadcast_grad(
         &mut self,
-        grad_reg: &Register,
+        grad_reg: Register,
         grad_ty: &StableHLOType,
         param_ty: &StableHLOType,
     ) -> SheafResult<(Register, StableHLOType)> {
@@ -1210,23 +1210,20 @@ impl CodeGenerator {
         let param_shape = param_ty.shape();
 
         if grad_shape == param_shape {
-            return Ok((grad_reg.clone(), grad_ty.clone()));
+            return Ok((grad_reg, grad_ty.clone()));
         }
 
-        // Number of extra leading dimensions to reduce
         let extra = grad_shape.len().saturating_sub(param_shape.len());
         if extra == 0 {
-            return Ok((grad_reg.clone(), grad_ty.clone()));
+            return Ok((grad_reg, grad_ty.clone()));
         }
 
-        // Verify trailing dims match the param shape
         let trailing = &grad_shape[extra..];
-        if trailing != param_shape.as_slice() {
-            return Ok((grad_reg.clone(), grad_ty.clone()));
+        if trailing != param_shape {
+            return Ok((grad_reg, grad_ty.clone()));
         }
 
-        // Reduce_sum over each extra leading dim (from outermost inward)
-        let mut cur_reg = grad_reg.clone();
+        let mut cur_reg = grad_reg;
         let mut cur_ty = grad_ty.clone();
         for _ in 0..extra {
             let (r, t) = self.emitter.emit_reduce_sum(&cur_reg, &cur_ty, 0, false);
@@ -1305,7 +1302,7 @@ impl CodeGenerator {
                 let saved = self.bindings.clone();
                 for (param, (reg, ty)) in params.iter().zip(tree_regs.iter().zip(tree_tys.iter())) {
                     self.bindings
-                        .insert(param.clone(), (reg.clone(), ty.clone()));
+                        .insert(param.clone(), (*reg, ty.clone()));
                 }
                 let result = self.generate(body);
                 self.bindings = saved;

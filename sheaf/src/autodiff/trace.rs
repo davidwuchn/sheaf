@@ -152,19 +152,18 @@ fn trace_rec(
                     let concrete = eval(bval, env)?;
                     let inner = &bname[1..bname.len() - 1];
                     let names: Vec<&str> = inner.split_whitespace().collect();
-                    let items = match &concrete {
-                        Value::List(items) => items.clone(),
-                        Value::Tuple(items) => items.clone(),
-                        _ => return Err(runtime_error(format!(
-                            "trace: destructuring expected list/tuple, got {}", concrete.type_name()
+                    let items = match concrete {
+                        Value::List(items) | Value::Tuple(items) => items,
+                        other => return Err(runtime_error(format!(
+                            "trace: destructuring expected list/tuple, got {}", other.type_name()
                         ))),
                     };
-                    for (n, v) in names.iter().zip(items.iter()) {
-                        env.set(n, v.clone());
-                        if is_tensor_leaf(v) {
+                    for (n, v) in names.iter().zip(items.into_iter()) {
+                        if is_tensor_leaf(&v) {
                             let sym = leaf_map.register(v.clone());
                             sym_env.insert(n.to_string(), CompiledExpr::Symbol(sym));
                         }
+                        env.set(n, v);
                     }
                 } else {
                     // Trace the value
@@ -267,8 +266,8 @@ fn trace_reduce(
 
     // Evaluate collection concretely
     let coll_val = eval(coll, env)?;
-    let items = match &coll_val {
-        Value::List(items) => items.clone(),
+    let items = match coll_val {
+        Value::List(items) => items,
         _ => return Err(runtime_error("trace: reduce collection must be a list")),
     };
 

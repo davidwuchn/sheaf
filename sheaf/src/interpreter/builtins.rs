@@ -1141,7 +1141,7 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         let mut all_items = Vec::new();
         for arg in args {
             match arg {
-                Value::List(items) => all_items.extend(items.clone()),
+                Value::List(items) => all_items.extend_from_slice(items),
                 _ => all_items.push(arg.clone()),
             }
         }
@@ -1204,8 +1204,8 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                     // (get tensor ... (range s e)) → slice on last axis
                     // range produces [s, s+1, ..., e-1]; use first..last+1 as slice bounds
                     Value::Tensor { data: range_t, .. } if range_t.ndim() == 1 && range_t.len() > 0 => {
-                        let start = range_t.first().unwrap().clone() as usize;
-                        let end = range_t.iter().last().unwrap().clone() as usize + 1;
+                        let start = *range_t.first().unwrap() as usize;
+                        let end = *range_t.iter().last().unwrap() as usize + 1;
                         let sliced = data.slice_axis(last_axis, ndarray::Slice::from(start..end));
                         Ok(Value::tensor_f32(sliced.to_owned()))
                     }
@@ -1342,11 +1342,11 @@ fn builtin_nth(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_cons(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    let head = args[0].clone();
     match &args[1] {
         Value::List(items) => {
-            let mut new = vec![head];
-            new.extend(items.clone());
+            let mut new = Vec::with_capacity(items.len() + 1);
+            new.push(args[0].clone());
+            new.extend_from_slice(items);
             Ok(Value::List(new))
         }
         _ => Err(runtime_error("cons: second arg must be list")),
@@ -1374,14 +1374,18 @@ fn builtin_empty(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_get_in(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    let path = match &args[1] {
-        Value::List(items) => items.clone(),
-        Value::Tensor { data, .. } => data.iter().map(|&x| Value::Int(x as i64)).collect(),
+    let owned_path: Vec<Value>;
+    let path: &[Value] = match &args[1] {
+        Value::List(items) => items,
+        Value::Tensor { data, .. } => {
+            owned_path = data.iter().map(|&x| Value::Int(x as i64)).collect();
+            &owned_path
+        }
         _ => return Err(runtime_error("get-in: path must be a list")),
     };
     let default = if args.len() > 2 { Some(args[2].clone()) } else { None };
     let mut current = args[0].clone();
-    for key in &path {
+    for key in path {
         current = match (&current, key) {
             (Value::Dict(map), Value::Keyword(k)) | (Value::Dict(map), Value::String(k)) => {
                 match map.get(k) {
@@ -1451,7 +1455,9 @@ fn builtin_merge(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let mut result = BTreeMap::new();
     for arg in args {
         if let Value::Dict(map) = arg {
-            result.extend(map.clone());
+            for (k, v) in map {
+                result.insert(k.clone(), v.clone());
+            }
         } else {
             return Err(runtime_error("merge: expected dicts"));
         }
