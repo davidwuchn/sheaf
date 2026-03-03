@@ -392,6 +392,7 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
         "map" => return eval_map(&pos_args, env),
         "filter" => return eval_filter(&pos_args, env),
         "reduce" => return eval_reduce(&pos_args, env),
+        "scan" => return eval_scan(&pos_args, env),
         "apply" => return eval_apply(&pos_args, env),
         "find" => return eval_find(&pos_args, env),
         "tree-map" => return eval_tree_map(&pos_args, env),
@@ -678,6 +679,40 @@ fn eval_reduce(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
             Ok(acc)
         }
         _ => Err(runtime_error("reduce: expected list or tensor")),
+    }
+}
+
+fn eval_scan(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
+    if args.len() != 3 {
+        return Err(runtime_error("scan requires 3 arguments: (scan fn init coll)"));
+    }
+    let func = &args[0];
+    let mut carry = args[1].clone();
+    let mut outputs = Vec::new();
+    match &args[2] {
+        Value::List(items) => {
+            for item in items {
+                carry = call_function(func, &[carry, item.clone()], env)?;
+                outputs.push(carry.clone());
+            }
+            Ok(Value::Tuple(vec![carry, Value::List(outputs)]))
+        }
+        Value::Tensor { data, .. } => {
+            if data.ndim() == 1 {
+                for &x in data.iter() {
+                    carry = call_function(func, &[carry, Value::Float(x)], env)?;
+                    outputs.push(carry.clone());
+                }
+            } else {
+                for i in 0..data.shape()[0] {
+                    let row = data.index_axis(ndarray::Axis(0), i).to_owned();
+                    carry = call_function(func, &[carry, Value::tensor_f32(row)], env)?;
+                    outputs.push(carry.clone());
+                }
+            }
+            Ok(Value::Tuple(vec![carry, Value::List(outputs)]))
+        }
+        _ => Err(runtime_error("scan: expected list or tensor")),
     }
 }
 

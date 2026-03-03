@@ -1283,7 +1283,7 @@ fn builtin_index_update(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_first(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
-        Value::List(items) => items.first().cloned().ok_or_else(|| runtime_error("first: empty list")),
+        Value::List(items) | Value::Tuple(items) => items.first().cloned().ok_or_else(|| runtime_error("first: empty list")),
         Value::Tensor { data, .. } => {
             let sliced = data.index_axis(ndarray::Axis(0), 0).to_owned();
             if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
@@ -1295,7 +1295,7 @@ fn builtin_first(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_second(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
-        Value::List(items) => items.get(1).cloned().ok_or_else(|| runtime_error("second: list too short")),
+        Value::List(items) | Value::Tuple(items) => items.get(1).cloned().ok_or_else(|| runtime_error("second: list too short")),
         Value::Tensor { data, .. } => {
             let sliced = data.index_axis(ndarray::Axis(0), 1).to_owned();
             if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }

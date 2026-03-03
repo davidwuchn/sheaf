@@ -675,6 +675,24 @@ fn test_reduce_tensor() {
     assert_eq!(eval("(reduce (fn [a b] (+ a b)) 0 [1 2 3 4])"), "10.0");
 }
 
+#[test]
+fn test_scan_list() {
+    // scan returns (final-carry, [intermediates])
+    assert_eq!(
+        eval("(first (scan (fn [a b] (+ a b)) 0 '(1 2 3 4)))"),
+        "10"
+    );
+}
+
+#[test]
+fn test_scan_outputs() {
+    // intermediate carries: 1, 3, 6, 10
+    assert_eq!(
+        eval("(second (scan (fn [a b] (+ a b)) 0 '(1 2 3 4)))"),
+        "[1, 3, 6, 10]"
+    );
+}
+
 // Phase 2: String
 
 #[test]
