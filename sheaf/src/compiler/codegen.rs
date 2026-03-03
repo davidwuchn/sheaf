@@ -1400,6 +1400,49 @@ impl CodeGenerator {
         else if name == "float" && args.len() == 1 {
             self.generate(&args[0])
         }
+        // slice: (slice tensor start end) — start inclusive, end exclusive
+        else if name == "slice" && (args.len() == 2 || args.len() == 3) {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let start = match &args[1] {
+                CompiledExpr::Integer(n) => *n,
+                _ => {
+                    return Err(SheafError::Compile {
+                        message: "slice: start must be integer".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    });
+                }
+            };
+            let end = if args.len() == 3 {
+                match &args[2] {
+                    CompiledExpr::Integer(n) => *n,
+                    _ => {
+                        return Err(SheafError::Compile {
+                            message: "slice: end must be integer".to_string(),
+                            location: crate::core::error::SourceLocation::unknown(),
+                        });
+                    }
+                }
+            } else {
+                operand_ty.shape()[0]
+            };
+            let (reg, ty) = tensor_ops::emit_slice(&mut self.emitter, &operand_reg, &operand_ty, start, end);
+            Ok((reg, ty))
+        }
+        // tensor-split: (tensor-split tensor num-sections)
+        else if name == "tensor-split" && args.len() == 2 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            let num_sections = match &args[1] {
+                CompiledExpr::Integer(n) => *n,
+                _ => {
+                    return Err(SheafError::Compile {
+                        message: "tensor-split: num-sections must be integer".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    });
+                }
+            };
+            let (reg, ty) = tensor_ops::emit_tensor_split(&mut self.emitter, &operand_reg, &operand_ty, num_sections);
+            Ok((reg, ty))
+        }
         // count/len: (count x) or (len x) — compile-time length
         else if (name == "count" || name == "len") && args.len() == 1 {
             let (_, operand_ty) = self.generate(&args[0])?;

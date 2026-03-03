@@ -673,4 +673,71 @@ impl StableHLOEmitter {
             (result_reg, input_ty.clone())
         }
     }
+
+    /// Emit slice along axis 0 with exclusive end: (slice tensor start end)
+    /// start inclusive, end exclusive — matches standard Python/NumPy semantics
+    pub fn emit_slice_exclusive(
+        &mut self,
+        input: &Register,
+        input_ty: &StableHLOType,
+        start: i64,
+        end: i64,
+    ) -> (Register, StableHLOType) {
+        let shape = input_ty.shape();
+        let ndim = shape.len();
+
+        let mut start_indices = vec![0i64; ndim];
+        let mut limit_indices = shape.to_vec();
+        let strides = vec![1i64; ndim];
+        start_indices[0] = start;
+        limit_indices[0] = end;
+
+        let start_str = start_indices.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+        let limit_str = limit_indices.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+        let strides_str = strides.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+
+        let mut result_shape = shape.to_vec();
+        result_shape[0] = end - start;
+        let result_ty = StableHLOType::f32_tensor(result_shape);
+
+        let result_reg = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.slice {} [{}] to [{}] step [{}] : ({}) -> {}",
+            result_reg.to_mlir(),
+            input.to_mlir(),
+            start_str,
+            limit_str,
+            strides_str,
+            input_ty.to_mlir(),
+            result_ty.to_mlir(),
+        ));
+        (result_reg, result_ty)
+    }
+
+    /// Emit tensor-split: split tensor into N equal sections along axis 0
+    /// Returns a tuple of N tensors
+    pub fn emit_tensor_split(
+        &mut self,
+        input: &Register,
+        input_ty: &StableHLOType,
+        num_sections: i64,
+    ) -> (Register, StableHLOType) {
+        let shape = input_ty.shape();
+        let total = shape[0];
+        let section_size = total / num_sections;
+
+        let mut section_regs = Vec::new();
+        let mut section_types = Vec::new();
+
+        for i in 0..num_sections {
+            let start = i * section_size;
+            let end = start + section_size;
+            let (reg, ty) = self.emit_slice_exclusive(input, input_ty, start, end);
+            section_regs.push(reg);
+            section_types.push(ty);
+        }
+
+        // Pack into a tuple
+        self.emit_tuple(&section_regs, &section_types)
+    }
 }

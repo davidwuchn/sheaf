@@ -281,3 +281,24 @@ pub fn emit_append_and_roll(
     // concat tail ++ [value]
     emitter.emit_concatenate(&[tail, val_1d], &[tail_ty, val_1d_ty], 0)
 }
+
+/// Emit slice: (slice tensor start end) — start inclusive, end exclusive
+pub fn emit_slice(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    start: i64,
+    end: i64,
+) -> (Register, StableHLOType) {
+    emitter.emit_slice_exclusive(operand, operand_ty, start, end)
+}
+
+/// Emit tensor-split: (tensor-split tensor num-sections)
+pub fn emit_tensor_split(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    num_sections: i64,
+) -> (Register, StableHLOType) {
+    emitter.emit_tensor_split(operand, operand_ty, num_sections)
+}
