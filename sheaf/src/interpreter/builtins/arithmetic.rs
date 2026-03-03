@@ -232,6 +232,134 @@ fn expand_einsum_ellipsis(subscript: &str, shape_a: &[usize], shape_b: &[usize])
     subscript.replace("...", &batch_labels)
 }
 
+/// Try to decompose an einsum into permute → reshape 3D → BLAS matmul → reshape → permute.
+/// Every 2-operand einsum where each label falls into batch/free_a/free_b/contract
+/// can be expressed this way.
+fn try_einsum_as_matmul(
+    idx_a: &[char], idx_b: &[char], idx_out: &[char],
+    a: &ArrayD<f64>, b: &ArrayD<f64>,
+    sizes: &std::collections::HashMap<char, usize>,
+) -> Option<ArrayD<f64>> {
+    use std::collections::HashSet;
+    let a_set: HashSet<char> = idx_a.iter().copied().collect();
+    let b_set: HashSet<char> = idx_b.iter().copied().collect();
+    let out_set: HashSet<char> = idx_out.iter().copied().collect();
+
+    let mut batch = Vec::new();
+    let mut free_a = Vec::new();
+    let mut free_b = Vec::new();
+    let mut contract = Vec::new();
+
+    let mut all_labels = Vec::new();
+    for &c in idx_a.iter().chain(idx_b.iter()).chain(idx_out.iter()) {
+        if !all_labels.contains(&c) { all_labels.push(c); }
+    }
+    for &c in &all_labels {
+        match (a_set.contains(&c), b_set.contains(&c), out_set.contains(&c)) {
+            (true, true, true) => batch.push(c),
+            (true, false, true) => free_a.push(c),
+            (false, true, true) => free_b.push(c),
+            (true, true, false) => contract.push(c),
+            _ => return None,
+        }
+    }
+
+    let batch_dims: Vec<usize> = batch.iter().map(|c| sizes[c]).collect();
+    let batch_size: usize = batch_dims.iter().product::<usize>().max(1);
+    let free_a_dims: Vec<usize> = free_a.iter().map(|c| sizes[c]).collect();
+    let free_a_size: usize = free_a_dims.iter().product::<usize>().max(1);
+    let free_b_dims: Vec<usize> = free_b.iter().map(|c| sizes[c]).collect();
+    let free_b_size: usize = free_b_dims.iter().product::<usize>().max(1);
+    let contract_size: usize = contract.iter().map(|c| sizes[c]).product::<usize>().max(1);
+
+    // Permute A to [batch..., free_a..., contract...]
+    let a_order: Vec<char> = batch.iter().chain(free_a.iter()).chain(contract.iter()).copied().collect();
+    let a_perm: Vec<usize> = a_order.iter()
+        .map(|c| idx_a.iter().position(|x| x == c))
+        .collect::<Option<Vec<_>>>()?;
+    // Permute B to [batch..., contract..., free_b...]
+    let b_order: Vec<char> = batch.iter().chain(contract.iter()).chain(free_b.iter()).copied().collect();
+    let b_perm: Vec<usize> = b_order.iter()
+        .map(|c| idx_b.iter().position(|x| x == c))
+        .collect::<Option<Vec<_>>>()?;
+
+    let a_t = a.view().permuted_axes(IxDyn(&a_perm)).as_standard_layout().into_owned();
+    let b_t = b.view().permuted_axes(IxDyn(&b_perm)).as_standard_layout().into_owned();
+
+    let a_3d = a_t.into_shape_with_order((batch_size, free_a_size, contract_size)).ok()?;
+    let b_3d = b_t.into_shape_with_order((batch_size, contract_size, free_b_size)).ok()?;
+
+    // Batched matmul via BLAS
+    let mut result_data = Vec::with_capacity(batch_size * free_a_size * free_b_size);
+    for i in 0..batch_size {
+        let ai = a_3d.index_axis(ndarray::Axis(0), i)
+            .into_dimensionality::<ndarray::Ix2>().ok()?;
+        let bi = b_3d.index_axis(ndarray::Axis(0), i)
+            .into_dimensionality::<ndarray::Ix2>().ok()?;
+        result_data.extend(ai.dot(&bi).iter());
+    }
+
+    // Reshape to [batch..., free_a..., free_b...]
+    let mut intermediate_shape = batch_dims;
+    intermediate_shape.extend(&free_a_dims);
+    intermediate_shape.extend(&free_b_dims);
+    let intermediate = ArrayD::from_shape_vec(IxDyn(&intermediate_shape), result_data).ok()?;
+
+    // Permute to match output label order
+    let intermediate_labels: Vec<char> = batch.iter()
+        .chain(free_a.iter()).chain(free_b.iter()).copied().collect();
+    let out_perm: Vec<usize> = idx_out.iter()
+        .map(|c| intermediate_labels.iter().position(|x| x == c))
+        .collect::<Option<Vec<_>>>()?;
+
+    if out_perm.iter().enumerate().all(|(i, &p)| i == p) {
+        Some(intermediate)
+    } else {
+        Some(intermediate.permuted_axes(IxDyn(&out_perm)).as_standard_layout().into_owned())
+    }
+}
+
+fn einsum_naive(
+    idx_a: &[char], idx_b: &[char], idx_out: &[char],
+    a: &ArrayD<f64>, b: &ArrayD<f64>,
+    sizes: &std::collections::HashMap<char, usize>,
+) -> ArrayD<f64> {
+    let out_shape: Vec<usize> = idx_out.iter()
+        .map(|c| *sizes.get(c).unwrap_or(&1))
+        .collect();
+    let out_len: usize = out_shape.iter().product::<usize>().max(1);
+    let mut result = vec![0.0f64; out_len];
+
+    let mut all_labels: Vec<char> = idx_out.to_vec();
+    for &c in idx_a.iter().chain(idx_b.iter()) {
+        if !all_labels.contains(&c) { all_labels.push(c); }
+    }
+    let label_sizes: Vec<usize> = all_labels.iter()
+        .map(|c| *sizes.get(c).unwrap_or(&1)).collect();
+    let label_pos: std::collections::HashMap<char, usize> = all_labels.iter()
+        .enumerate().map(|(i, &c)| (c, i)).collect();
+    let out_strides: Vec<usize> = (0..out_shape.len()).map(|i| {
+        out_shape[i + 1..].iter().product::<usize>().max(1)
+    }).collect();
+
+    let total: usize = label_sizes.iter().product::<usize>().max(1);
+    let mut coords = vec![0usize; all_labels.len()];
+    for _ in 0..total {
+        let a_idx: Vec<usize> = idx_a.iter().map(|c| coords[label_pos[c]]).collect();
+        let b_idx: Vec<usize> = idx_b.iter().map(|c| coords[label_pos[c]]).collect();
+        let flat_out: usize = idx_out.iter().enumerate()
+            .map(|(i, c)| coords[label_pos[c]] * out_strides[i]).sum();
+        result[flat_out] += a[IxDyn(&a_idx)] * b[IxDyn(&b_idx)];
+        for k in (0..coords.len()).rev() {
+            coords[k] += 1;
+            if coords[k] < label_sizes[k] { break; }
+            coords[k] = 0;
+        }
+    }
+    let result_f32: Vec<f64> = result.iter().map(|&x| (x as f32) as f64).collect();
+    ArrayD::from_shape_vec(IxDyn(&out_shape), result_f32).unwrap()
+}
+
 fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 3 {
         return Err(runtime_error("einsum requires exactly 3 arguments: subscript, a, b"));
@@ -265,55 +393,14 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         sizes.insert(label, dim);
     }
 
-    let out_shape: Vec<usize> = idx_out.iter()
-        .map(|c| *sizes.get(c).unwrap_or(&1))
-        .collect();
-    let out_len: usize = out_shape.iter().product::<usize>().max(1);
-    let mut result = vec![0.0f64; out_len];
+    // Try BLAS-accelerated path, fall back to naive loops
+    let arr = try_einsum_as_matmul(&idx_a, &idx_b, &idx_out, &a, &b, &sizes)
+        .unwrap_or_else(|| einsum_naive(&idx_a, &idx_b, &idx_out, &a, &b, &sizes));
 
-    let mut all_labels: Vec<char> = idx_out.clone();
-    for &c in idx_a.iter().chain(idx_b.iter()) {
-        if !all_labels.contains(&c) {
-            all_labels.push(c);
-        }
-    }
-
-    let label_sizes: Vec<usize> = all_labels.iter()
-        .map(|c| *sizes.get(c).unwrap_or(&1))
-        .collect();
-
-    let label_pos: std::collections::HashMap<char, usize> = all_labels.iter()
-        .enumerate().map(|(i, &c)| (c, i)).collect();
-
-    let out_strides: Vec<usize> = (0..out_shape.len()).map(|i| {
-        out_shape[i + 1..].iter().product::<usize>().max(1)
-    }).collect();
-
-    let total: usize = label_sizes.iter().product::<usize>().max(1);
-    let mut coords = vec![0usize; all_labels.len()];
-
-    for _ in 0..total {
-        let a_idx: Vec<usize> = idx_a.iter().map(|c| coords[label_pos[c]]).collect();
-        let b_idx: Vec<usize> = idx_b.iter().map(|c| coords[label_pos[c]]).collect();
-        let flat_out: usize = idx_out.iter().enumerate()
-            .map(|(i, c)| coords[label_pos[c]] * out_strides[i])
-            .sum();
-        result[flat_out] += a[IxDyn(&a_idx)] * b[IxDyn(&b_idx)];
-
-        for k in (0..coords.len()).rev() {
-            coords[k] += 1;
-            if coords[k] < label_sizes[k] { break; }
-            coords[k] = 0;
-        }
-    }
-
-    let result_f32: Vec<f64> = result.iter().map(|&x| (x as f32) as f64).collect();
-
-    if out_shape.is_empty() {
-        Ok(Value::Float(result_f32[0]))
+    let arr = arr.mapv(|x| (x as f32) as f64);
+    if arr.ndim() == 0 {
+        Ok(Value::Float(*arr.first().unwrap()))
     } else {
-        let arr = ArrayD::from_shape_vec(IxDyn(&out_shape), result_f32)
-            .map_err(|e| runtime_error(e.to_string()))?;
         Ok(Value::tensor_f32(arr))
     }
 }
