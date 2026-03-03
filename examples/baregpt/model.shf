@@ -93,9 +93,9 @@
         Wo (get layer-p :attn :Wo)
 
         ;; Multi-head preparation (reshaping weights)
-        Wq_multi (reshape Wq D H Hd)
-        Kh_multi (reshape Wk D H Hd)
-        Vh_multi (reshape Wv D H Hd)
+        Wq_multi (reshape Wq [D H Hd])
+        Kh_multi (reshape Wk [D H Hd])
+        Vh_multi (reshape Wv [D H Hd])
 
         ;; Q, K, V Projections [Batch, Heads, T, Hd]
         Qh (einsum "... t d, d h k -> ... h t k" X Wq_multi)
@@ -152,7 +152,7 @@
         logits (gpt-model ids params config)
         ;; Process last token
         vocab_size (static (get config :vocab_size))
-        p-logits (last (reshape logits -1 vocab_size))
+        p-logits (last (reshape logits [-1 vocab_size]))
         p-probs (where (!= temp 1.0)
                     (softmax (/ p-logits temp) :axis -1)
                     (softmax p-logits :axis -1))
