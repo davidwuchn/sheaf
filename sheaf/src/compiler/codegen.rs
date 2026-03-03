@@ -495,6 +495,66 @@ impl CodeGenerator {
             let (result_reg, result_ty) = nn_ops::emit_softmax(&mut self.emitter, &operand_reg, &operand_ty, axis);
             Ok((result_reg, result_ty))
         }
+        // shape: (shape tensor) or (shape tensor axis)
+        else if name == "shape" && !args.is_empty() {
+            let (_, operand_ty) = self.generate(&args[0])?;
+            let dims = operand_ty.shape();
+            if dims.is_empty() {
+                return Err(SheafError::Compile {
+                    message: "shape: cannot query shape of scalar or tuple".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                });
+            }
+            if args.len() >= 2 {
+                // (shape tensor axis) -> scalar integer
+                if let CompiledExpr::Integer(ax) = &args[1] {
+                    let idx = if *ax < 0 { (dims.len() as i64 + *ax) as usize } else { *ax as usize };
+                    let reg = self.emitter.emit_constant_i64(dims[idx]);
+                    Ok((reg, StableHLOType::ScalarI64))
+                } else {
+                    Err(SheafError::Compile {
+                        message: "shape: axis must be integer".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })
+                }
+            } else {
+                // (shape tensor) -> 1D tensor of dims
+                let data: Vec<f64> = dims.iter().map(|&d| d as f64).collect();
+                let shape = vec![data.len() as i64];
+                let (reg, ty) = self.emitter.emit_nd_tensor_constant(&data, &shape);
+                Ok((reg, ty))
+            }
+        }
+        // first: (first x)
+        else if name == "first" && args.len() == 1 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            match &operand_ty {
+                StableHLOType::Tuple(elems) => {
+                    let elem_ty = elems[0].clone();
+                    let reg = self.emitter.emit_get_tuple_element(&operand_reg, &operand_ty, 0, &elem_ty);
+                    Ok((reg, elem_ty))
+                }
+                _ => {
+                    let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, 0);
+                    Ok((reg, ty))
+                }
+            }
+        }
+        // second: (second x)
+        else if name == "second" && args.len() == 1 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            match &operand_ty {
+                StableHLOType::Tuple(elems) => {
+                    let elem_ty = elems[1].clone();
+                    let reg = self.emitter.emit_get_tuple_element(&operand_reg, &operand_ty, 1, &elem_ty);
+                    Ok((reg, elem_ty))
+                }
+                _ => {
+                    let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, 1);
+                    Ok((reg, ty))
+                }
+            }
+        }
         // zeros: (zeros [M N])
         else if name == "zeros" && args.len() == 1 {
             // Extract shape from vector
