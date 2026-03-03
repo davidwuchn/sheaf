@@ -223,6 +223,7 @@ fn try_extract_get_chain(
 }
 
 /// Walk a `(get (get ... :k1) :k2)` chain and return the key path `["k1", "k2", ...]`.
+/// Also handles `(get-in x [:k1 :k2])` form.
 /// Returns `None` if the root is not `Symbol(param_name)`.
 fn extract_key_path(expr: &CompiledExpr, param_name: &str) -> Option<Vec<String>> {
     match expr {
@@ -236,6 +237,28 @@ fn extract_key_path(expr: &CompiledExpr, param_name: &str) -> Option<Vec<String>
             // args[0] is the receiver — recurse
             let mut path = extract_key_path(&args[0], param_name)?;
             path.push(key);
+            Some(path)
+        }
+        // (get-in params [:k1 :k2 ...]) → key path from the vector
+        CompiledExpr::FunctionCall { name, args } if name == "get-in" && args.len() >= 2 => {
+            // args[0] must resolve to param_name
+            let base_path = extract_key_path(&args[0], param_name)?;
+            // args[1] must be a Vector of Keywords
+            let keys = match &args[1] {
+                CompiledExpr::Vector(elems) => {
+                    let mut ks = Vec::new();
+                    for elem in elems {
+                        match elem {
+                            CompiledExpr::Keyword(k) => ks.push(k.clone()),
+                            _ => return None,
+                        }
+                    }
+                    ks
+                }
+                _ => return None,
+            };
+            let mut path = base_path;
+            path.extend(keys);
             Some(path)
         }
         _ => None,

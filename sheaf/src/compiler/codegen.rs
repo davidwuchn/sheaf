@@ -871,6 +871,94 @@ impl CodeGenerator {
 
             self.generate_tree_map(lambda, &tree_regs, &tree_tys)
         }
+        // get: (get tensor idx) or (get tuple :key)
+        else if name == "get" && args.len() >= 2 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            match &operand_ty {
+                // Tuple + keyword → get_tuple_element (needs known key ordering)
+                StableHLOType::Tuple(_) => {
+                    Err(SheafError::Compile {
+                        message: "get on dict/tuple requires type info (use defparams or --trace-with)".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })
+                }
+                // Tensor + integer → index axis 0
+                _ if !operand_ty.shape().is_empty() => {
+                    match &args[1] {
+                        CompiledExpr::Integer(idx) => {
+                            let actual_idx = if *idx < 0 {
+                                operand_ty.shape()[0] + *idx
+                            } else {
+                                *idx
+                            };
+                            let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, actual_idx);
+                            Ok((reg, ty))
+                        }
+                        // (get tensor ... idx) — ellipsis: index last axis
+                        CompiledExpr::Symbol(s) if s == "..." => {
+                            if args.len() >= 3 {
+                                if let CompiledExpr::Integer(idx) = &args[2] {
+                                    let shape = operand_ty.shape();
+                                    let ndim = shape.len();
+                                    let last_axis_size = shape[ndim - 1];
+                                    let actual_idx = if *idx < 0 { last_axis_size + *idx } else { *idx };
+                                    let (reg, ty) = self.emitter.emit_slice_last_axis(
+                                        &operand_reg, &operand_ty, actual_idx, actual_idx + 1,
+                                    );
+                                    Ok((reg, ty))
+                                } else {
+                                    Err(SheafError::Compile {
+                                        message: "get with ellipsis: index must be integer".to_string(),
+                                        location: crate::core::error::SourceLocation::unknown(),
+                                    })
+                                }
+                            } else {
+                                Err(SheafError::Compile {
+                                    message: "get with ellipsis: missing index after ...".to_string(),
+                                    location: crate::core::error::SourceLocation::unknown(),
+                                })
+                            }
+                        }
+                        _ => {
+                            Err(SheafError::Compile {
+                                message: "get on tensor: index must be integer or ellipsis".to_string(),
+                                location: crate::core::error::SourceLocation::unknown(),
+                            })
+                        }
+                    }
+                }
+                _ => {
+                    Err(SheafError::Compile {
+                        message: format!("get: unsupported operand type {}", operand_ty.to_mlir()),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })
+                }
+            }
+        }
+        // get-in: (get-in tuple [:k1 :k2]) — should be lowered by lower_get_calls
+        else if name == "get-in" && args.len() >= 2 {
+            Err(SheafError::Compile {
+                message: "get-in requires type info (use defparams or --trace-with)".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            })
+        }
+        // minimum/maximum: element-wise min/max
+        else if matches!(name, "minimum" | "maximum") && args.len() == 2 {
+            let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
+            let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
+            let op = if name == "minimum" { "min" } else { "max" };
+            let (result_reg, result_ty) = math_ops::emit_minmax(
+                &mut self.emitter, op, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty,
+            );
+            Ok((result_reg, result_ty))
+        }
+        // ndim: (ndim tensor) → compile-time rank
+        else if name == "ndim" && args.len() == 1 {
+            let (_, operand_ty) = self.generate(&args[0])?;
+            let ndim = operand_ty.shape().len() as i64;
+            let reg = self.emitter.emit_constant_i64(ndim);
+            Ok((reg, StableHLOType::ScalarI64))
+        }
         else {
             Err(SheafError::Compile {
                 message: format!("Function call not yet supported: {}", name),

@@ -1942,15 +1942,20 @@ fn builtin_random_normal(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     Ok(Value::tensor_f32(arr))
 }
 
-/// random-uniform - Sample from U(0,1): (random-uniform key shape)
-fn builtin_random_uniform(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    if args.len() != 2 {
-        return Err(runtime_error("random-uniform: expected (random-uniform key shape)"));
+/// random-uniform - Sample from U(minval,maxval): (random-uniform key shape :minval 0.0 :maxval 1.0)
+fn builtin_random_uniform(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
+    if args.len() < 2 {
+        return Err(runtime_error("random-uniform: expected (random-uniform key shape [:minval lo :maxval hi])"));
     }
     let mut state = key_to_seed(&args[0]);
     let shape = parse_shape(&args[1])?;
+    let minval = kw.get("minval").map(|v| v.to_f64().unwrap_or(0.0)).unwrap_or(0.0);
+    let maxval = kw.get("maxval").map(|v| v.to_f64().unwrap_or(1.0)).unwrap_or(1.0);
     let n: usize = shape.iter().product();
-    let data: Vec<f64> = (0..n).map(|_| splitmix64(&mut state)).collect();
+    let data: Vec<f64> = (0..n).map(|_| {
+        let u = splitmix64(&mut state);
+        minval + u * (maxval - minval)
+    }).collect();
     let arr = ArrayD::from_shape_vec(IxDyn(&shape), data)
         .map_err(|e| runtime_error(format!("random-uniform: shape error: {}", e)))?;
     Ok(Value::tensor_f32(arr))

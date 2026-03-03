@@ -1166,6 +1166,76 @@ impl StableHLOEmitter {
         }
     }
 
+    /// Emit slice on the last axis, then squeeze that dimension if size 1.
+    /// E.g. tensor<5x9xf32> slice [3:4] on last axis → tensor<5xf32>
+    /// E.g. tensor<5x9xf32> slice [2:5] on last axis → tensor<5x3xf32>
+    pub fn emit_slice_last_axis(
+        &mut self,
+        input: &Register,
+        input_ty: &StableHLOType,
+        start: i64,
+        end: i64,
+    ) -> (Register, StableHLOType) {
+        let shape = input_ty.shape();
+        let ndim = shape.len();
+
+        let mut start_indices = vec![0i64; ndim];
+        let mut limit_indices = shape.clone();
+        let strides = vec![1i64; ndim];
+        start_indices[ndim - 1] = start;
+        limit_indices[ndim - 1] = end;
+
+        let start_str = start_indices.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+        let limit_str = limit_indices.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+        let strides_str = strides.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+
+        let mut slice_shape = shape.clone();
+        slice_shape[ndim - 1] = end - start;
+        let slice_ty = StableHLOType::f32_tensor(slice_shape.clone());
+
+        let slice_reg = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.slice {} [{}] to [{}] step [{}] : ({}) -> {}",
+            slice_reg.to_mlir(),
+            input.to_mlir(),
+            start_str,
+            limit_str,
+            strides_str,
+            input_ty.to_mlir(),
+            slice_ty.to_mlir(),
+        ));
+
+        // If slice size is 1 on last axis, squeeze it
+        if end - start == 1 {
+            let result_shape: Vec<i64> = shape[..ndim - 1].to_vec();
+            if result_shape.is_empty() {
+                let result_ty = StableHLOType::scalar_f32();
+                let result_reg = self.fresh_register();
+                self.body.push(format!(
+                    "    {} = stablehlo.reshape {} : ({}) -> {}",
+                    result_reg.to_mlir(),
+                    slice_reg.to_mlir(),
+                    slice_ty.to_mlir(),
+                    result_ty.to_mlir(),
+                ));
+                (result_reg, result_ty)
+            } else {
+                let result_ty = StableHLOType::f32_tensor(result_shape);
+                let result_reg = self.fresh_register();
+                self.body.push(format!(
+                    "    {} = stablehlo.reshape {} : ({}) -> {}",
+                    result_reg.to_mlir(),
+                    slice_reg.to_mlir(),
+                    slice_ty.to_mlir(),
+                    result_ty.to_mlir(),
+                ));
+                (result_reg, result_ty)
+            }
+        } else {
+            (slice_reg, slice_ty)
+        }
+    }
+
     /// Emit stablehlo.reduce to compute sum along one axis.
     ///
     /// input: tensor<...xf32>, axis: which dimension to reduce
