@@ -551,6 +551,27 @@ impl CodeGenerator {
             let (result_reg, result_ty) = nn_ops::emit_log_softmax(&mut self.emitter, &operand_reg, &operand_ty, axis);
             Ok((result_reg, result_ty))
         }
+        // mse-loss: (mse-loss pred target)
+        else if name == "mse-loss" && args.len() == 2 {
+            let (pred_reg, pred_ty) = self.generate(&args[0])?;
+            let (target_reg, target_ty) = self.generate(&args[1])?;
+            let (reg, ty) = nn_ops::emit_mse_loss(&mut self.emitter, &pred_reg, &target_reg, &pred_ty, &target_ty);
+            Ok((reg, ty))
+        }
+        // mae-loss: (mae-loss pred target)
+        else if name == "mae-loss" && args.len() == 2 {
+            let (pred_reg, pred_ty) = self.generate(&args[0])?;
+            let (target_reg, target_ty) = self.generate(&args[1])?;
+            let (reg, ty) = nn_ops::emit_mae_loss(&mut self.emitter, &pred_reg, &target_reg, &pred_ty, &target_ty);
+            Ok((reg, ty))
+        }
+        // sparse-cross-entropy: (sparse-cross-entropy logits labels)
+        else if name == "sparse-cross-entropy" && args.len() == 2 {
+            let (logits_reg, logits_ty) = self.generate(&args[0])?;
+            let (labels_reg, labels_ty) = self.generate(&args[1])?;
+            let (reg, ty) = nn_ops::emit_sparse_cross_entropy(&mut self.emitter, &logits_reg, &labels_reg, &logits_ty, &labels_ty);
+            Ok((reg, ty))
+        }
         // einsum: (einsum "spec" lhs rhs)
         else if name == "einsum" && args.len() >= 3 {
             let spec = match &args[0] {
@@ -701,6 +722,39 @@ impl CodeGenerator {
                     location: crate::core::error::SourceLocation::unknown(),
                 })
             }
+        }
+        // eye: (eye N) or (eye N M)
+        else if name == "eye" && !args.is_empty() && args.len() <= 2 {
+            let n = match &args[0] {
+                CompiledExpr::Integer(v) => *v,
+                _ => return Err(SheafError::Compile {
+                    message: "eye expects integer arguments".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                }),
+            };
+            let m = if args.len() == 2 {
+                match &args[1] {
+                    CompiledExpr::Integer(v) => *v,
+                    _ => n,
+                }
+            } else {
+                n
+            };
+            let (reg, ty) = tensor_ops::emit_eye(&mut self.emitter, n, m);
+            Ok((reg, ty))
+        }
+        // one-hot: (one-hot indices num_classes)
+        else if name == "one-hot" && args.len() == 2 {
+            let (indices_reg, indices_ty) = self.generate(&args[0])?;
+            let num_classes = match &args[1] {
+                CompiledExpr::Integer(v) => *v,
+                _ => return Err(SheafError::Compile {
+                    message: "one-hot expects integer num_classes".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                }),
+            };
+            let (reg, ty) = tensor_ops::emit_one_hot(&mut self.emitter, &indices_reg, &indices_ty, num_classes);
+            Ok((reg, ty))
         }
         // reshape: (reshape tensor [M N])
         else if name == "reshape" && args.len() == 2 {
@@ -948,6 +1002,131 @@ impl CodeGenerator {
                         (cur_reg, cur_ty)
                     }
                 }
+            };
+            Ok((reg, ty))
+        }
+        // product: (product x :axis N) or (product x)
+        else if name == "product" && !args.is_empty() {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+
+            let mut axis: Option<i64> = None;
+            let mut keepdims = false;
+            let mut i = 1;
+            while i + 1 < args.len() {
+                match &args[i] {
+                    CompiledExpr::Keyword(k) if k == "axis" => {
+                        if let CompiledExpr::Integer(n) = &args[i + 1] {
+                            axis = Some(*n);
+                        }
+                        i += 2;
+                    }
+                    CompiledExpr::Keyword(k) if k == "keepdims" => {
+                        if let CompiledExpr::Boolean(b) = &args[i + 1] {
+                            keepdims = *b;
+                        }
+                        i += 2;
+                    }
+                    _ => { i += 1; }
+                }
+            }
+
+            let (reg, ty) = match axis {
+                Some(ax) => {
+                    tensor_ops::emit_product(&mut self.emitter, &operand_reg, &operand_ty, ax, keepdims)
+                }
+                None => {
+                    let ndim = operand_ty.shape().len();
+                    if ndim == 0 {
+                        (operand_reg, operand_ty)
+                    } else {
+                        let mut cur_reg = operand_reg;
+                        let mut cur_ty = operand_ty;
+                        for _ in (0..ndim).rev() {
+                            let (r, t) = tensor_ops::emit_product(&mut self.emitter, &cur_reg, &cur_ty, -1, false);
+                            cur_reg = r;
+                            cur_ty = t;
+                        }
+                        (cur_reg, cur_ty)
+                    }
+                }
+            };
+            Ok((reg, ty))
+        }
+        // min/max reduction: (min x :axis N) or (max x :axis N)
+        // 1-arg form with keyword args — reduction along axis
+        else if matches!(name, "min" | "max") && !args.is_empty()
+            && (args.len() == 1 || matches!(&args[1], CompiledExpr::Keyword(_)))
+        {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+
+            let mut axis: Option<i64> = None;
+            let mut keepdims = false;
+            let mut i = 1;
+            while i + 1 < args.len() {
+                match &args[i] {
+                    CompiledExpr::Keyword(k) if k == "axis" => {
+                        if let CompiledExpr::Integer(n) = &args[i + 1] {
+                            axis = Some(*n);
+                        }
+                        i += 2;
+                    }
+                    CompiledExpr::Keyword(k) if k == "keepdims" => {
+                        if let CompiledExpr::Boolean(b) = &args[i + 1] {
+                            keepdims = *b;
+                        }
+                        i += 2;
+                    }
+                    _ => { i += 1; }
+                }
+            }
+
+            let emit_fn = if name == "min" {
+                tensor_ops::emit_min_reduce
+            } else {
+                tensor_ops::emit_max_reduce
+            };
+
+            let (reg, ty) = match axis {
+                Some(ax) => emit_fn(&mut self.emitter, &operand_reg, &operand_ty, ax, keepdims),
+                None => {
+                    let ndim = operand_ty.shape().len();
+                    if ndim == 0 {
+                        (operand_reg, operand_ty)
+                    } else {
+                        let mut cur_reg = operand_reg;
+                        let mut cur_ty = operand_ty;
+                        for _ in (0..ndim).rev() {
+                            let (r, t) = emit_fn(&mut self.emitter, &cur_reg, &cur_ty, -1, false);
+                            cur_reg = r;
+                            cur_ty = t;
+                        }
+                        (cur_reg, cur_ty)
+                    }
+                }
+            };
+            Ok((reg, ty))
+        }
+        // argmax/argmin: (argmax x :axis N)
+        else if matches!(name, "argmax" | "argmin") && !args.is_empty() {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+
+            let mut axis: i64 = -1; // default: last axis
+            let mut i = 1;
+            while i + 1 < args.len() {
+                if let CompiledExpr::Keyword(k) = &args[i] {
+                    if k == "axis" {
+                        if let CompiledExpr::Integer(n) = &args[i + 1] {
+                            axis = *n;
+                        }
+                    }
+                }
+                i += 2;
+            }
+
+            let (reg, ty) = if name == "argmax" {
+                tensor_ops::emit_argmax(&mut self.emitter, &operand_reg, &operand_ty, axis)
+            } else {
+                tensor_ops::emit_argmin(&mut self.emitter, &operand_reg, &operand_ty, axis)
             };
             Ok((reg, ty))
         }
