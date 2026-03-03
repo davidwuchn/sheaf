@@ -33,6 +33,7 @@ fn builtin_reshape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     } else {
         raw_shape.iter().map(|&x| x as usize).collect()
     };
+    let arr = arr.as_standard_layout().into_owned();
     let result = arr.into_shape_with_order(IxDyn(&new_shape)).map_err(|e| runtime_error(e.to_string()))?;
     Ok(Value::Tensor { data: result, dtype: dt })
 }
@@ -216,17 +217,41 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     }
 }
 
+fn broadcast_shape(shapes: &[&[usize]]) -> Result<Vec<usize>, crate::core::error::SheafError> {
+    let max_ndim = shapes.iter().map(|s| s.len()).max().unwrap_or(0);
+    let mut result = vec![1usize; max_ndim];
+    for shape in shapes {
+        let offset = max_ndim - shape.len();
+        for (i, &dim) in shape.iter().enumerate() {
+            let ri = offset + i;
+            if result[ri] == 1 {
+                result[ri] = dim;
+            } else if dim != 1 && dim != result[ri] {
+                return Err(runtime_error(format!(
+                    "where: cannot broadcast shapes, dimension mismatch {} vs {} at axis {}",
+                    result[ri], dim, ri
+                )));
+            }
+        }
+    }
+    Ok(result)
+}
+
 fn builtin_where(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (cond, _) = to_array(&args[0])?;
     let (on_true, _) = to_array(&args[1])?;
     let (on_false, _) = to_array(&args[2])?;
-    let on_true_bc = if on_true.ndim() == 0 {
-        ArrayD::from_elem(cond.raw_dim(), *on_true.first().unwrap())
-    } else { on_true };
-    let on_false_bc = if on_false.ndim() == 0 {
-        ArrayD::from_elem(cond.raw_dim(), *on_false.first().unwrap())
-    } else { on_false };
-    let result = ndarray::Zip::from(&cond).and(&on_true_bc).and(&on_false_bc)
+    let target = broadcast_shape(&[cond.shape(), on_true.shape(), on_false.shape()])?;
+    let cond_bc = cond.broadcast(IxDyn(&target)).ok_or_else(|| {
+        runtime_error(format!("where: cannot broadcast cond {:?} to {:?}", cond.shape(), target))
+    })?.to_owned();
+    let true_bc = on_true.broadcast(IxDyn(&target)).ok_or_else(|| {
+        runtime_error(format!("where: cannot broadcast on_true {:?} to {:?}", on_true.shape(), target))
+    })?.to_owned();
+    let false_bc = on_false.broadcast(IxDyn(&target)).ok_or_else(|| {
+        runtime_error(format!("where: cannot broadcast on_false {:?} to {:?}", on_false.shape(), target))
+    })?.to_owned();
+    let result = ndarray::Zip::from(&cond_bc).and(&true_bc).and(&false_bc)
         .map_collect(|&c, &t, &f| if c != 0.0 { t } else { f });
     Ok(Value::tensor_f32(result))
 }
