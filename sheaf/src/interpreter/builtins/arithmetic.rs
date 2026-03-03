@@ -139,6 +139,70 @@ fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             let b2 = b.into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
             Ok(Value::tensor_f32(a1.dot(&b2).into_dyn()))
         }
+        _ if a.ndim() >= 2 && b.ndim() >= 2 => {
+            // Batched matmul: [...batch, M, K] @ [...batch, K, N] → [...batch, M, N]
+            // Also handles nD @ 2D and 2D @ nD by broadcasting the 2D operand
+            let a_shape = a.shape();
+            let b_shape = b.shape();
+            let m = a_shape[a.ndim() - 2];
+            let k = a_shape[a.ndim() - 1];
+            let n = b_shape[b.ndim() - 1];
+            let a_batch = &a_shape[..a.ndim() - 2];
+            let b_batch = &b_shape[..b.ndim() - 2];
+            let batch: Vec<usize> = if a_batch.len() >= b_batch.len() {
+                a_batch.to_vec()
+            } else {
+                b_batch.to_vec()
+            };
+            let batch_size: usize = batch.iter().product::<usize>().max(1);
+
+            let a_2d = if a.ndim() == 2 {
+                Some(a.view().into_dimensionality::<ndarray::Ix2>()
+                    .map_err(|e| runtime_error(e.to_string()))?)
+            } else { None };
+            let b_2d = if b.ndim() == 2 {
+                Some(b.view().into_dimensionality::<ndarray::Ix2>()
+                    .map_err(|e| runtime_error(e.to_string()))?)
+            } else { None };
+
+            // Ensure contiguous layout (swapaxes/permute may produce non-contiguous views)
+            let a_c = if a.ndim() > 2 { a.as_standard_layout().into_owned() } else { a.clone() };
+            let b_c = if b.ndim() > 2 { b.as_standard_layout().into_owned() } else { b.clone() };
+            let a_flat = if a_c.ndim() > 2 {
+                Some(a_c.into_shape_with_order((batch_size, m, k))
+                    .map_err(|e| runtime_error(format!("@: reshape a: {}", e)))?)
+            } else { None };
+            let b_flat = if b_c.ndim() > 2 {
+                Some(b_c.into_shape_with_order((batch_size, k, n))
+                    .map_err(|e| runtime_error(format!("@: reshape b: {}", e)))?)
+            } else { None };
+
+            let mut result = Vec::with_capacity(batch_size * m * n);
+            for i in 0..batch_size {
+                let ai = match (&a_2d, &a_flat) {
+                    (Some(a2), _) => a2.view(),
+                    (_, Some(af)) => af.index_axis(ndarray::Axis(0), i)
+                        .into_dimensionality::<ndarray::Ix2>()
+                        .map_err(|e| runtime_error(e.to_string()))?,
+                    _ => unreachable!(),
+                };
+                let bi = match (&b_2d, &b_flat) {
+                    (Some(b2), _) => b2.view(),
+                    (_, Some(bf)) => bf.index_axis(ndarray::Axis(0), i)
+                        .into_dimensionality::<ndarray::Ix2>()
+                        .map_err(|e| runtime_error(e.to_string()))?,
+                    _ => unreachable!(),
+                };
+                result.extend(ai.dot(&bi).iter());
+            }
+
+            let mut out_shape = batch;
+            out_shape.push(m);
+            out_shape.push(n);
+            let arr = ArrayD::from_shape_vec(IxDyn(&out_shape), result)
+                .map_err(|e| runtime_error(format!("@: output reshape: {}", e)))?;
+            Ok(Value::tensor_f32(arr))
+        }
         _ => Err(runtime_error(format!(
             "@ not supported for {}D x {}D", a.ndim(), b.ndim()
         ))),
