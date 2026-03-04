@@ -16,6 +16,7 @@
 mod repl;
 
 use std::process::exit;
+use sheaf_compiler::core::compiler::CompiledExpr;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -473,9 +474,13 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
     let mut all_decls = extra_decls;
 
     // Trace-driven shape discovery: interpret the runner file to observe concrete arg shapes
-    let traced_configs = trace_with.map(|runner_path| {
-        trace_with_runner(&runner_path, &compiler, &all_fn_names, verbose)
-    });
+    let (traced_configs, traced_constants) = match trace_with {
+        Some(runner_path) => {
+            let (configs, constants) = trace_with_runner(&runner_path, &compiler, &all_fn_names, verbose);
+            (Some(configs), constants)
+        }
+        None => (None, std::collections::HashMap::new()),
+    };
 
     // Build per-param config from --config JSON:
     // config_json top level: {"param_name": {dict structure}, ...}
@@ -621,6 +626,19 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         if let Some(fd) = compiler.registry.get_mut(name) {
             fd.body_compiled = Some(body.clone());
             fd.signature = Some(sig.clone());
+        }
+
+        // Inline user-defined function calls (e.g. transformer-block → multi-head-attention)
+        body = sheaf_compiler::autodiff::inline_function_calls(&body, &compiler.registry);
+
+        // Substitute config scalar constants (e.g. (static (get config :d_model)) → Integer(256))
+        if let Some(fn_consts) = traced_constants.get(name.as_str()) {
+            if verbose {
+                for ((p, idx), val) in fn_consts {
+                    println!("  const: '{}'.{}[{:?}] = {}", name, p, idx, val);
+                }
+            }
+            body = resolve_static_constants(&body, fn_consts);
         }
 
         let codegen = CodeGenerator::with_function_params(
@@ -807,15 +825,24 @@ fn write_manifest(vmfb_path: &std::path::Path, functions: &[ManifestEntry], verb
 }
 
 /// Interpret a runner file to discover concrete shapes for function parameters.
-///
-/// Returns a map: function_name -> Vec<(param_name, StableHLOType, index_map)>
-/// where index_map is non-empty for Dict params (enabling get->GetTupleElement lowering).
+/// Per-function type configs from traced call records.
+type TracedConfigs = std::collections::HashMap<
+    String,
+    Vec<(String, sheaf_compiler::StableHLOType, std::collections::BTreeMap<Vec<String>, Vec<usize>>)>,
+>;
+/// Per-function scalar constants from config dicts: fn_name → { (param, indices) → f64 }
+type TracedConstants = std::collections::HashMap<
+    String,
+    std::collections::HashMap<(String, Vec<usize>), f64>,
+>;
+
+/// Trace the runner file to discover argument shapes and scalar config values.
 fn trace_with_runner(
     runner_path: &std::path::Path,
     compiler: &sheaf_compiler::core::compiler::CompilerContext,
     target_fns: &[String],
     verbose: bool,
-) -> std::collections::HashMap<String, Vec<(String, sheaf_compiler::StableHLOType, std::collections::BTreeMap<Vec<String>, Vec<usize>>)>> {
+) -> (TracedConfigs, TracedConstants) {
     use std::collections::HashMap;
     use sheaf_compiler::compiler::layout_to_index_map;
     use sheaf_compiler::core::trace::{value_to_param_layout, value_to_stablehlo_type};
@@ -884,7 +911,8 @@ fn trace_with_runner(
 
     // Extract per-function, per-param configs from recorded calls
     let records = env.call_records.take().unwrap_or_default();
-    let mut result: HashMap<String, Vec<(String, StableHLOType, std::collections::BTreeMap<Vec<String>, Vec<usize>>)>> = HashMap::new();
+    let mut result: TracedConfigs = HashMap::new();
+    let mut constants: TracedConstants = HashMap::new();
 
     for fn_name in target_fns {
         let record = match records.get(fn_name) {
@@ -903,6 +931,7 @@ fn trace_with_runner(
         };
 
         let mut fn_configs = Vec::new();
+        let mut fn_constants: std::collections::HashMap<(String, Vec<usize>), f64> = std::collections::HashMap::new();
         for (param_name, arg_val) in func_def.params.iter().zip(record.arg_values.iter()) {
             let ty = value_to_stablehlo_type(arg_val).unwrap_or(StableHLOType::scalar_f32());
 
@@ -913,7 +942,10 @@ fn trace_with_runner(
                     println!("  trace: '{}' param '{}' → {} (dict with {} fields)",
                         fn_name, param_name, tuple_ty.to_mlir(), layout.fields.len());
                 }
-                fn_configs.push((param_name.clone(), tuple_ty, layout_to_index_map(&layout)));
+                let imap = layout_to_index_map(&layout);
+                // Extract scalar constants from config-like dicts (all-scalar values)
+                extract_scalar_constants(arg_val, param_name, &imap, &mut fn_constants);
+                fn_configs.push((param_name.clone(), tuple_ty, imap));
                 continue;
             } else {
                 std::collections::BTreeMap::new()
@@ -925,10 +957,161 @@ fn trace_with_runner(
             fn_configs.push((param_name.clone(), ty, index_map));
         }
 
+        if !fn_constants.is_empty() {
+            constants.insert(fn_name.clone(), fn_constants);
+        }
         result.insert(fn_name.clone(), fn_configs);
     }
 
-    result
+    (result, constants)
+}
+
+/// Extract scalar values from a dict Value for compile-time constant propagation.
+/// Recurses into nested dicts, building key paths to match against the index map.
+fn extract_scalar_constants(
+    val: &sheaf_compiler::interpreter::value::Value,
+    param_name: &str,
+    index_map: &std::collections::BTreeMap<Vec<String>, Vec<usize>>,
+    out: &mut std::collections::HashMap<(String, Vec<usize>), f64>,
+) {
+    extract_scalars_rec(val, param_name, &mut vec![], index_map, out);
+}
+
+fn extract_scalars_rec(
+    val: &sheaf_compiler::interpreter::value::Value,
+    param_name: &str,
+    path: &mut Vec<String>,
+    index_map: &std::collections::BTreeMap<Vec<String>, Vec<usize>>,
+    out: &mut std::collections::HashMap<(String, Vec<usize>), f64>,
+) {
+    use sheaf_compiler::interpreter::value::Value;
+    let scalar = match val {
+        Value::Int(n) => Some(*n as f64),
+        Value::Float(f) => Some(*f),
+        Value::Dict(map) => {
+            for (key, child) in map {
+                path.push(key.clone());
+                extract_scalars_rec(child, param_name, path, index_map, out);
+                path.pop();
+            }
+            return;
+        }
+        _ => return,
+    };
+    if let (Some(v), Some(indices)) = (scalar, index_map.get(path)) {
+        out.insert((param_name.to_string(), indices.clone()), v);
+    }
+}
+
+/// Substitute known scalar constants and propagate Let-bound constants.
+/// Handles: GetTupleElement → Integer, (static expr) → evaluate, Symbol → local constant,
+/// and constant folding of arithmetic on known values.
+fn resolve_static_constants(
+    expr: &CompiledExpr,
+    constants: &std::collections::HashMap<(String, Vec<usize>), f64>,
+) -> CompiledExpr {
+    let mut locals = std::collections::HashMap::new();
+    resolve_constants_rec(expr, constants, &mut locals)
+}
+
+fn resolve_constants_rec(
+    expr: &CompiledExpr,
+    constants: &std::collections::HashMap<(String, Vec<usize>), f64>,
+    locals: &mut std::collections::HashMap<String, CompiledExpr>,
+) -> CompiledExpr {
+    match expr {
+        CompiledExpr::GetTupleElement { param, indices } => {
+            let key = (param.clone(), indices.clone());
+            match constants.get(&key) {
+                Some(&val) => f64_to_const(val),
+                None => expr.clone(),
+            }
+        }
+        CompiledExpr::Symbol(name) => {
+            locals.get(name).cloned().unwrap_or_else(|| expr.clone())
+        }
+        CompiledExpr::FunctionCall { name, args } if name == "static" && args.len() == 1 => {
+            resolve_constants_rec(&args[0], constants, locals)
+        }
+        CompiledExpr::FunctionCall { name, args } => {
+            let resolved: Vec<_> = args.iter()
+                .map(|a| resolve_constants_rec(a, constants, locals))
+                .collect();
+            try_fold_arithmetic(name, &resolved)
+                .unwrap_or_else(|| CompiledExpr::FunctionCall { name: name.clone(), args: resolved })
+        }
+        CompiledExpr::Let { bindings, body } => {
+            let new_bindings: Vec<_> = bindings.iter().map(|(k, v)| {
+                let resolved = resolve_constants_rec(v, constants, locals);
+                if matches!(&resolved, CompiledExpr::Integer(_) | CompiledExpr::Float(_)) {
+                    locals.insert(k.clone(), resolved.clone());
+                }
+                (k.clone(), resolved)
+            }).collect();
+            CompiledExpr::Let {
+                bindings: new_bindings,
+                body: Box::new(resolve_constants_rec(body, constants, locals)),
+            }
+        }
+        CompiledExpr::Do(exprs) => CompiledExpr::Do(
+            exprs.iter().map(|e| resolve_constants_rec(e, constants, locals)).collect(),
+        ),
+        CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
+            condition: Box::new(resolve_constants_rec(condition, constants, locals)),
+            then_branch: Box::new(resolve_constants_rec(then_branch, constants, locals)),
+            else_branch: else_branch.as_ref().map(|e| Box::new(resolve_constants_rec(e, constants, locals))),
+        },
+        CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
+            params: params.clone(),
+            body: Box::new(resolve_constants_rec(body, constants, locals)),
+        },
+        CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
+            callee: Box::new(resolve_constants_rec(callee, constants, locals)),
+            args: args.iter().map(|a| resolve_constants_rec(a, constants, locals)).collect(),
+        },
+        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => CompiledExpr::Repeat {
+            index_var: index_var.clone(),
+            count: Box::new(resolve_constants_rec(count, constants, locals)),
+            acc_var: acc_var.clone(),
+            acc_init: Box::new(resolve_constants_rec(acc_init, constants, locals)),
+            body: Box::new(resolve_constants_rec(body, constants, locals)),
+        },
+        CompiledExpr::Vector(elems) => CompiledExpr::Vector(
+            elems.iter().map(|e| resolve_constants_rec(e, constants, locals)).collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn f64_to_const(val: f64) -> CompiledExpr {
+    if val.fract() == 0.0 && val.abs() < i64::MAX as f64 {
+        CompiledExpr::Integer(val as i64)
+    } else {
+        CompiledExpr::Float(val)
+    }
+}
+
+fn try_fold_arithmetic(name: &str, args: &[CompiledExpr]) -> Option<CompiledExpr> {
+    if args.len() != 2 { return None; }
+    let a = extract_numeric(&args[0])?;
+    let b = extract_numeric(&args[1])?;
+    let result = match name {
+        "+" => a + b,
+        "-" => a - b,
+        "*" => a * b,
+        "/" => a / b,
+        "//" => (a / b).floor(),
+        _ => return None,
+    };
+    Some(f64_to_const(result))
+}
+
+fn extract_numeric(expr: &CompiledExpr) -> Option<f64> {
+    match expr {
+        CompiledExpr::Integer(n) => Some(*n as f64),
+        CompiledExpr::Float(f) => Some(*f),
+        _ => None,
+    }
 }
 
 /// Collect .shf files from a directory, optionally recursively.
