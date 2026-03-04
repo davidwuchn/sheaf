@@ -15,32 +15,48 @@ impl StableHLOEmitter {
         lhs_ty: &StableHLOType,
         rhs_ty: &StableHLOType,
     ) -> (Register, StableHLOType) {
-        // Shape inference for matmul
         let lhs_shape = lhs_ty.shape();
         let rhs_shape = rhs_ty.shape();
+        let lhs_rank = lhs_shape.len();
+        let rhs_rank = rhs_shape.len();
 
-        // Simple 2D matmul for now: [M, K] @ [K, N] -> [M, N]
-        let result_shape = if lhs_shape.len() == 2 && rhs_shape.len() == 2 {
-            vec![lhs_shape[0], rhs_shape[1]]
+        // NumPy broadcasting rule for @:
+        //   [...batch, M, K] @ [K, N]            → [...batch, M, N]   (rhs 2D: no batch dims)
+        //   [...batch, M, K] @ [...batch, K, N]  → [...batch, M, N]   (same rank: batch the prefix)
+        let n_batch = if rhs_rank <= 2 {
+            0
         } else {
-            // Fallback: assume result is same as lhs
-            lhs_shape.to_vec()
+            lhs_rank.min(rhs_rank).saturating_sub(2)
         };
+        let lhs_contract = lhs_rank as i64 - 1;   // last dim of LHS
+        let rhs_contract = n_batch as i64;          // first non-batch dim of RHS
+
+        // Result shape: batch dims + lhs free dims + rhs free dims
+        let mut result_shape: Vec<i64> = lhs_shape[..n_batch].to_vec();
+        result_shape.extend_from_slice(&lhs_shape[n_batch..lhs_rank - 1]);
+        result_shape.extend_from_slice(&rhs_shape[n_batch + 1..]);
 
         let result_ty = StableHLOType::f32_tensor(result_shape);
         let reg = self.fresh_register();
 
-        // dot_general with contracting dimensions
-        // For [M,K] @ [K,N]: contract on dimension 1 of lhs and 0 of rhs
-        self.body.push(format!(
-            "    {} = stablehlo.dot_general {}, {}, contracting_dims = [1] x [0] : ({}, {}) -> {}",
-            reg.to_mlir(),
-            lhs.to_mlir(),
-            rhs.to_mlir(),
-            lhs_ty.to_mlir(),
-            rhs_ty.to_mlir(),
-            result_ty.to_mlir()
-        ));
+        if n_batch == 0 {
+            self.body.push(format!(
+                "    {} = stablehlo.dot_general {}, {}, contracting_dims = [{}] x [{}] : ({}, {}) -> {}",
+                reg.to_mlir(), lhs.to_mlir(), rhs.to_mlir(),
+                lhs_contract, rhs_contract,
+                lhs_ty.to_mlir(), rhs_ty.to_mlir(), result_ty.to_mlir()
+            ));
+        } else {
+            let batch_dims: Vec<String> = (0..n_batch).map(|i| i.to_string()).collect();
+            let batch_str = batch_dims.join(", ");
+            self.body.push(format!(
+                "    {} = stablehlo.dot_general {}, {}, batching_dims = [{}] x [{}], contracting_dims = [{}] x [{}] : ({}, {}) -> {}",
+                reg.to_mlir(), lhs.to_mlir(), rhs.to_mlir(),
+                batch_str, batch_str,
+                lhs_contract, rhs_contract,
+                lhs_ty.to_mlir(), rhs_ty.to_mlir(), result_ty.to_mlir()
+            ));
+        }
 
         (reg, result_ty)
     }

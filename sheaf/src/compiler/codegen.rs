@@ -304,6 +304,23 @@ impl CodeGenerator {
         }
     }
 
+    /// Extract a static shape Vec<i64> from a Vector of Integer literals.
+    /// Returns a compile error (not panic) if any element is non-constant,
+    /// so the function can be gracefully skipped rather than crashing.
+    fn parse_shape_vec(elems: &[CompiledExpr]) -> SheafResult<Vec<i64>> {
+        elems.iter().map(|e| match e {
+            CompiledExpr::Integer(n) => Ok(*n),
+            other => Err(SheafError::Compile {
+                message: format!(
+                    "shape element must be a constant integer, got: {:?} \
+                     (use (static ...) or --trace-with to resolve)",
+                    other
+                ),
+                location: crate::core::error::SourceLocation::unknown(),
+            }),
+        }).collect()
+    }
+
     /// Generate code for a function call
     fn generate_function_call(
         &mut self,
@@ -666,15 +683,8 @@ impl CodeGenerator {
         }
         // zeros: (zeros [M N])
         else if name == "zeros" && args.len() == 1 {
-            // Extract shape from vector
             if let CompiledExpr::Vector(shape_elems) = &args[0] {
-                let shape: Vec<i64> = shape_elems
-                    .iter()
-                    .map(|e| match e {
-                        CompiledExpr::Integer(n) => *n,
-                        _ => panic!("Shape element must be integer"),
-                    })
-                    .collect();
+                let shape = Self::parse_shape_vec(shape_elems)?;
                 let (reg, ty) = tensor_ops::emit_zeros(&mut self.emitter, &shape);
                 Ok((reg, ty))
             } else {
@@ -686,15 +696,8 @@ impl CodeGenerator {
         }
         // random-normal: (random-normal key [M N])
         else if name == "random-normal" && args.len() == 2 {
-            // Ignore key for now, extract shape
             if let CompiledExpr::Vector(shape_elems) = &args[1] {
-                let shape: Vec<i64> = shape_elems
-                    .iter()
-                    .map(|e| match e {
-                        CompiledExpr::Integer(n) => *n,
-                        _ => panic!("Shape element must be integer"),
-                    })
-                    .collect();
+                let shape = Self::parse_shape_vec(shape_elems)?;
                 let (reg, ty) = tensor_ops::emit_random_normal(&mut self.emitter, &shape);
                 Ok((reg, ty))
             } else {
@@ -707,13 +710,7 @@ impl CodeGenerator {
         // ones: (ones [M N])
         else if name == "ones" && args.len() == 1 {
             if let CompiledExpr::Vector(shape_elems) = &args[0] {
-                let shape: Vec<i64> = shape_elems
-                    .iter()
-                    .map(|e| match e {
-                        CompiledExpr::Integer(n) => *n,
-                        _ => panic!("Shape element must be integer"),
-                    })
-                    .collect();
+                let shape = Self::parse_shape_vec(shape_elems)?;
                 let (reg, ty) = tensor_ops::emit_ones(&mut self.emitter, &shape);
                 Ok((reg, ty))
             } else {
@@ -760,13 +757,7 @@ impl CodeGenerator {
         else if name == "reshape" && args.len() == 2 {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             if let CompiledExpr::Vector(shape_elems) = &args[1] {
-                let new_shape: Vec<i64> = shape_elems
-                    .iter()
-                    .map(|e| match e {
-                        CompiledExpr::Integer(n) => *n,
-                        _ => panic!("Shape element must be integer"),
-                    })
-                    .collect();
+                let new_shape = Self::parse_shape_vec(shape_elems)?;
                 let (reg, ty) = tensor_ops::emit_reshape(
                     &mut self.emitter,
                     &operand_reg,
