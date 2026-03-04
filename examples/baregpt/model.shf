@@ -52,8 +52,7 @@
                       (range L))})) ;; On each layer
 
 
-;; Recursively compiles the entire model graph; remove ':jit' for tracing/debugging
-(defn gpt-model [inputs params config] :jit
+(defn gpt-model [inputs params config]
   (let [emb-tensors (get-in params [:emb :token])
         pos-tensors (get-in params [:emb :pos])
         T (get (shape inputs) -1)

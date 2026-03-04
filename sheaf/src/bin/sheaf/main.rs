@@ -563,6 +563,8 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         // Apply dict-to-tuple lowering for each configured param that appears
         // in this function's parameter list.
         let mut known_types: Vec<(String, sheaf_compiler::StableHLOType)> = Vec::new();
+        // Collect index maps for post-inline aliased-get lowering
+        let mut param_index_maps: Vec<(String, std::collections::BTreeMap<Vec<String>, Vec<usize>>)> = Vec::new();
 
         // Source 1: --config JSON (manual)
         for (param_name, param_config) in &param_configs {
@@ -581,6 +583,7 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
                 println!("  Lowering '{}' param '{}' → {}", name, param_name, tuple_ty.to_mlir());
             }
             body = lower_get_calls(&body, param_name, &index_map);
+            param_index_maps.push((param_name.clone(), index_map));
             known_types.push((param_name.clone(), tuple_ty));
         }
 
@@ -596,6 +599,7 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
                         println!("  Traced '{}' param '{}' → {}", name, param_name, tuple_ty.to_mlir());
                     }
                     body = lower_get_calls(&body, param_name, index_map);
+                    param_index_maps.push((param_name.clone(), index_map.clone()));
                     known_types.push((param_name.clone(), tuple_ty.clone()));
                 }
             }
@@ -631,15 +635,27 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         // Inline user-defined function calls (e.g. transformer-block → multi-head-attention)
         body = sheaf_compiler::autodiff::inline_function_calls(&body, &compiler.registry);
 
+        // After inlining, stdlib functions (e.g. layer-norm) may introduce (get alias :key)
+        // where alias is a Let-bound GetTupleElement. Re-lower those using alias tracking.
+        body = lower_inlined_gets(&body, &param_index_maps);
+
         // Substitute config scalar constants (e.g. (static (get config :d_model)) → Integer(256))
-        if let Some(fn_consts) = traced_constants.get(name.as_str()) {
-            if verbose {
-                for ((p, idx), val) in fn_consts {
-                    println!("  const: '{}'.{}[{:?}] = {}", name, p, idx, val);
-                }
+        // Also folds (shape X) → [d0, d1, ...] and (get [d0, d1] -2) → Integer(d)
+        let empty_consts = std::collections::HashMap::new();
+        let fn_consts = traced_constants.get(name.as_str()).unwrap_or(&empty_consts);
+        if verbose && !fn_consts.is_empty() {
+            for ((p, idx), val) in fn_consts {
+                println!("  const: '{}'.{}[{:?}] = {}", name, p, idx, val);
             }
-            body = resolve_static_constants(&body, fn_consts);
         }
+        let param_shapes: std::collections::HashMap<String, Vec<i64>> = func_def.params.iter()
+            .zip(sig.param_types.iter())
+            .filter_map(|(p, ty)| {
+                let shape = ty.shape();
+                if shape.is_empty() { None } else { Some((p.clone(), shape.to_vec())) }
+            })
+            .collect();
+        body = resolve_static_constants(&body, fn_consts, &param_shapes);
 
         let codegen = CodeGenerator::with_function_params(
             compiler.registry.clone(),
@@ -1006,18 +1022,129 @@ fn extract_scalars_rec(
 /// Substitute known scalar constants and propagate Let-bound constants.
 /// Handles: GetTupleElement → Integer, (static expr) → evaluate, Symbol → local constant,
 /// and constant folding of arithmetic on known values.
+/// Lower (get alias :key) patterns introduced after inlining stdlib functions.
+///
+/// After inlining, a call like (layer-norm h (GetTupleElement layer-p [1]) 2)
+/// becomes (let [p (GetTupleElement layer-p [1])] (let [gamma (get p :gamma)] ...)).
+/// This pass tracks such aliases and resolves (get alias :key) to
+/// GetTupleElement { param: root_param, indices: full_indices }.
+fn lower_inlined_gets(
+    body: &CompiledExpr,
+    index_maps: &[(String, std::collections::BTreeMap<Vec<String>, Vec<usize>>)],
+) -> CompiledExpr {
+    // Build reverse map: (param, indices) → key_path for alias tracking
+    let mut reverse: std::collections::HashMap<(String, Vec<usize>), Vec<String>> = std::collections::HashMap::new();
+    for (param, imap) in index_maps {
+        for (path, indices) in imap {
+            reverse.insert((param.clone(), indices.clone()), path.clone());
+        }
+    }
+    lower_inlined_gets_rec(body, index_maps, &mut std::collections::HashMap::new(), &reverse)
+}
+
+// aliases: symbol → (root_param, prefix_path)
+fn lower_inlined_gets_rec(
+    expr: &CompiledExpr,
+    index_maps: &[(String, std::collections::BTreeMap<Vec<String>, Vec<usize>>)],
+    aliases: &mut std::collections::HashMap<String, (String, Vec<String>)>,
+    reverse: &std::collections::HashMap<(String, Vec<usize>), Vec<String>>,
+) -> CompiledExpr {
+    match expr {
+        // (get alias :key ...) where alias is a tracked tuple alias
+        CompiledExpr::FunctionCall { name, args } if name == "get" && args.len() >= 2 => {
+            if let CompiledExpr::Symbol(alias) = &args[0] {
+                if let Some((root_param, prefix_path)) = aliases.get(alias) {
+                    let mut path = prefix_path.clone();
+                    let mut all_kw = true;
+                    for arg in &args[1..] {
+                        match arg {
+                            CompiledExpr::Keyword(k) => path.push(k.clone()),
+                            _ => { all_kw = false; break; }
+                        }
+                    }
+                    if all_kw {
+                        if let Some(imap) = index_maps.iter().find(|(p, _)| p == root_param).map(|(_, m)| m) {
+                            if let Some(indices) = imap.get(&path) {
+                                return CompiledExpr::GetTupleElement {
+                                    param: root_param.clone(),
+                                    indices: indices.clone(),
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            CompiledExpr::FunctionCall {
+                name: name.clone(),
+                args: args.iter().map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse)).collect(),
+            }
+        }
+        CompiledExpr::Let { bindings, body } => {
+            let new_bindings: Vec<_> = bindings.iter().map(|(k, v)| {
+                let resolved = lower_inlined_gets_rec(v, index_maps, aliases, reverse);
+                // Track alias: if the value is GetTupleElement, record what key path it corresponds to
+                if let CompiledExpr::GetTupleElement { param, indices } = &resolved {
+                    let key = (param.clone(), indices.clone());
+                    if let Some(path) = reverse.get(&key) {
+                        aliases.insert(k.clone(), (param.clone(), path.clone()));
+                    }
+                }
+                (k.clone(), resolved)
+            }).collect();
+            CompiledExpr::Let {
+                bindings: new_bindings,
+                body: Box::new(lower_inlined_gets_rec(body, index_maps, aliases, reverse)),
+            }
+        }
+        CompiledExpr::FunctionCall { name, args } => CompiledExpr::FunctionCall {
+            name: name.clone(),
+            args: args.iter().map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse)).collect(),
+        },
+        CompiledExpr::Do(exprs) => CompiledExpr::Do(
+            exprs.iter().map(|e| lower_inlined_gets_rec(e, index_maps, aliases, reverse)).collect(),
+        ),
+        CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
+            condition: Box::new(lower_inlined_gets_rec(condition, index_maps, aliases, reverse)),
+            then_branch: Box::new(lower_inlined_gets_rec(then_branch, index_maps, aliases, reverse)),
+            else_branch: else_branch.as_ref().map(|e| Box::new(lower_inlined_gets_rec(e, index_maps, aliases, reverse))),
+        },
+        CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
+            params: params.clone(),
+            body: Box::new(lower_inlined_gets_rec(body, index_maps, aliases, reverse)),
+        },
+        CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
+            callee: Box::new(lower_inlined_gets_rec(callee, index_maps, aliases, reverse)),
+            args: args.iter().map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse)).collect(),
+        },
+        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => CompiledExpr::Repeat {
+            index_var: index_var.clone(),
+            count: Box::new(lower_inlined_gets_rec(count, index_maps, aliases, reverse)),
+            acc_var: acc_var.clone(),
+            acc_init: Box::new(lower_inlined_gets_rec(acc_init, index_maps, aliases, reverse)),
+            body: Box::new(lower_inlined_gets_rec(body, index_maps, aliases, reverse)),
+        },
+        CompiledExpr::Vector(elems) => CompiledExpr::Vector(
+            elems.iter().map(|e| lower_inlined_gets_rec(e, index_maps, aliases, reverse)).collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 fn resolve_static_constants(
     expr: &CompiledExpr,
     constants: &std::collections::HashMap<(String, Vec<usize>), f64>,
+    param_shapes: &std::collections::HashMap<String, Vec<i64>>,
 ) -> CompiledExpr {
-    let mut locals = std::collections::HashMap::new();
-    resolve_constants_rec(expr, constants, &mut locals)
+    let mut locals: std::collections::HashMap<String, CompiledExpr> = std::collections::HashMap::new();
+    let mut shapes: std::collections::HashMap<String, Vec<i64>> = param_shapes.clone();
+    resolve_constants_rec(expr, constants, &mut locals, &mut shapes)
 }
 
 fn resolve_constants_rec(
     expr: &CompiledExpr,
     constants: &std::collections::HashMap<(String, Vec<usize>), f64>,
     locals: &mut std::collections::HashMap<String, CompiledExpr>,
+    shapes: &mut std::collections::HashMap<String, Vec<i64>>,
 ) -> CompiledExpr {
     match expr {
         CompiledExpr::GetTupleElement { param, indices } => {
@@ -1031,53 +1158,100 @@ fn resolve_constants_rec(
             locals.get(name).cloned().unwrap_or_else(|| expr.clone())
         }
         CompiledExpr::FunctionCall { name, args } if name == "static" && args.len() == 1 => {
-            resolve_constants_rec(&args[0], constants, locals)
+            resolve_constants_rec(&args[0], constants, locals, shapes)
+        }
+        // (shape sym) → Vector([Integer(d0), Integer(d1), ...]) when sym has known shape
+        CompiledExpr::FunctionCall { name, args } if name == "shape" && args.len() == 1 => {
+            let sym_name = match &args[0] {
+                CompiledExpr::Symbol(s) => Some(s.as_str()),
+                _ => None,
+            };
+            if let Some(sym) = sym_name {
+                if let Some(shape) = shapes.get(sym) {
+                    return CompiledExpr::Vector(
+                        shape.iter().map(|&d| CompiledExpr::Integer(d)).collect(),
+                    );
+                }
+            }
+            CompiledExpr::FunctionCall {
+                name: name.clone(),
+                args: args.iter().map(|a| resolve_constants_rec(a, constants, locals, shapes)).collect(),
+            }
+        }
+        // (get Vector idx) → fold with negative index support
+        CompiledExpr::FunctionCall { name, args } if name == "get" && args.len() == 2 => {
+            let recv = resolve_constants_rec(&args[0], constants, locals, shapes);
+            let idx = resolve_constants_rec(&args[1], constants, locals, shapes);
+            if let (CompiledExpr::Vector(elems), CompiledExpr::Integer(i)) = (&recv, &idx) {
+                let len = elems.len() as i64;
+                let norm = if *i < 0 { len + i } else { *i };
+                if norm >= 0 && norm < len {
+                    return elems[norm as usize].clone();
+                }
+            }
+            CompiledExpr::FunctionCall { name: name.clone(), args: vec![recv, idx] }
         }
         CompiledExpr::FunctionCall { name, args } => {
             let resolved: Vec<_> = args.iter()
-                .map(|a| resolve_constants_rec(a, constants, locals))
+                .map(|a| resolve_constants_rec(a, constants, locals, shapes))
                 .collect();
             try_fold_arithmetic(name, &resolved)
                 .unwrap_or_else(|| CompiledExpr::FunctionCall { name: name.clone(), args: resolved })
         }
         CompiledExpr::Let { bindings, body } => {
             let new_bindings: Vec<_> = bindings.iter().map(|(k, v)| {
-                let resolved = resolve_constants_rec(v, constants, locals);
-                if matches!(&resolved, CompiledExpr::Integer(_) | CompiledExpr::Float(_)) {
-                    locals.insert(k.clone(), resolved.clone());
+                let resolved = resolve_constants_rec(v, constants, locals, shapes);
+                match &resolved {
+                    CompiledExpr::Integer(_) | CompiledExpr::Float(_) => {
+                        locals.insert(k.clone(), resolved.clone());
+                    }
+                    // Alias: (let [X x]) — propagate shape of x to X
+                    CompiledExpr::Symbol(aliased) => {
+                        if let Some(sh) = shapes.get(aliased).cloned() {
+                            shapes.insert(k.clone(), sh);
+                        }
+                    }
+                    // Known vector shape (e.g. from (shape X)) — track for nested (get (shape ...) -1)
+                    CompiledExpr::Vector(elems) if elems.iter().all(|e| matches!(e, CompiledExpr::Integer(_))) => {
+                        let sh: Vec<i64> = elems.iter().filter_map(|e| {
+                            if let CompiledExpr::Integer(n) = e { Some(*n) } else { None }
+                        }).collect();
+                        shapes.insert(k.clone(), sh);
+                    }
+                    _ => {}
                 }
                 (k.clone(), resolved)
             }).collect();
             CompiledExpr::Let {
                 bindings: new_bindings,
-                body: Box::new(resolve_constants_rec(body, constants, locals)),
+                body: Box::new(resolve_constants_rec(body, constants, locals, shapes)),
             }
         }
         CompiledExpr::Do(exprs) => CompiledExpr::Do(
-            exprs.iter().map(|e| resolve_constants_rec(e, constants, locals)).collect(),
+            exprs.iter().map(|e| resolve_constants_rec(e, constants, locals, shapes)).collect(),
         ),
         CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
-            condition: Box::new(resolve_constants_rec(condition, constants, locals)),
-            then_branch: Box::new(resolve_constants_rec(then_branch, constants, locals)),
-            else_branch: else_branch.as_ref().map(|e| Box::new(resolve_constants_rec(e, constants, locals))),
+            condition: Box::new(resolve_constants_rec(condition, constants, locals, shapes)),
+            then_branch: Box::new(resolve_constants_rec(then_branch, constants, locals, shapes)),
+            else_branch: else_branch.as_ref().map(|e| Box::new(resolve_constants_rec(e, constants, locals, shapes))),
         },
         CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
             params: params.clone(),
-            body: Box::new(resolve_constants_rec(body, constants, locals)),
+            body: Box::new(resolve_constants_rec(body, constants, locals, shapes)),
         },
         CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
-            callee: Box::new(resolve_constants_rec(callee, constants, locals)),
-            args: args.iter().map(|a| resolve_constants_rec(a, constants, locals)).collect(),
+            callee: Box::new(resolve_constants_rec(callee, constants, locals, shapes)),
+            args: args.iter().map(|a| resolve_constants_rec(a, constants, locals, shapes)).collect(),
         },
         CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => CompiledExpr::Repeat {
             index_var: index_var.clone(),
-            count: Box::new(resolve_constants_rec(count, constants, locals)),
+            count: Box::new(resolve_constants_rec(count, constants, locals, shapes)),
             acc_var: acc_var.clone(),
-            acc_init: Box::new(resolve_constants_rec(acc_init, constants, locals)),
-            body: Box::new(resolve_constants_rec(body, constants, locals)),
+            acc_init: Box::new(resolve_constants_rec(acc_init, constants, locals, shapes)),
+            body: Box::new(resolve_constants_rec(body, constants, locals, shapes)),
         },
         CompiledExpr::Vector(elems) => CompiledExpr::Vector(
-            elems.iter().map(|e| resolve_constants_rec(e, constants, locals)).collect(),
+            elems.iter().map(|e| resolve_constants_rec(e, constants, locals, shapes)).collect(),
         ),
         other => other.clone(),
     }
