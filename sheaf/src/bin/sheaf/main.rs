@@ -1191,6 +1191,14 @@ fn resolve_constants_rec(
             }
             CompiledExpr::FunctionCall { name: name.clone(), args: vec![recv, idx] }
         }
+        // (first [a b ...]) → a, (last [a b ...]) → last element — fold at compile time
+        // Recursively pushes first/last through nested Lets (e.g. inlined functions).
+        CompiledExpr::FunctionCall { name, args }
+            if (name == "first" || name == "last") && args.len() == 1 =>
+        {
+            let recv = resolve_constants_rec(&args[0], constants, locals, shapes);
+            return push_first_last(name, recv);
+        }
         CompiledExpr::FunctionCall { name, args } => {
             let resolved: Vec<_> = args.iter()
                 .map(|a| resolve_constants_rec(a, constants, locals, shapes))
@@ -1218,7 +1226,12 @@ fn resolve_constants_rec(
                         }).collect();
                         shapes.insert(k.clone(), sh);
                     }
-                    _ => {}
+                    _ => {
+                        // For FunctionCall/Let RHS (e.g. inlined layer-norm), infer shape transitively
+                        if let Some(sh) = try_infer_shape(&resolved, shapes) {
+                            shapes.insert(k.clone(), sh);
+                        }
+                    }
                 }
                 (k.clone(), resolved)
             }).collect();
@@ -1254,6 +1267,60 @@ fn resolve_constants_rec(
             elems.iter().map(|e| resolve_constants_rec(e, constants, locals, shapes)).collect(),
         ),
         other => other.clone(),
+    }
+}
+
+/// Push `first`/`last` through nested Let expressions until a Vector is found.
+/// (first (let [binds] (let [binds2] [a b ...]))) → (let [binds] (let [binds2] a))
+fn push_first_last(name: &str, expr: CompiledExpr) -> CompiledExpr {
+    match expr {
+        CompiledExpr::Vector(elems) => {
+            if name == "first" {
+                elems.into_iter().next()
+            } else {
+                elems.into_iter().last()
+            }
+            .unwrap_or_else(|| CompiledExpr::Vector(vec![]))
+        }
+        CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
+            bindings,
+            body: Box::new(push_first_last(name, *body)),
+        },
+        other => CompiledExpr::FunctionCall {
+            name: name.to_string(),
+            args: vec![other],
+        },
+    }
+}
+
+/// Heuristically infer the output shape of an expression given a known shapes map.
+/// Used to propagate shapes through Let-bound intermediate variables after inlining.
+fn try_infer_shape(
+    expr: &CompiledExpr,
+    shapes: &std::collections::HashMap<String, Vec<i64>>,
+) -> Option<Vec<i64>> {
+    match expr {
+        CompiledExpr::Symbol(s) => shapes.get(s).cloned(),
+        CompiledExpr::Let { bindings, body } => {
+            let mut inner = shapes.clone();
+            for (name, rhs) in bindings {
+                if let Some(sh) = try_infer_shape(rhs, &inner) {
+                    inner.insert(name.clone(), sh);
+                }
+            }
+            try_infer_shape(body, &inner)
+        }
+        CompiledExpr::FunctionCall { name, args } => match name.as_str() {
+            // Element-wise ops: output shape = any known tensor arg's shape
+            "+" | "-" | "*" | "/" | "**" | "sqrt" | "exp" | "log" | "abs"
+            | "relu" | "gelu" | "tanh" | "sigmoid" | "neg"
+            | "maximum" | "minimum" | "clamp"
+            | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not"
+            | "where" => args.iter().find_map(|a| try_infer_shape(a, shapes)),
+            "first" => args.first().and_then(|a| try_infer_shape(a, shapes)),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
