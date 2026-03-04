@@ -228,15 +228,16 @@ fn try_extract_get_chain(
 fn extract_key_path(expr: &CompiledExpr, param_name: &str) -> Option<Vec<String>> {
     match expr {
         CompiledExpr::Symbol(name) if name == param_name => Some(vec![]),
-        CompiledExpr::FunctionCall { name, args } if name == "get" && args.len() == 2 => {
-            // args[1] must be a Keyword
-            let key = match &args[1] {
-                CompiledExpr::Keyword(k) => k.clone(),
-                _ => return None,
-            };
+        CompiledExpr::FunctionCall { name, args } if name == "get" && args.len() >= 2 => {
             // args[0] is the receiver — recurse
             let mut path = extract_key_path(&args[0], param_name)?;
-            path.push(key);
+            // args[1..] are keyword keys: (get x :k1 :k2) → path ["k1", "k2"]
+            for arg in &args[1..] {
+                match arg {
+                    CompiledExpr::Keyword(k) => path.push(k.clone()),
+                    _ => return None,
+                }
+            }
             Some(path)
         }
         // (get-in params [:k1 :k2 ...]) → key path from the vector

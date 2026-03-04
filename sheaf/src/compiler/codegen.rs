@@ -1457,6 +1457,10 @@ impl CodeGenerator {
             let reg = self.emitter.emit_constant_i64(len);
             Ok((reg, StableHLOType::ScalarI64))
         }
+        // static: deprecated identity — evaluate inner expression directly
+        else if name == "static" && args.len() == 1 {
+            self.generate(&args[0])
+        }
         else {
             Err(SheafError::Compile {
                 message: format!("Function call not yet supported: {}", name),
