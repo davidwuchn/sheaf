@@ -203,12 +203,16 @@ impl StableHLOEmitter {
         axis2: i64,
     ) -> (Register, StableHLOType) {
         let operand_shape = operand_ty.shape();
-        let rank = operand_shape.len();
+        let rank = operand_shape.len() as i64;
+
+        // Normalize negative indices
+        let a1 = if axis1 < 0 { (rank + axis1) as usize } else { axis1 as usize };
+        let a2 = if axis2 < 0 { (rank + axis2) as usize } else { axis2 as usize };
 
         // Build permutation that swaps axis1 and axis2
-        let mut permutation: Vec<i64> = (0..rank as i64).collect();
-        permutation[axis1 as usize] = axis2;
-        permutation[axis2 as usize] = axis1;
+        let mut permutation: Vec<i64> = (0..rank).collect();
+        permutation[a1] = a2 as i64;
+        permutation[a2] = a1 as i64;
 
         // Use transpose with the permutation
         self.emit_transpose(operand, operand_ty, &permutation)
