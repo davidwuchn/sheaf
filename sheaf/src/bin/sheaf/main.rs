@@ -103,7 +103,7 @@ fn run_expr(source: &str) {
     match eval_source(source) {
         Ok(val) => println!("{}", val),
         Err(e) => {
-            eprintln!("{}", e);
+            eprint!("{}", sheaf_compiler::core::error_format::format_error(&e));
             exit(1);
         }
     }
@@ -192,6 +192,10 @@ fn run_file(args: &[String]) {
             exit(1);
         }
     };
+    sheaf_compiler::core::error_format::register_source(
+        abs_path.to_str().unwrap_or(path),
+        &source,
+    );
 
     let needs_tracing = trace_enabled || !cli_guards.is_empty();
     let result = if needs_tracing {
@@ -214,7 +218,7 @@ fn run_file(args: &[String]) {
             }
         }
         Err(e) => {
-            eprintln!("{}", e);
+            eprint!("{}", sheaf_compiler::core::error_format::format_error(&e));
             exit(1);
         }
     }
@@ -414,9 +418,13 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
             eprintln!("sheaf build: cannot read '{}': {}", src_path.display(), e);
             exit(1);
         });
+        sheaf_compiler::core::error_format::register_source(
+            src_path.to_str().unwrap_or("<unknown>"),
+            &source,
+        );
 
         let exprs = parse(&source, src_path.to_str().unwrap_or("<unknown>")).unwrap_or_else(|e| {
-            eprintln!("parse error in '{}': {}", src_path.display(), e);
+            eprint!("{}", sheaf_compiler::core::error_format::format_error(&e));
             exit(1);
         });
 
@@ -444,7 +452,7 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
             match compiler.compile(expr) {
                 Ok(c) => all_compiled_exprs.push(c),
                 Err(e) => {
-                    eprintln!("compilation error in '{}': {}", src_path.display(), e);
+                    eprint!("{}", sheaf_compiler::core::error_format::format_error(&e));
                     exit(1);
                 }
             }
@@ -902,6 +910,10 @@ fn trace_with_runner(
         eprintln!("sheaf build: cannot read runner '{}': {}", runner_path.display(), e);
         exit(1);
     });
+    sheaf_compiler::core::error_format::register_source(
+        runner_abs.to_str().unwrap_or("<trace-with>"),
+        &source,
+    );
 
     if verbose {
         println!("Tracing with '{}'...", runner_path.display());
@@ -920,7 +932,7 @@ fn trace_with_runner(
         &source,
         runner_abs.to_str().unwrap_or("<trace-with>"),
     ).unwrap_or_else(|e| {
-        eprintln!("sheaf build: parse error in runner '{}': {}", runner_path.display(), e);
+        eprint!("{}", sheaf_compiler::core::error_format::format_error(&e));
         exit(1);
     });
 
@@ -929,7 +941,7 @@ fn trace_with_runner(
         match trace_compiler.compile(expr) {
             Ok(c) => compiled.push(c),
             Err(e) => {
-                eprintln!("sheaf build: compilation error in runner '{}': {}", runner_path.display(), e);
+                eprint!("{}", sheaf_compiler::core::error_format::format_error(&e));
                 exit(1);
             }
         }
@@ -947,7 +959,7 @@ fn trace_with_runner(
     for c in &compiled {
         if !matches!(c, sheaf_compiler::core::compiler::CompiledExpr::Nil) {
             if let Err(e) = sheaf_compiler::interpreter::eval(c, &mut env) {
-                eprintln!("sheaf build: runtime error in runner '{}': {}", runner_path.display(), e);
+                eprint!("{}", sheaf_compiler::core::error_format::format_error(&e));
                 exit(1);
             }
         }

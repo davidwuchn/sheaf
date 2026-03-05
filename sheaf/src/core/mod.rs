@@ -5,6 +5,7 @@
 
 pub mod compiler;
 pub mod error;
+pub mod error_format;
 pub mod inference;
 pub mod macro_engine;
 pub mod parser;

@@ -175,6 +175,10 @@ impl SpecialForm for UseForm {
             message: format!("use: cannot read '{}': {}", resolved.display(), e),
             location: loc.clone(),
         })?;
+        crate::core::error_format::register_source(
+            resolved.to_str().unwrap_or("<use>"),
+            &source,
+        );
 
         // Save and update current_dir for nested (use ...) in the module
         let prev_dir = compiler.current_dir.clone();
