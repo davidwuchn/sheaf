@@ -16,7 +16,7 @@ use crate::core::compiler::CompiledExpr;
 ///
 /// These are calls that cannot be emitted as StableHLO:
 /// - I/O: `print`, `io`
-/// - Randomness: `random-key`, `random-split`, `random-normal`, `random-uniform`
+/// - Randomness: all `random-*` variants
 const EFFECTFUL_BUILTINS: &[&str] = &[
     "print",
     "io",
@@ -24,6 +24,16 @@ const EFFECTFUL_BUILTINS: &[&str] = &[
     "random-split",
     "random-normal",
     "random-uniform",
+    "random-randint",
+    "random-bernoulli",
+    "random-choice",
+];
+
+/// Names of higher-order functions that cannot be compiled to StableHLO.
+/// Detected before codegen so the build output shows a clear reason.
+pub const HOF_BUILTINS: &[&str] = &[
+    "map", "filter", "reduce", "scan", "sort", "tree-map",
+    "value-and-grad", "grad", "jit",
 ];
 
 /// A single side-effect site found in a function body.
@@ -45,6 +55,55 @@ impl EffectSite {
 /// including nested lambdas and sub-expressions.
 pub fn has_side_effects(expr: &CompiledExpr) -> bool {
     !collect_effects(expr).is_empty()
+}
+
+/// Collect the names of any higher-order functions used in the expression.
+/// Returns a deduplicated list (e.g. `["map", "reduce"]`).
+pub fn collect_hof_calls(expr: &CompiledExpr) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    collect_hof_rec(expr, &mut found);
+    found.sort();
+    found.dedup();
+    found
+}
+
+fn collect_hof_rec(expr: &CompiledExpr, out: &mut Vec<String>) {
+    match expr {
+        CompiledExpr::FunctionCall { name, args } => {
+            if HOF_BUILTINS.contains(&name.as_str()) {
+                out.push(name.clone());
+            }
+            for arg in args {
+                collect_hof_rec(arg, out);
+            }
+        }
+        CompiledExpr::Let { bindings, body } => {
+            for (_, v) in bindings { collect_hof_rec(v, out); }
+            collect_hof_rec(body, out);
+        }
+        CompiledExpr::Do(exprs) => { for e in exprs { collect_hof_rec(e, out); } }
+        CompiledExpr::If { condition, then_branch, else_branch } => {
+            collect_hof_rec(condition, out);
+            collect_hof_rec(then_branch, out);
+            if let Some(e) = else_branch { collect_hof_rec(e, out); }
+        }
+        CompiledExpr::Lambda { body, .. } => { collect_hof_rec(body, out); }
+        CompiledExpr::LambdaCall { callee, args } => {
+            collect_hof_rec(callee, out);
+            for arg in args { collect_hof_rec(arg, out); }
+        }
+        CompiledExpr::Vector(exprs) => { for e in exprs { collect_hof_rec(e, out); } }
+        CompiledExpr::Repeat { count, acc_init, body, .. } => {
+            collect_hof_rec(count, out);
+            collect_hof_rec(acc_init, out);
+            collect_hof_rec(body, out);
+        }
+        // value-and-grad and inline forms are always higher-order
+        CompiledExpr::ValueAndGrad { .. } | CompiledExpr::InlineValueAndGrad { .. } => {
+            out.push("value-and-grad".to_string());
+        }
+        _ => {}
+    }
 }
 
 /// Collect all side-effect sites in a `CompiledExpr`.

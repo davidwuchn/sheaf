@@ -560,6 +560,17 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
             continue;
         }
 
+        // Skip functions that use higher-order functions not supported by the compiler.
+        let hof_calls = sheaf_compiler::collect_hof_calls(&body);
+        if !hof_calls.is_empty() {
+            let src_file = file_functions.iter()
+                .find(|(_, names)| names.contains(name))
+                .map(|(p, _)| p.display().to_string())
+                .unwrap_or_else(|| "?".to_string());
+            skipped_fns.push((src_file, name.clone(), format!("higher-order: {}", hof_calls.join(", "))));
+            continue;
+        }
+
         // Apply dict-to-tuple lowering for each configured param that appears
         // in this function's parameter list.
         let mut known_types: Vec<(String, sheaf_compiler::StableHLOType)> = Vec::new();

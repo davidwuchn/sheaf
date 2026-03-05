@@ -16,7 +16,7 @@ pub mod runtime;
 
 // Re-export main types
 pub use ast::SheafValue;
-pub use compiler::{CodeGenerator, StableHLOEmitter, StableHLOType};
+pub use compiler::{collect_hof_calls, CodeGenerator, StableHLOEmitter, StableHLOType};
 pub use core::compiler::{CompiledExpr, CompilerContext};
 pub use core::error::{SheafError, SheafResult, SourceLocation};
 pub use core::parse;
