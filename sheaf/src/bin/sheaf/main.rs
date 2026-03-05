@@ -668,11 +668,27 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
             .collect();
         body = resolve_static_constants(&body, fn_consts, &param_shapes);
 
-        let codegen = CodeGenerator::with_function_params(
+        // Extract nested key layouts from param index maps so the codegen can resolve
+        // (get sym "key") when sym is a Let-bound tuple (e.g. hidden = (get params "hidden")).
+        // For each 2-level path [parent, child] → [_, rel_idx], build parent → {child: rel_idx}.
+        let mut tuple_key_layouts: std::collections::HashMap<String, std::collections::BTreeMap<String, usize>> = std::collections::HashMap::new();
+        for (_, index_map) in &param_index_maps {
+            for (key_path, indices) in index_map {
+                if key_path.len() == 2 && indices.len() == 2 {
+                    tuple_key_layouts
+                        .entry(key_path[0].clone())
+                        .or_default()
+                        .insert(key_path[1].clone(), indices[1]);
+                }
+            }
+        }
+
+        let mut codegen = CodeGenerator::with_function_params(
             compiler.registry.clone(),
             &func_def.params,
             &sig.param_types,
         );
+        codegen.set_tuple_key_layouts(tuple_key_layouts);
         match codegen.emit_func_declaration(name, &body, &sig.param_types, &sig.return_type) {
             Ok((decl, actual_return_ty)) => {
                 // Update the signature with the real codegen return type
@@ -875,6 +891,7 @@ fn trace_with_runner(
     use sheaf_compiler::core::trace::{value_to_param_layout, value_to_stablehlo_type};
     use sheaf_compiler::interpreter::builtins::register_builtins;
     use sheaf_compiler::interpreter::env::Env;
+    use sheaf_compiler::interpreter::value::Value;
     use sheaf_compiler::StableHLOType;
 
     let runner_abs = runner_path
@@ -963,7 +980,7 @@ fn trace_with_runner(
             let ty = value_to_stablehlo_type(arg_val).unwrap_or(StableHLOType::scalar_f32());
 
             // If the arg is a Dict, generate a ParamLayout + index_map for lowering
-            let index_map = if let Some(layout) = value_to_param_layout(param_name, arg_val) {
+            if let Some(layout) = value_to_param_layout(param_name, arg_val) {
                 let tuple_ty = sheaf_compiler::forms::ml::param_layout_to_stablehlo_type(&layout);
                 if verbose {
                     println!("  trace: '{}' param '{}' → {} (dict with {} fields)",
@@ -974,6 +991,46 @@ fn trace_with_runner(
                 extract_scalar_constants(arg_val, param_name, &imap, &mut fn_constants);
                 fn_configs.push((param_name.clone(), tuple_ty, imap));
                 continue;
+            }
+
+            // Fallback for dicts containing lists (e.g. {"head": {...}, "layers": [...]}).
+            // value_to_param_layout fails on lists, but we can still build a top-level
+            // index map from the sorted dict keys so lower_get_calls can work.
+            let index_map = if let Value::Dict(map) = arg_val {
+                let mut imap: std::collections::BTreeMap<Vec<String>, Vec<usize>> = std::collections::BTreeMap::new();
+                let keys: Vec<&String> = map.keys().collect(); // BTreeMap: already sorted
+                for (idx, key) in keys.iter().enumerate() {
+                    imap.insert(vec![key.to_string()], vec![idx]);
+                    // Nested dict: add second-level entries for field access
+                    if let Value::Dict(sub) = &map[*key] {
+                        let sub_keys: Vec<&String> = sub.keys().collect();
+                        for (sub_idx, sub_key) in sub_keys.iter().enumerate() {
+                            imap.insert(
+                                vec![key.to_string(), sub_key.to_string()],
+                                vec![idx, sub_idx],
+                            );
+                        }
+                    }
+                    // List of dicts: add element-level key entries so tuple_key_layouts
+                    // can propagate the layout into reduce/scan lambda bodies.
+                    if let Value::List(items) = &map[*key] {
+                        if let Some(Value::Dict(elem_dict)) = items.first() {
+                            let elem_keys: Vec<&String> = elem_dict.keys().collect();
+                            for (elem_idx, elem_key) in elem_keys.iter().enumerate() {
+                                imap.insert(
+                                    vec![key.to_string(), elem_key.to_string()],
+                                    vec![idx, elem_idx],
+                                );
+                            }
+                        }
+                    }
+                }
+                if verbose {
+                    println!("  trace: '{}' param '{}' → {} (dict with lists, {} keys)",
+                        fn_name, param_name, ty.to_mlir(), imap.len());
+                }
+                extract_scalar_constants(arg_val, param_name, &imap, &mut fn_constants);
+                imap
             } else {
                 std::collections::BTreeMap::new()
             };

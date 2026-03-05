@@ -19,6 +19,10 @@ pub struct CodeGenerator {
     lambda_bindings: HashMap<String, CompiledExpr>,
     /// Function registry for user-defined functions
     function_registry: HashMap<String, crate::core::compiler::FunctionDef>,
+    /// Key-to-index layout for tuple-typed variables.
+    /// Allows `(get sym "key")` to resolve when `sym` is bound to a tuple.
+    /// Populated from param configs and propagated into reduce/scan lambdas.
+    tuple_key_layouts: HashMap<String, std::collections::BTreeMap<String, usize>>,
 }
 
 impl CodeGenerator {
@@ -28,6 +32,7 @@ impl CodeGenerator {
             bindings: HashMap::new(),
             lambda_bindings: HashMap::new(),
             function_registry: HashMap::new(),
+            tuple_key_layouts: HashMap::new(),
         }
     }
 
@@ -37,6 +42,7 @@ impl CodeGenerator {
             bindings: HashMap::new(),
             lambda_bindings: HashMap::new(),
             function_registry: registry,
+            tuple_key_layouts: HashMap::new(),
         }
     }
 
@@ -56,7 +62,17 @@ impl CodeGenerator {
             bindings,
             lambda_bindings: HashMap::new(),
             function_registry: registry,
+            tuple_key_layouts: HashMap::new(),
         }
+    }
+
+    /// Set key-to-index layouts for tuple-typed symbols (e.g. `hidden → {"W":0, "b":1}`).
+    /// Called before codegen when dict param configs are available.
+    pub fn set_tuple_key_layouts(
+        &mut self,
+        layouts: HashMap<String, std::collections::BTreeMap<String, usize>>,
+    ) {
+        self.tuple_key_layouts = layouts;
     }
 
     /// Generate StableHLO for a compiled expression
@@ -639,8 +655,13 @@ impl CodeGenerator {
                 Ok((reg, ty))
             }
         }
-        // first: (first x)
+        // first: (first x) — special case: (first (scan fn init coll)) = final carry
         else if name == "first" && args.len() == 1 {
+            if let CompiledExpr::FunctionCall { name: inner, args: inner_args } = &args[0] {
+                if inner == "scan" && inner_args.len() == 3 {
+                    return self.generate_reduce_scan(&inner_args[0], &inner_args[1], &inner_args[2]);
+                }
+            }
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             match &operand_ty {
                 StableHLOType::Tuple(elems) => {
@@ -1129,6 +1150,15 @@ impl CodeGenerator {
             };
             Ok((reg, ty))
         }
+        // reduce: (reduce fn init coll) — static unrolling when coll type is known
+        else if name == "reduce" && args.len() == 3 {
+            self.generate_reduce_scan(&args[0], &args[1], &args[2])
+        }
+        // scan: (scan fn init coll) — same as reduce for the final carry
+        // Note: (first (scan ...)) is intercepted above in the "first" handler.
+        else if name == "scan" && args.len() == 3 {
+            self.generate_reduce_scan(&args[0], &args[1], &args[2])
+        }
         // tree-map: (tree-map f tree1 tree2 ...)
         // Static unrolling when tree args have known tuple types.
         else if name == "tree-map" && args.len() >= 2 {
@@ -1157,10 +1187,29 @@ impl CodeGenerator {
         }
         // get: (get tensor idx) or (get tuple :key)
         else if name == "get" && args.len() >= 2 {
+            // Peek at the symbol name before generating to look up key layout
+            let sym_name = if let CompiledExpr::Symbol(s) = &args[0] { Some(s.clone()) } else { None };
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             match &operand_ty {
-                // Tuple + keyword → get_tuple_element (needs known key ordering)
-                StableHLOType::Tuple(_) => {
+                // Tuple + keyword/string — try to resolve via tuple_key_layouts
+                StableHLOType::Tuple(elem_types) => {
+                    if let Some(ref sym) = sym_name {
+                        let key_str = match &args[1] {
+                            CompiledExpr::Keyword(k) | CompiledExpr::String(k) => Some(k.clone()),
+                            _ => None,
+                        };
+                        if let Some(key) = key_str {
+                            if let Some(layout) = self.tuple_key_layouts.get(sym.as_str()).cloned() {
+                                if let Some(&idx) = layout.get(&key) {
+                                    let elem_ty = elem_types[idx].clone();
+                                    let reg = self.emitter.emit_get_tuple_element(
+                                        &operand_reg, &operand_ty, idx, &elem_ty,
+                                    );
+                                    return Ok((reg, elem_ty));
+                                }
+                            }
+                        }
+                    }
                     Err(SheafError::Compile {
                         message: "get on dict/tuple requires type info (use defparams or --trace-with)".to_string(),
                         location: crate::core::error::SourceLocation::unknown(),
@@ -1851,6 +1900,142 @@ impl CodeGenerator {
         let body = self.emitter.body.clone();
         self.emitter
             .emit_func_declaration_multi(name, param_types, result_types, &body)
+    }
+
+    /// Static unrolling of `reduce` / `scan` over a collection with known type.
+    ///
+    /// Supports three collection shapes:
+    /// - `Tuple([Tuple(...), ...])` — VecTuple (list of structs): each elem = get_tuple_element(i)
+    /// - `Tuple([tensor[N,...], ...])` — stacked dict (scan): each elem = tuple of slices at i
+    /// - `tensor[N, ...]` — plain tensor: each elem = index_axis0(i)
+    ///
+    /// Key layout (`tuple_key_layouts`) is inherited by the lambda's elem parameter so that
+    /// `(get elem "field")` resolves correctly inside the body.
+    fn generate_reduce_scan(
+        &mut self,
+        lambda: &CompiledExpr,
+        init: &CompiledExpr,
+        coll: &CompiledExpr,
+    ) -> SheafResult<(Register, StableHLOType)> {
+        // Capture collection symbol before generating (for key layout lookup)
+        let coll_sym = if let CompiledExpr::Symbol(s) = coll { Some(s.clone()) } else { None };
+        let (coll_reg, coll_ty) = self.generate(coll)?;
+        let (mut carry_reg, mut carry_ty) = self.generate(init)?;
+
+        // Resolve the lambda (may be inline Lambda or a symbol in lambda_bindings)
+        let lambda_resolved = match lambda {
+            CompiledExpr::Lambda { .. } => lambda.clone(),
+            CompiledExpr::Symbol(sym_name) => {
+                self.lambda_bindings.get(sym_name).cloned().ok_or_else(|| SheafError::Compile {
+                    message: format!("reduce/scan: lambda '{}' not found", sym_name),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })?
+            }
+            _ => return Err(SheafError::Compile {
+                message: "reduce/scan: first argument must be a lambda".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            }),
+        };
+        let (carry_param, elem_param, body) = match lambda_resolved {
+            CompiledExpr::Lambda { params, body } if params.len() == 2 => {
+                (params[0].clone(), params[1].clone(), *body)
+            }
+            _ => return Err(SheafError::Compile {
+                message: "reduce/scan: lambda must have exactly 2 parameters (carry, elem)".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            }),
+        };
+
+        // Determine N and extraction strategy from collection type
+        enum ElemKind {
+            VecTuple(Vec<StableHLOType>),   // Tuple of sub-tuples
+            StackedDict(Vec<StableHLOType>), // Tuple of stacked tensors
+            PlainTensor,                     // Single tensor
+        }
+        let (n, kind) = match &coll_ty {
+            StableHLOType::Tuple(types) if !types.is_empty() => {
+                if types.iter().all(|t| matches!(t, StableHLOType::Tuple(_))) {
+                    (types.len(), ElemKind::VecTuple(types.clone()))
+                } else if types.iter().all(|t| !t.shape().is_empty()) {
+                    let n = types[0].shape()[0] as usize;
+                    if n == 0 {
+                        return Err(SheafError::Compile {
+                            message: "reduce/scan: stacked dict has zero elements".to_string(),
+                            location: crate::core::error::SourceLocation::unknown(),
+                        });
+                    }
+                    (n, ElemKind::StackedDict(types.clone()))
+                } else {
+                    return Err(SheafError::Compile {
+                        message: "reduce/scan: mixed Tuple element types not supported".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    });
+                }
+            }
+            t if !t.shape().is_empty() => (t.shape()[0] as usize, ElemKind::PlainTensor),
+            _ => return Err(SheafError::Compile {
+                message: "reduce/scan: cannot determine iteration count from collection type".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            }),
+        };
+
+        // Key layout for the elem parameter inherited from collection's layout
+        let elem_layout = coll_sym
+            .as_deref()
+            .and_then(|s| self.tuple_key_layouts.get(s))
+            .cloned();
+
+        for i in 0..n {
+            // Extract element i from the collection
+            let (elem_reg, elem_ty) = match &kind {
+                ElemKind::VecTuple(types) => {
+                    let elem_ty = types[i].clone();
+                    let reg = self.emitter.emit_get_tuple_element(&coll_reg, &coll_ty, i, &elem_ty);
+                    (reg, elem_ty)
+                }
+                ElemKind::StackedDict(comp_types) => {
+                    // Each component tensor: get + slice → then pack into a tuple
+                    let mut parts = Vec::new();
+                    let mut part_types = Vec::new();
+                    for (k, comp_ty) in comp_types.iter().enumerate() {
+                        let comp_reg = self.emitter.emit_get_tuple_element(
+                            &coll_reg, &coll_ty, k, comp_ty,
+                        );
+                        let (slice_reg, slice_ty) =
+                            self.emitter.emit_index_axis0(&comp_reg, comp_ty, i as i64);
+                        parts.push(slice_reg);
+                        part_types.push(slice_ty);
+                    }
+                    self.emitter.emit_tuple(&parts, &part_types)
+                }
+                ElemKind::PlainTensor => {
+                    self.emitter.emit_index_axis0(&coll_reg, &coll_ty, i as i64)
+                }
+            };
+
+            // Propagate key layout into elem parameter
+            if let Some(ref layout) = elem_layout {
+                self.tuple_key_layouts.insert(elem_param.clone(), layout.clone());
+            }
+
+            // Inline lambda body with carry and elem bound
+            let saved_bindings = self.bindings.clone();
+            self.bindings.insert(carry_param.clone(), (carry_reg, carry_ty.clone()));
+            self.bindings.insert(elem_param.clone(), (elem_reg, elem_ty));
+            let result = self.generate(&body);
+            self.bindings = saved_bindings;
+
+            // Clean up elem layout
+            if elem_layout.is_some() {
+                self.tuple_key_layouts.remove(&elem_param);
+            }
+
+            let (new_carry, new_ty) = result?;
+            carry_reg = new_carry;
+            carry_ty = new_ty;
+        }
+
+        Ok((carry_reg, carry_ty))
     }
 }
 
