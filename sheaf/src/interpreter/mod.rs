@@ -423,31 +423,8 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
 
         // VMFB dispatch: pure compiled functions run via IREE
         #[cfg(iree_runtime)]
-        if let Some(session_idx) = func_def.vmfb_session_idx {
-            if let Some(session) = env.vmfb_sessions.get(session_idx) {
-                if let Some(iree_session) = session.downcast_ref::<crate::runtime::iree_session::IreeSession>() {
-                    let full_name = format!("module.{}", name.replace('-', "_"));
-                    // Use typed call to reconstruct tuple/dict structure from flat outputs
-                    if let Some(ref sig) = func_def.signature {
-                        let mut result = iree_session.call_typed(&full_name, &pos_args, &sig.return_type)?;
-                        // Reconstruct Dict if the function originally returned one
-                        if let Some(ref keys) = sig.return_dict_keys {
-                            result = match result {
-                                Value::Tuple(elems) if elems.len() == keys.len() => {
-                                    let mut map = std::collections::BTreeMap::new();
-                                    for (k, v) in keys.iter().zip(elems) {
-                                        map.insert(k.clone(), v);
-                                    }
-                                    Value::Dict(map)
-                                }
-                                other => other,
-                            };
-                        }
-                        return Ok(result);
-                    }
-                    return iree_session.call(&full_name, &pos_args);
-                }
-            }
+        if let Some(result) = try_iree_dispatch(&func_def, &pos_args, env) {
+            return result;
         }
 
         // Fallback: interpret
@@ -1365,4 +1342,51 @@ pub fn eval_exprs(source: &str) -> Result<Value, SheafError> {
     }
 
     Ok(last)
+}
+
+/// Try to dispatch a function call to IREE.
+/// Returns `Some(result)` if IREE handled it, `None` to fall through to the interpreter.
+/// Skips IREE when the argument structure doesn't match the compiled signature
+/// (e.g. the model was compiled for 2 layers but called with 0).
+#[cfg(iree_runtime)]
+fn try_iree_dispatch(
+    func_def: &crate::core::compiler::FunctionDef,
+    args: &[Value],
+    env: &mut Env,
+) -> Option<Result<Value, SheafError>> {
+    let session_idx = func_def.vmfb_session_idx?;
+    let session = env.vmfb_sessions.get(session_idx)?;
+    let iree_session = session.downcast_ref::<crate::runtime::iree_session::IreeSession>()?;
+
+    let sig = func_def.signature.as_ref()?;
+    if !crate::runtime::iree_session::args_match_signature(args, &sig.param_types) {
+        if env.iree_mismatch_warned.insert(func_def.name.clone()) {
+            let expected = crate::runtime::iree_session::count_signature_tensors(&sig.param_types);
+            let actual = crate::runtime::iree_session::count_arg_tensors(args);
+            eprintln!(
+                "warning: '{}' compiled for {} tensors but called with {} — running interpreted",
+                func_def.name, expected, actual,
+            );
+            eprintln!(
+                "hint: rerun `sheaf build --trace-with <runner>` with the current model structure",
+            );
+        }
+        return None;
+    }
+
+    let full_name = format!("module.{}", func_def.name.replace('-', "_"));
+    let mut result = match iree_session.call_typed(&full_name, args, &sig.return_type) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+
+    let result = match (&sig.return_dict_keys, result) {
+        (Some(keys), Value::Tuple(elems)) if elems.len() == keys.len() => {
+            let map = keys.iter().cloned().zip(elems).collect();
+            Value::Dict(map)
+        }
+        (_, other) => other,
+    };
+
+    Some(Ok(result))
 }

@@ -30,6 +30,8 @@ pub struct Env {
     pub call_records: Option<HashMap<String, CallRecord>>,
     /// Runtime tracer for function call logging and CLI guards.
     pub tracer: Option<crate::interpreter::tracer::Tracer>,
+    /// Functions for which an IREE structure mismatch warning was already emitted.
+    pub iree_mismatch_warned: std::collections::HashSet<String>,
 }
 
 impl Env {
@@ -40,6 +42,7 @@ impl Env {
             vmfb_sessions: Vec::new(),
             call_records: None,
             tracer: None,
+            iree_mismatch_warned: std::collections::HashSet::new(),
         }
     }
 
@@ -50,6 +53,7 @@ impl Env {
             vmfb_sessions: Vec::new(),
             call_records: None,
             tracer: None,
+            iree_mismatch_warned: std::collections::HashSet::new(),
         }
     }
 

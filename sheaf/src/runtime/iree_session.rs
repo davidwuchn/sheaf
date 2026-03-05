@@ -340,6 +340,42 @@ unsafe fn buffer_view_to_value(
     }
 }
 
+/// Count the flat tensor leaves expected by a compiled signature.
+pub fn count_signature_tensors(types: &[crate::compiler::stablehlo::StableHLOType]) -> usize {
+    types.iter().map(count_type_leaves).sum()
+}
+
+fn count_type_leaves(ty: &crate::compiler::stablehlo::StableHLOType) -> usize {
+    match ty {
+        crate::compiler::stablehlo::StableHLOType::Tuple(elems) => {
+            elems.iter().map(count_type_leaves).sum()
+        }
+        _ => 1,
+    }
+}
+
+/// Count the flat tensor leaves in runtime values.
+pub fn count_arg_tensors(values: &[Value]) -> usize {
+    values.iter().map(count_one_value).sum()
+}
+
+fn count_one_value(val: &Value) -> usize {
+    match val {
+        Value::Dict(map) => map.values().map(count_one_value).sum(),
+        Value::Tuple(elems) | Value::List(elems) => elems.iter().map(count_one_value).sum(),
+        Value::Tensor { .. } | Value::Float(_) | Value::Int(_) => 1,
+        _ => 0,
+    }
+}
+
+/// Check if runtime args are structurally compatible with a compiled signature.
+pub fn args_match_signature(
+    args: &[Value],
+    param_types: &[crate::compiler::stablehlo::StableHLOType],
+) -> bool {
+    count_arg_tensors(args) == count_signature_tensors(param_types)
+}
+
 /// Flatten a list of values into individual tensor leaves.
 /// Dicts are sorted by key (matching codegen convention), then recursed.
 /// Tuples are recursed. Scalars/tensors pass through.
@@ -360,7 +396,7 @@ fn flatten_value(val: &Value, out: &mut Vec<Value>) -> Result<(), SheafError> {
             }
             Ok(())
         }
-        Value::Tuple(elems) => {
+        Value::Tuple(elems) | Value::List(elems) => {
             for v in elems {
                 flatten_value(v, out)?;
             }
