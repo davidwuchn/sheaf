@@ -376,6 +376,77 @@ pub fn args_match_signature(
     count_arg_tensors(args) == count_signature_tensors(param_types)
 }
 
+/// Validate that runtime arg shapes match the compiled signature shapes.
+/// Returns `Ok(())` on match, or `Err(description)` with a human-readable
+/// mismatch message suitable for display.
+pub fn check_shapes_match(
+    args: &[Value],
+    param_types: &[crate::compiler::stablehlo::StableHLOType],
+) -> Result<(), String> {
+    let mut expected_shapes: Vec<Vec<i64>> = Vec::new();
+    collect_leaf_shapes(param_types, &mut expected_shapes);
+
+    let mut actual_shapes: Vec<Vec<i64>> = Vec::new();
+    for val in args {
+        collect_value_shapes(val, &mut actual_shapes);
+    }
+
+    if expected_shapes.len() != actual_shapes.len() {
+        return Err(format!(
+            "tensor count mismatch: expected {} but have {}",
+            expected_shapes.len(),
+            actual_shapes.len(),
+        ));
+    }
+
+    for (i, (exp, act)) in expected_shapes.iter().zip(actual_shapes.iter()).enumerate() {
+        if exp != act {
+            let fmt = |s: &[i64]| -> String {
+                if s.is_empty() { "scalar".to_string() }
+                else { s.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("x") }
+            };
+            return Err(format!(
+                "input{} shape mismatch: expected {} but have {}",
+                i, fmt(exp), fmt(act),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_leaf_shapes(types: &[crate::compiler::stablehlo::StableHLOType], out: &mut Vec<Vec<i64>>) {
+    use crate::compiler::stablehlo::StableHLOType;
+    for ty in types {
+        match ty {
+            StableHLOType::Tuple(elems) => collect_leaf_shapes(elems, out),
+            _ => out.push(ty.shape().to_vec()),
+        }
+    }
+}
+
+fn collect_value_shapes(val: &Value, out: &mut Vec<Vec<i64>>) {
+    match val {
+        Value::Dict(map) => {
+            for v in map.values() {
+                collect_value_shapes(v, out);
+            }
+        }
+        Value::Tuple(elems) | Value::List(elems) => {
+            for v in elems {
+                collect_value_shapes(v, out);
+            }
+        }
+        Value::Tensor { data, .. } => {
+            out.push(data.shape().iter().map(|&d| d as i64).collect());
+        }
+        Value::Float(_) | Value::Int(_) => {
+            out.push(vec![]);
+        }
+        _ => {}
+    }
+}
+
 /// Flatten a list of values into individual tensor leaves.
 /// Dicts are sorted by key (matching codegen convention), then recursed.
 /// Tuples are recursed. Scalars/tensors pass through.
