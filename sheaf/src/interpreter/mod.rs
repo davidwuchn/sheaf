@@ -657,7 +657,15 @@ fn eval_reduce(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
             }
             Ok(acc)
         }
-        _ => Err(runtime_error("reduce: expected list or tensor")),
+        Value::Dict(map) => {
+            let n = dict_scan_length(map)?;
+            for i in 0..n {
+                let slice = slice_dict(map, i)?;
+                acc = call_function(func, &[acc, slice], env)?;
+            }
+            Ok(acc)
+        }
+        _ => Err(runtime_error("reduce: expected list, tensor, or dict of tensors")),
     }
 }
 
@@ -691,8 +699,51 @@ fn eval_scan(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
             }
             Ok(Value::Tuple(vec![carry, Value::List(outputs)]))
         }
-        _ => Err(runtime_error("scan: expected list or tensor")),
+        Value::Dict(map) => {
+            // Scan over a dict of stacked tensors (pytree-style).
+            // Each value is sliced along dim-0; the lambda receives a dict of slices.
+            let n = dict_scan_length(map)?;
+            for i in 0..n {
+                let slice = slice_dict(map, i)?;
+                carry = call_function(func, &[carry, slice], env)?;
+                outputs.push(carry.clone());
+            }
+            Ok(Value::Tuple(vec![carry, Value::List(outputs)]))
+        }
+        _ => Err(runtime_error("scan: expected list, tensor, or dict of tensors")),
     }
+}
+
+/// Get the scan length from a dict of tensors (dim-0 of first tensor found).
+fn dict_scan_length(map: &std::collections::BTreeMap<String, Value>) -> Result<usize, SheafError> {
+    for val in map.values() {
+        if let Value::Tensor { data, .. } = val {
+            return Ok(data.shape()[0]);
+        }
+    }
+    Err(runtime_error("scan: dict contains no tensors to iterate over"))
+}
+
+/// Slice each tensor in a dict along dim-0 at index i.
+fn slice_dict(
+    map: &std::collections::BTreeMap<String, Value>,
+    i: usize,
+) -> Result<Value, SheafError> {
+    let mut result = std::collections::BTreeMap::new();
+    for (key, val) in map {
+        let sliced = match val {
+            Value::Tensor { data, .. } => {
+                if data.ndim() == 1 {
+                    Value::Float(data[[i]])
+                } else {
+                    Value::tensor_f32(data.index_axis(ndarray::Axis(0), i).to_owned())
+                }
+            }
+            other => other.clone(),
+        };
+        result.insert(key.clone(), sliced);
+    }
+    Ok(Value::Dict(result))
 }
 
 fn eval_apply(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
