@@ -338,9 +338,7 @@ impl StableHLOEmitter {
         start[0] = index;
         limit[0] = index + 1;
 
-        let start_str = start.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
-        let limit_str = limit.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
-        let strides_str = strides.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+        let dims_str = format_slice_dims(&start, &limit, &strides);
 
         // Slice to [1, d1, d2, ...]
         let slice_reg = self.fresh_register();
@@ -348,12 +346,10 @@ impl StableHLOEmitter {
         slice_shape[0] = 1;
         let slice_ty = StableHLOType::f32_tensor(slice_shape.clone());
         self.body.push(format!(
-            "    {} = stablehlo.slice {} [{}] to [{}] step [{}] : ({}) -> {}",
+            "    {} = stablehlo.slice {} [{}] : ({}) -> {}",
             slice_reg.to_mlir(),
             input.to_mlir(),
-            start_str,
-            limit_str,
-            strides_str,
+            dims_str,
             input_ty.to_mlir(),
             slice_ty.to_mlir(),
         ));
@@ -404,9 +400,7 @@ impl StableHLOEmitter {
         start_indices[ndim - 1] = start;
         limit_indices[ndim - 1] = end;
 
-        let start_str = start_indices.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
-        let limit_str = limit_indices.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
-        let strides_str = strides.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+        let dims_str = format_slice_dims(&start_indices, &limit_indices, &strides);
 
         let mut slice_shape = shape.to_vec();
         slice_shape[ndim - 1] = end - start;
@@ -414,12 +408,10 @@ impl StableHLOEmitter {
 
         let slice_reg = self.fresh_register();
         self.body.push(format!(
-            "    {} = stablehlo.slice {} [{}] to [{}] step [{}] : ({}) -> {}",
+            "    {} = stablehlo.slice {} [{}] : ({}) -> {}",
             slice_reg.to_mlir(),
             input.to_mlir(),
-            start_str,
-            limit_str,
-            strides_str,
+            dims_str,
             input_ty.to_mlir(),
             slice_ty.to_mlir(),
         ));
@@ -562,9 +554,7 @@ impl StableHLOEmitter {
         start_indices[0] = start;
         limit_indices[0] = end + 1; // inclusive end
 
-        let start_str = start_indices.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
-        let limit_str = limit_indices.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
-        let strides_str = strides.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+        let dims_str = format_slice_dims(&start_indices, &limit_indices, &strides);
 
         let mut result_shape = shape.to_vec();
         result_shape[0] = end + 1 - start;
@@ -572,12 +562,10 @@ impl StableHLOEmitter {
 
         let result_reg = self.fresh_register();
         self.body.push(format!(
-            "    {} = stablehlo.slice {} [{}] to [{}] step [{}] : ({}) -> {}",
+            "    {} = stablehlo.slice {} [{}] : ({}) -> {}",
             result_reg.to_mlir(),
             input.to_mlir(),
-            start_str,
-            limit_str,
-            strides_str,
+            dims_str,
             input_ty.to_mlir(),
             result_ty.to_mlir(),
         ));
@@ -718,9 +706,7 @@ impl StableHLOEmitter {
         start_indices[0] = start;
         limit_indices[0] = end;
 
-        let start_str = start_indices.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
-        let limit_str = limit_indices.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
-        let strides_str = strides.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+        let dims_str = format_slice_dims(&start_indices, &limit_indices, &strides);
 
         let mut result_shape = shape.to_vec();
         result_shape[0] = end - start;
@@ -728,12 +714,10 @@ impl StableHLOEmitter {
 
         let result_reg = self.fresh_register();
         self.body.push(format!(
-            "    {} = stablehlo.slice {} [{}] to [{}] step [{}] : ({}) -> {}",
+            "    {} = stablehlo.slice {} [{}] : ({}) -> {}",
             result_reg.to_mlir(),
             input.to_mlir(),
-            start_str,
-            limit_str,
-            strides_str,
+            dims_str,
             input_ty.to_mlir(),
             result_ty.to_mlir(),
         ));
@@ -766,4 +750,15 @@ impl StableHLOEmitter {
         // Pack into a tuple
         self.emit_tuple(&section_regs, &section_types)
     }
+}
+
+/// Format slice dimensions as `start:limit:stride, ...` for StableHLO assembly.
+fn format_slice_dims(starts: &[i64], limits: &[i64], strides: &[i64]) -> String {
+    starts
+        .iter()
+        .zip(limits.iter())
+        .zip(strides.iter())
+        .map(|((s, l), st)| format!("{}:{}:{}", s, l, st))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

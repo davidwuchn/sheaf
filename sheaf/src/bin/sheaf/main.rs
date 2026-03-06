@@ -680,7 +680,9 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         // (get sym "key") when sym is a Let-bound tuple (e.g. hidden = (get params "hidden")).
         // For each 2-level path [parent, child] → [_, rel_idx], build parent → {child: rel_idx}.
         let mut tuple_key_layouts: std::collections::HashMap<String, std::collections::BTreeMap<String, usize>> = std::collections::HashMap::new();
-        for (_, index_map) in &param_index_maps {
+        // Build index→key reverse map for first-level entries
+        let mut idx_to_key: std::collections::HashMap<(String, usize), String> = std::collections::HashMap::new();
+        for (param_name, index_map) in &param_index_maps {
             for (key_path, indices) in index_map {
                 if key_path.len() == 2 && indices.len() == 2 {
                     tuple_key_layouts
@@ -688,8 +690,15 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
                         .or_default()
                         .insert(key_path[1].clone(), indices[1]);
                 }
+                if key_path.len() == 1 && indices.len() == 1 {
+                    idx_to_key.insert((param_name.clone(), indices[0]), key_path[0].clone());
+                }
             }
         }
+        // Propagate layouts to Let-bound variable names.
+        // e.g. `input-layer = GetTupleElement("params", [2])` where index 2 = key "input"
+        // → copy tuple_key_layouts["input"] to tuple_key_layouts["input-layer"]
+        propagate_let_layouts(&body, &idx_to_key, &mut tuple_key_layouts);
 
         let mut codegen = CodeGenerator::with_function_params(
             compiler.registry.clone(),
@@ -1649,6 +1658,57 @@ fn collect_vag_nodes<'a>(
                 collect_vag_nodes(v, out);
             }
             collect_vag_nodes(body, out);
+        }
+        _ => {}
+    }
+}
+
+/// Scan a lowered body for Let bindings of the form `var = GetTupleElement(param, [i])`.
+/// For each such binding, propagate the tuple_key_layout from the dict key name to the
+/// variable name. This allows `(get input-layer "W")` to resolve when `input-layer` is
+/// a let binding for `(get params "input")`.
+fn propagate_let_layouts(
+    expr: &sheaf_compiler::core::compiler::CompiledExpr,
+    idx_to_key: &std::collections::HashMap<(String, usize), String>,
+    layouts: &mut std::collections::HashMap<String, std::collections::BTreeMap<String, usize>>,
+) {
+    use sheaf_compiler::core::compiler::CompiledExpr;
+    match expr {
+        CompiledExpr::Let { bindings, body } => {
+            for (var_name, value_expr) in bindings {
+                if let CompiledExpr::GetTupleElement { param, indices } = value_expr {
+                    if indices.len() == 1 {
+                        let lookup = (param.clone(), indices[0]);
+                        if let Some(key_name) = idx_to_key.get(&lookup) {
+                            if let Some(sub_layout) = layouts.get(key_name).cloned() {
+                                layouts.insert(var_name.clone(), sub_layout);
+                            }
+                        }
+                    }
+                }
+                propagate_let_layouts(value_expr, idx_to_key, layouts);
+            }
+            propagate_let_layouts(body, idx_to_key, layouts);
+        }
+        CompiledExpr::FunctionCall { args, .. } => {
+            for a in args {
+                propagate_let_layouts(a, idx_to_key, layouts);
+            }
+        }
+        CompiledExpr::Do(exprs) => {
+            for e in exprs {
+                propagate_let_layouts(e, idx_to_key, layouts);
+            }
+        }
+        CompiledExpr::If { condition, then_branch, else_branch } => {
+            propagate_let_layouts(condition, idx_to_key, layouts);
+            propagate_let_layouts(then_branch, idx_to_key, layouts);
+            if let Some(e) = else_branch {
+                propagate_let_layouts(e, idx_to_key, layouts);
+            }
+        }
+        CompiledExpr::Lambda { body, .. } => {
+            propagate_let_layouts(body, idx_to_key, layouts);
         }
         _ => {}
     }

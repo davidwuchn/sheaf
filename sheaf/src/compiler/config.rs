@@ -234,7 +234,7 @@ fn extract_key_path(expr: &CompiledExpr, param_name: &str) -> Option<Vec<String>
             // args[1..] are keyword keys: (get x :k1 :k2) → path ["k1", "k2"]
             for arg in &args[1..] {
                 match arg {
-                    CompiledExpr::Keyword(k) => path.push(k.clone()),
+                    CompiledExpr::Keyword(k) | CompiledExpr::String(k) => path.push(k.clone()),
                     _ => return None,
                 }
             }
