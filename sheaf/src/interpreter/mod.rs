@@ -715,7 +715,7 @@ fn eval_scan(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
 }
 
 /// Get the scan length from a dict of tensors (dim-0 of first tensor found).
-fn dict_scan_length(map: &std::collections::BTreeMap<String, Value>) -> Result<usize, SheafError> {
+pub(crate) fn dict_scan_length(map: &std::collections::BTreeMap<String, Value>) -> Result<usize, SheafError> {
     for val in map.values() {
         if let Value::Tensor { data, .. } = val {
             return Ok(data.shape()[0]);
@@ -725,7 +725,7 @@ fn dict_scan_length(map: &std::collections::BTreeMap<String, Value>) -> Result<u
 }
 
 /// Slice each tensor in a dict along dim-0 at index i.
-fn slice_dict(
+pub(crate) fn slice_dict(
     map: &std::collections::BTreeMap<String, Value>,
     i: usize,
 ) -> Result<Value, SheafError> {

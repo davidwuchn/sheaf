@@ -12,7 +12,7 @@ use crate::core::compiler::CompiledExpr;
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::Value;
-use crate::interpreter::eval;
+use crate::interpreter::{eval, dict_scan_length, slice_dict};
 use std::collections::HashMap;
 
 /// Map from synthetic leaf symbol names to their concrete tensor Values.
@@ -275,9 +275,13 @@ fn trace_reduce(
 
     // Evaluate collection concretely
     let coll_val = eval(coll, env)?;
-    let items = match coll_val {
-        Value::List(items) => items,
-        _ => return Err(runtime_error("trace: reduce collection must be a list")),
+    let items = match &coll_val {
+        Value::List(items) => items.clone(),
+        Value::Dict(map) => {
+            let n = dict_scan_length(map)?;
+            (0..n).map(|i| slice_dict(map, i).unwrap()).collect()
+        }
+        _ => return Err(runtime_error("trace: reduce collection must be a list or dict of tensors")),
     };
 
     // Trace init
