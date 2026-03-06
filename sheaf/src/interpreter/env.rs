@@ -34,6 +34,14 @@ pub struct Env {
     pub profiler: Option<crate::interpreter::profiler::Profiler>,
     /// Functions for which an IREE structure mismatch warning was already emitted.
     pub iree_mismatch_warned: std::collections::HashSet<String>,
+    /// Optional wall-clock deadline for evaluation (safety net).
+    pub eval_deadline: Option<std::time::Instant>,
+    /// Target functions for tracing. When all have been observed in
+    /// call_records, the interpreter aborts early with "trace complete".
+    pub trace_targets: Option<std::collections::HashSet<String>>,
+    /// Counts consecutive registry function calls without a new recording.
+    /// When this exceeds a threshold, auto-trace stops (no new shapes to learn).
+    pub trace_stale_calls: usize,
 }
 
 impl Env {
@@ -46,6 +54,9 @@ impl Env {
             tracer: None,
             profiler: None,
             iree_mismatch_warned: std::collections::HashSet::new(),
+            eval_deadline: None,
+            trace_targets: None,
+            trace_stale_calls: 0,
         }
     }
 
@@ -58,6 +69,9 @@ impl Env {
             tracer: None,
             profiler: None,
             iree_mismatch_warned: std::collections::HashSet::new(),
+            eval_deadline: None,
+            trace_targets: None,
+            trace_stale_calls: 0,
         }
     }
 

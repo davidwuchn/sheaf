@@ -426,13 +426,45 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
 
     // Try user-defined function from registry
     if let Some(func_def) = env.registry.get(name).cloned() {
+        // Check evaluation deadline (used by auto-trace to avoid running forever)
+        if let Some(deadline) = env.eval_deadline {
+            if std::time::Instant::now() > deadline {
+                return Err(SheafError::Runtime {
+                    message: "auto-trace timeout".to_string(),
+                    location: None,
+                });
+            }
+        }
+
         // Record the first call for tracing (sheaf build --trace-with)
         if let Some(ref mut records) = env.call_records {
+            let is_new = !records.contains_key(name);
             records.entry(name.to_string()).or_insert_with(|| {
                 crate::interpreter::env::CallRecord {
                     arg_values: pos_args.clone(),
                 }
             });
+            if is_new {
+                env.trace_stale_calls = 0;
+                // Check if all target functions have been observed
+                if let Some(ref targets) = env.trace_targets {
+                    if targets.iter().all(|t| records.contains_key(t.as_str())) {
+                        return Err(SheafError::Runtime {
+                            message: "trace complete".to_string(),
+                            location: None,
+                        });
+                    }
+                }
+            } else {
+                env.trace_stale_calls += 1;
+                // No new recordings for many calls — we're in a loop, stop
+                if env.trace_stale_calls > 20 {
+                    return Err(SheafError::Runtime {
+                        message: "trace complete".to_string(),
+                        location: None,
+                    });
+                }
+            }
         }
 
         if let Some(ref mut p) = env.profiler { p.enter(name); }
@@ -1405,7 +1437,7 @@ pub fn eval_exprs(source: &str) -> Result<Value, SheafError> {
     let mut compiler = CompilerContext::new();
     let mut last = Value::Nil;
 
-    // First pass: compile all (registers defn, defparams, etc.)
+    // First pass: compile all (registers defn, etc.)
     let mut compiled_exprs = Vec::new();
     for expr in &exprs {
         compiled_exprs.push(compiler.compile(expr)?);
@@ -1439,25 +1471,49 @@ fn try_iree_dispatch(
     let iree_session = session.downcast_ref::<crate::runtime::iree_session::IreeSession>()?;
 
     let sig = func_def.signature.as_ref()?;
+
+    // Validate tensor count AND shapes before calling into IREE.
+    // This prevents the C runtime from printing ugly diagnostics to stderr.
     if !crate::runtime::iree_session::args_match_signature(args, &sig.param_types) {
         if env.iree_mismatch_warned.insert(func_def.name.clone()) {
             let expected = crate::runtime::iree_session::count_signature_tensors(&sig.param_types);
             let actual = crate::runtime::iree_session::count_arg_tensors(args);
             eprintln!(
-                "warning: '{}' compiled for {} tensors but called with {} — running interpreted",
+                "warning: '{}' compiled for {} tensors but called with {} — falling back to interpreted",
                 func_def.name, expected, actual,
             );
             eprintln!(
-                "hint: rerun `sheaf build --trace-with <runner>` with the current model structure",
+                "hint: rerun `sheaf build` to recompile with current shapes",
+            );
+        }
+        return None;
+    }
+    if let Err(mismatch) = crate::runtime::iree_session::check_shapes_match(args, &sig.param_types) {
+        if env.iree_mismatch_warned.insert(func_def.name.clone()) {
+            eprintln!(
+                "warning: '{}': {}. Falling back to interpreted mode.",
+                func_def.name, mismatch,
+            );
+            eprintln!(
+                "hint: rerun `sheaf build` to recompile with current shapes",
             );
         }
         return None;
     }
 
     let full_name = format!("module.{}", func_def.name.replace('-', "_"));
-    let mut result = match iree_session.call_typed(&full_name, args, &sig.return_type) {
+    let result = match iree_session.call_typed(&full_name, args, &sig.return_type) {
         Ok(v) => v,
-        Err(e) => return Some(Err(e)),
+        Err(_e) => {
+            // Unexpected IREE error → fall back to interpreter with warning.
+            if env.iree_mismatch_warned.insert(format!("{}:call", func_def.name)) {
+                eprintln!(
+                    "warning: '{}' IREE call failed — falling back to interpreted",
+                    func_def.name,
+                );
+            }
+            return None;
+        }
     };
 
     let result = match (&sig.return_dict_keys, result) {

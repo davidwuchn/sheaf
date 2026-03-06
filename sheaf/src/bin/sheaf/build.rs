@@ -235,13 +235,21 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
 
     let mut all_decls = extra_decls;
 
-    // Trace-driven shape discovery: interpret the runner file to observe concrete arg shapes
+    // Shape discovery: interpret source or runner to observe concrete arg shapes
     let (traced_configs, traced_constants) = match trace_with {
         Some(runner_path) => {
             let (configs, constants) = super::trace::trace_with_runner(&runner_path, &compiler, &all_fn_names, verbosity);
             (Some(configs), constants)
         }
-        None => (None, std::collections::HashMap::new()),
+        None => {
+            // Auto-trace: run source files to discover shapes automatically
+            let (configs, constants) = super::trace::auto_trace(&source_files, &compiler, &all_fn_names, verbosity);
+            if configs.is_empty() {
+                (None, constants)
+            } else {
+                (Some(configs), constants)
+            }
+        }
     };
 
     // Build per-param config from --config JSON:
@@ -472,15 +480,29 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         // → copy tuple_key_layouts["input"] to tuple_key_layouts["input-layer"]
         super::transforms::propagate_let_layouts(&body, &idx_to_key, &mut tuple_key_layouts);
 
-        let mut codegen = CodeGenerator::with_function_params(
-            compiler.registry.clone(),
-            &func_def.params,
-            &sig.param_types,
-        );
-        codegen.set_tuple_key_layouts(tuple_key_layouts);
-        codegen.set_idx_to_key(idx_to_key);
-        match codegen.emit_func_declaration(name, &body, &sig.param_types, &sig.return_type) {
-            Ok((decl, actual_return_ty)) => {
+        // Run codegen inside catch_unwind to handle unexpected panics gracefully.
+        // Codegen may panic on unsupported type combinations (e.g. shape rank mismatches);
+        // catch_unwind lets us skip those functions instead of aborting the entire build.
+        let codegen_result = {
+            let registry_clone = compiler.registry.clone();
+            let params_clone = func_def.params.clone();
+            let sig_param_types = sig.param_types.clone();
+            let sig_return_type = sig.return_type.clone();
+            let body_clone = body.clone();
+            let name_clone = name.clone();
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut codegen = CodeGenerator::with_function_params(
+                    registry_clone,
+                    &params_clone,
+                    &sig_param_types,
+                );
+                codegen.set_tuple_key_layouts(tuple_key_layouts);
+                codegen.set_idx_to_key(idx_to_key);
+                codegen.emit_func_declaration(&name_clone, &body_clone, &sig_param_types, &sig_return_type)
+            }))
+        };
+        match codegen_result {
+            Ok(Ok((decl, actual_return_ty))) => {
                 // Update the signature with the real codegen return type
                 if let Some(fd) = compiler.registry.get_mut(name) {
                     if let Some(ref mut sig) = fd.signature {
@@ -501,13 +523,25 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
                     .unwrap_or_else(|| "?".to_string());
                 compiled_per_file.entry(src_file).or_default().push(name.clone());
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 let src_file = file_functions.iter()
                     .find(|(_, names)| names.contains(name))
                     .map(|(p, _)| p.display().to_string())
                     .unwrap_or_else(|| "?".to_string());
                 let reason = if verbosity >= 1 {
                     format!("codegen: {}", e)
+                } else {
+                    "codegen error (use -v for details)".to_string()
+                };
+                skipped_fns.push((src_file, name.clone(), reason));
+            }
+            Err(_panic) => {
+                let src_file = file_functions.iter()
+                    .find(|(_, names)| names.contains(name))
+                    .map(|(p, _)| p.display().to_string())
+                    .unwrap_or_else(|| "?".to_string());
+                let reason = if verbosity >= 1 {
+                    "codegen: internal error (panic)".to_string()
                 } else {
                     "codegen error (use -v for details)".to_string()
                 };
@@ -526,7 +560,9 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         let has_effects = skipped_fns.iter().any(|(_, _, r)| r.starts_with("side effects"));
         if has_no_types {
             eprintln!();
-            eprintln!("hint: use --trace-with <runner.shf> or --config to provide tensor shapes");
+            eprintln!("hint: no function calls were observed during auto-trace.");
+            eprintln!("      Ensure source files call the target functions with concrete data,");
+            eprintln!("      or use --trace-with <runner.shf> to provide a dedicated runner.");
         }
         if has_effects && !has_no_types {
             eprintln!();
