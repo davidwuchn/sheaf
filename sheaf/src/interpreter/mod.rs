@@ -440,6 +440,11 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
         // VMFB dispatch: pure compiled functions run via IREE
         #[cfg(iree_runtime)]
         if let Some(result) = try_iree_dispatch(&func_def, &pos_args, env) {
+            if let Some(ref mut tracer) = env.tracer {
+                if tracer.should_trace(name) {
+                    tracer.log_compiled_dispatch(name);
+                }
+            }
             if let Some(ref mut p) = env.profiler { p.exit(); }
             return result;
         }

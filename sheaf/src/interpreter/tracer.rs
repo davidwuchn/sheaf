@@ -21,6 +21,7 @@ pub enum LogFormat {
     Json,
 }
 
+
 pub struct CliGuard {
     pub scope: Option<String>,
     pub check: GuardCheck,
@@ -91,6 +92,24 @@ impl Tracer {
 
     pub fn is_active(&self, name: &str) -> bool {
         self.should_trace(name) || self.silent_monitoring
+    }
+
+    /// Lightweight trace for compiled (IREE) dispatch: name + tag only, no format_value.
+    pub fn log_compiled_dispatch(&mut self, name: &str) {
+        if !matches!(self.level_mode, TraceLevel::Normal | TraceLevel::Verbose) {
+            return;
+        }
+        let indent = "│ ".repeat(self.depth);
+        let line = format!("{}├─ [{}] (compiled)", indent, name);
+        self.push_ring(&line);
+        if self.should_trace(name) {
+            match self.log_format {
+                LogFormat::Console => eprintln!("\x1b[94m{}\x1b[0m", line),
+                LogFormat::Json => {
+                    eprintln!("{{\"type\":\"call\",\"fn\":\"{}\",\"dispatch\":\"compiled\",\"depth\":{}}}", name, self.depth);
+                }
+            }
+        }
     }
 
     pub fn log_call(&mut self, name: &str, args: &[Value]) {
