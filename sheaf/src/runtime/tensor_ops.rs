@@ -302,3 +302,14 @@ pub fn emit_tensor_split(
 ) -> (Register, StableHLOType) {
     emitter.emit_tensor_split(operand, operand_ty, num_sections)
 }
+
+/// Emit gather along axis 0: (get operand indices) where indices is a tensor.
+pub fn emit_gather_axis0(
+    emitter: &mut StableHLOEmitter,
+    operand: &Register,
+    operand_ty: &StableHLOType,
+    indices: &Register,
+    indices_ty: &StableHLOType,
+) -> (Register, StableHLOType) {
+    emitter.emit_gather_axis0(operand, operand_ty, indices, indices_ty)
+}

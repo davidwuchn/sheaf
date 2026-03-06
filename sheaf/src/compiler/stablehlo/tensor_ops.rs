@@ -750,6 +750,91 @@ impl StableHLOEmitter {
         // Pack into a tuple
         self.emit_tuple(&section_regs, &section_types)
     }
+
+    /// Emit gather along axis 0: (get operand indices) where indices is a tensor.
+    /// operand shape [N, D1, D2, ...], indices shape [I1, I2, ...]
+    /// result shape [I1, I2, ..., D1, D2, ...]
+    pub fn emit_gather_axis0(
+        &mut self,
+        operand: &Register,
+        operand_ty: &StableHLOType,
+        indices: &Register,
+        indices_ty: &StableHLOType,
+    ) -> (Register, StableHLOType) {
+        let operand_shape = operand_ty.shape();
+        let indices_shape = indices_ty.shape();
+
+        // Convert indices to i64 (Sheaf tensors are f32)
+        let indices_i64_reg = self.fresh_register();
+        let indices_i64_ty = StableHLOType::i64_tensor(indices_shape.to_vec());
+        self.body.push(format!(
+            "    {} = stablehlo.convert {} : ({}) -> {}",
+            indices_i64_reg.to_mlir(),
+            indices.to_mlir(),
+            indices_ty.to_mlir(),
+            indices_i64_ty.to_mlir(),
+        ));
+
+        // Reshape indices to add trailing index_vector_dim: [I1, I2, ...] → [I1, I2, ..., 1]
+        let mut reshaped_shape: Vec<i64> = indices_shape.to_vec();
+        reshaped_shape.push(1);
+        let indices_3d_reg = self.fresh_register();
+        let indices_3d_ty = StableHLOType::i64_tensor(reshaped_shape.clone());
+        self.body.push(format!(
+            "    {} = stablehlo.reshape {} : ({}) -> {}",
+            indices_3d_reg.to_mlir(),
+            indices_i64_reg.to_mlir(),
+            indices_i64_ty.to_mlir(),
+            indices_3d_ty.to_mlir(),
+        ));
+
+        // Compute result shape: indices_shape + operand_shape[1:]
+        let row_shape = &operand_shape[1..];
+        let mut result_shape: Vec<i64> = indices_shape.to_vec();
+        result_shape.extend_from_slice(row_shape);
+        let result_ty = StableHLOType::f32_tensor(result_shape);
+
+        // offset_dims = [rank(indices), rank(indices)+1, ..., rank(result)-1]
+        let idx_rank = indices_shape.len();
+        let offset_dims: Vec<i64> = (idx_rank..idx_rank + row_shape.len())
+            .map(|d| d as i64)
+            .collect();
+
+        // slice_sizes = [1, D1, D2, ...]
+        let mut slice_sizes: Vec<i64> = vec![1];
+        slice_sizes.extend_from_slice(row_shape);
+
+        let index_vector_dim = reshaped_shape.len() - 1;
+
+        let result_reg = self.fresh_register();
+        let offset_dims_str = offset_dims.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ");
+        let slice_sizes_str = slice_sizes.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ");
+
+        self.body.push(format!(
+            "    {} = \"stablehlo.gather\"({}, {}) {{\n\
+             \x20     dimension_numbers = #stablehlo.gather<\n\
+             \x20       offset_dims = [{}],\n\
+             \x20       collapsed_slice_dims = [0],\n\
+             \x20       operand_batching_dims = [],\n\
+             \x20       start_indices_batching_dims = [],\n\
+             \x20       start_index_map = [0],\n\
+             \x20       index_vector_dim = {}>,\n\
+             \x20     slice_sizes = array<i64: {}>,\n\
+             \x20     indices_are_sorted = false\n\
+             \x20   }} : ({}, {}) -> {}",
+            result_reg.to_mlir(),
+            operand.to_mlir(),
+            indices_3d_reg.to_mlir(),
+            offset_dims_str,
+            index_vector_dim,
+            slice_sizes_str,
+            operand_ty.to_mlir(),
+            indices_3d_ty.to_mlir(),
+            result_ty.to_mlir(),
+        ));
+
+        (result_reg, result_ty)
+    }
 }
 
 /// Format slice dimensions as `start:limit:stride, ...` for StableHLO assembly.
