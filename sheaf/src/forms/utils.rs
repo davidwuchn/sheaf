@@ -251,12 +251,15 @@ fn resolve_module_path(
             }
         }
     } else {
-        // Bare name: search load_path
-        let mut search_roots: Vec<std::path::PathBuf> = compiler.load_path.clone();
-        // Also search current_dir for local modules (e.g. (use mlp) in same dir as run.shf)
+        // Bare name: search current_dir first, then load_path
+        let mut search_roots: Vec<std::path::PathBuf> = Vec::new();
+        // File's own directory takes priority (e.g. (use hydra) in scan/run.shf finds scan/hydra.shf)
         if let Some(dir) = &compiler.current_dir {
-            if !search_roots.contains(dir) {
-                search_roots.push(dir.clone());
+            search_roots.push(dir.clone());
+        }
+        for p in &compiler.load_path {
+            if !search_roots.contains(p) {
+                search_roots.push(p.clone());
             }
         }
 
