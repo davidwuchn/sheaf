@@ -23,6 +23,9 @@ pub struct CodeGenerator {
     /// Allows `(get sym "key")` to resolve when `sym` is bound to a tuple.
     /// Populated from param configs and propagated into reduce/scan lambdas.
     tuple_key_layouts: HashMap<String, std::collections::BTreeMap<String, usize>>,
+    /// Reverse map: (param_name, tuple_index) → key_name.
+    /// Used to resolve layouts for GetTupleElement collections in reduce/scan.
+    idx_to_key: HashMap<(String, usize), String>,
 }
 
 impl CodeGenerator {
@@ -33,6 +36,7 @@ impl CodeGenerator {
             lambda_bindings: HashMap::new(),
             function_registry: HashMap::new(),
             tuple_key_layouts: HashMap::new(),
+            idx_to_key: HashMap::new(),
         }
     }
 
@@ -43,6 +47,7 @@ impl CodeGenerator {
             lambda_bindings: HashMap::new(),
             function_registry: registry,
             tuple_key_layouts: HashMap::new(),
+            idx_to_key: HashMap::new(),
         }
     }
 
@@ -63,6 +68,7 @@ impl CodeGenerator {
             lambda_bindings: HashMap::new(),
             function_registry: registry,
             tuple_key_layouts: HashMap::new(),
+            idx_to_key: HashMap::new(),
         }
     }
 
@@ -73,6 +79,10 @@ impl CodeGenerator {
         layouts: HashMap<String, std::collections::BTreeMap<String, usize>>,
     ) {
         self.tuple_key_layouts = layouts;
+    }
+
+    pub fn set_idx_to_key(&mut self, map: HashMap<(String, usize), String>) {
+        self.idx_to_key = map;
     }
 
     /// Generate StableHLO for a compiled expression
@@ -209,6 +219,19 @@ impl CodeGenerator {
                         }
                     } else {
                         let (reg, ty) = self.generate(value_expr)?;
+                        // Propagate sub-layout for Let-bound tuples from (get sym :key)
+                        if matches!(&ty, StableHLOType::Tuple(_)) {
+                            if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args } = value_expr {
+                                if fn_name == "get" && fn_args.len() >= 2 {
+                                    // Use the last keyword arg as the layout key
+                                    if let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last() {
+                                        if let Some(sub_layout) = self.tuple_key_layouts.get(k).cloned() {
+                                            self.tuple_key_layouts.insert(name.clone(), sub_layout);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         self.bindings.insert(name.clone(), (reg, ty));
                     }
                 }
@@ -1192,26 +1215,46 @@ impl CodeGenerator {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             match &operand_ty {
                 // Tuple + keyword/string — try to resolve via tuple_key_layouts
-                StableHLOType::Tuple(elem_types) => {
+                StableHLOType::Tuple(_) => {
                     if let Some(ref sym) = sym_name {
-                        let key_str = match &args[1] {
+                        // Collect all keyword args for multi-key get: (get x :k1 :k2 ...)
+                        let keywords: Vec<String> = args[1..].iter().filter_map(|a| match a {
                             CompiledExpr::Keyword(k) | CompiledExpr::String(k) => Some(k.clone()),
                             _ => None,
-                        };
-                        if let Some(key) = key_str {
-                            if let Some(layout) = self.tuple_key_layouts.get(sym.as_str()).cloned() {
-                                if let Some(&idx) = layout.get(&key) {
-                                    let elem_ty = elem_types[idx].clone();
-                                    let reg = self.emitter.emit_get_tuple_element(
-                                        &operand_reg, &operand_ty, idx, &elem_ty,
-                                    );
-                                    return Ok((reg, elem_ty));
+                        }).collect();
+                        if keywords.len() == args.len() - 1 && !keywords.is_empty() {
+                            let mut cur_reg = operand_reg.clone();
+                            let mut cur_ty = operand_ty.clone();
+                            let mut layout_key = sym.clone();
+                            let mut ok = true;
+                            for key in &keywords {
+                                if let StableHLOType::Tuple(sub_types) = &cur_ty {
+                                    if let Some(layout) = self.tuple_key_layouts.get(&layout_key).cloned() {
+                                        if let Some(&idx) = layout.get(key) {
+                                            let sub_ty = sub_types[idx].clone();
+                                            cur_reg = self.emitter.emit_get_tuple_element(
+                                                &cur_reg, &cur_ty, idx, &sub_ty,
+                                            );
+                                            cur_ty = sub_ty;
+                                            layout_key = key.clone();
+                                            continue;
+                                        }
+                                    }
                                 }
+                                ok = false;
+                                break;
+                            }
+                            if ok {
+                                return Ok((cur_reg, cur_ty));
                             }
                         }
                     }
                     Err(SheafError::Compile {
-                        message: "get on dict/tuple requires type info (use defparams or --trace-with)".to_string(),
+                        message: format!(
+                            "get on dict/tuple requires type info (sym={:?} keys={:?})",
+                            sym_name,
+                            args[1..].iter().map(|a| format!("{:?}", a)).collect::<Vec<_>>()
+                        ),
                         location: crate::core::error::SourceLocation::unknown(),
                     })
                 }
@@ -1253,10 +1296,21 @@ impl CodeGenerator {
                             }
                         }
                         _ => {
-                            Err(SheafError::Compile {
-                                message: "get on tensor: index must be integer or ellipsis".to_string(),
-                                location: crate::core::error::SourceLocation::unknown(),
-                            })
+                            // Tensor-indexed gather: (get operand indices)
+                            let (idx_reg, idx_ty) = self.generate(&args[1])?;
+                            if !idx_ty.shape().is_empty() {
+                                let (reg, ty) = tensor_ops::emit_gather_axis0(
+                                    &mut self.emitter,
+                                    &operand_reg, &operand_ty,
+                                    &idx_reg, &idx_ty,
+                                );
+                                Ok((reg, ty))
+                            } else {
+                                Err(SheafError::Compile {
+                                    message: "get on tensor: index must be integer, ellipsis, or tensor".to_string(),
+                                    location: crate::core::error::SourceLocation::unknown(),
+                                })
+                            }
                         }
                     }
                 }
@@ -1983,7 +2037,22 @@ impl CodeGenerator {
         let elem_layout = coll_sym
             .as_deref()
             .and_then(|s| self.tuple_key_layouts.get(s))
-            .cloned();
+            .cloned()
+            .or_else(|| {
+                // For GetTupleElement collections (e.g. (get params :layers)),
+                // resolve the key name via idx_to_key and look up its layout.
+                if let CompiledExpr::GetTupleElement { param, indices } = coll {
+                    if indices.len() == 1 {
+                        self.idx_to_key.get(&(param.clone(), indices[0]))
+                            .and_then(|key| self.tuple_key_layouts.get(key))
+                            .cloned()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            });
 
         for i in 0..n {
             // Extract element i from the collection

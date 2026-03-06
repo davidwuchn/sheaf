@@ -665,8 +665,12 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         // Inline user-defined function calls (e.g. transformer-block → multi-head-attention)
         body = sheaf_compiler::autodiff::inline_function_calls(&body, &compiler.registry);
 
-        // After inlining, stdlib functions (e.g. layer-norm) may introduce (get alias :key)
-        // where alias is a Let-bound GetTupleElement. Re-lower those using alias tracking.
+        // After inlining, re-lower (get param :key) calls from inlined function bodies.
+        // These weren't present in the original body, so the first lower_get_calls missed them.
+        for (param_name, index_map) in &param_index_maps {
+            body = lower_get_calls(&body, param_name, index_map);
+        }
+        // Also re-lower alias-based gets (Let-bound GetTupleElement).
         body = lower_inlined_gets(&body, &param_index_maps);
 
         // Substitute config scalar constants (e.g. (static (get config :d_model)) → Integer(256))
@@ -701,6 +705,14 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
                         .or_default()
                         .insert(key_path[1].clone(), indices[1]);
                 }
+                // 3-level paths: build sub-layouts keyed by the 2nd-level key name
+                // e.g. ["layers", "attn", "Wq"] → [2, 0, 0] creates layout "attn" → {Wq: 0, ...}
+                if key_path.len() == 3 && indices.len() == 3 {
+                    tuple_key_layouts
+                        .entry(key_path[1].clone())
+                        .or_default()
+                        .insert(key_path[2].clone(), indices[2]);
+                }
                 if key_path.len() == 1 && indices.len() == 1 {
                     idx_to_key.insert((param_name.clone(), indices[0]), key_path[0].clone());
                 }
@@ -717,6 +729,7 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
             &sig.param_types,
         );
         codegen.set_tuple_key_layouts(tuple_key_layouts);
+        codegen.set_idx_to_key(idx_to_key);
         match codegen.emit_func_declaration(name, &body, &sig.param_types, &sig.return_type) {
             Ok((decl, actual_return_ty)) => {
                 // Update the signature with the real codegen return type
@@ -1056,6 +1069,16 @@ fn trace_with_runner(
                                     vec![key.to_string(), elem_key.to_string()],
                                     vec![idx, elem_idx],
                                 );
+                                // Recurse into nested dicts for 3-level paths
+                                if let Some(Value::Dict(sub_dict)) = elem_dict.get(*elem_key) {
+                                    let sub_keys: Vec<&String> = sub_dict.keys().collect();
+                                    for (sub_idx, sub_key) in sub_keys.iter().enumerate() {
+                                        imap.insert(
+                                            vec![key.to_string(), elem_key.to_string(), sub_key.to_string()],
+                                            vec![idx, elem_idx, sub_idx],
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -1269,18 +1292,22 @@ fn resolve_constants_rec(
         CompiledExpr::FunctionCall { name, args } if name == "static" && args.len() == 1 => {
             resolve_constants_rec(&args[0], constants, locals, shapes)
         }
-        // (shape sym) → Vector([Integer(d0), Integer(d1), ...]) when sym has known shape
+        // (shape expr) → Vector([Integer(d0), Integer(d1), ...]) when shape is known
         CompiledExpr::FunctionCall { name, args } if name == "shape" && args.len() == 1 => {
-            let sym_name = match &args[0] {
-                CompiledExpr::Symbol(s) => Some(s.as_str()),
+            // Try direct symbol lookup first
+            let shape_from_sym = match &args[0] {
+                CompiledExpr::Symbol(s) => shapes.get(s.as_str()).cloned(),
                 _ => None,
             };
-            if let Some(sym) = sym_name {
-                if let Some(shape) = shapes.get(sym) {
-                    return CompiledExpr::Vector(
-                        shape.iter().map(|&d| CompiledExpr::Integer(d)).collect(),
-                    );
-                }
+            // Fallback: infer shape from expression (handles inlined code)
+            let shape = shape_from_sym.or_else(|| {
+                let resolved = resolve_constants_rec(&args[0], constants, locals, shapes);
+                try_infer_shape(&resolved, shapes)
+            });
+            if let Some(sh) = shape {
+                return CompiledExpr::Vector(
+                    sh.iter().map(|&d| CompiledExpr::Integer(d)).collect(),
+                );
             }
             CompiledExpr::FunctionCall {
                 name: name.clone(),
@@ -1426,7 +1453,52 @@ fn try_infer_shape(
             | "maximum" | "minimum" | "clamp"
             | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not"
             | "where" => args.iter().find_map(|a| try_infer_shape(a, shapes)),
+            // Shape-preserving ops: output has same shape as first tensor arg
+            "layer-norm" | "softmax" | "normalize"
+                => args.first().and_then(|a| try_infer_shape(a, shapes)),
             "first" => args.first().and_then(|a| try_infer_shape(a, shapes)),
+            // reshape: output shape is the second arg (a vector of ints)
+            "reshape" if args.len() == 2 => {
+                if let CompiledExpr::Vector(elems) = &args[1] {
+                    let sh: Option<Vec<i64>> = elems.iter().map(|e| {
+                        if let CompiledExpr::Integer(n) = e { Some(*n) } else { None }
+                    }).collect();
+                    sh
+                } else {
+                    None
+                }
+            }
+            // swapaxes: permute shape dims
+            "swapaxes" if args.len() == 3 => {
+                if let (Some(sh), Some(CompiledExpr::Integer(a)), Some(CompiledExpr::Integer(b)))
+                    = (try_infer_shape(&args[0], shapes), args.get(1), args.get(2))
+                {
+                    let ndim = sh.len() as i64;
+                    let ai = if *a < 0 { (ndim + a) as usize } else { *a as usize };
+                    let bi = if *b < 0 { (ndim + b) as usize } else { *b as usize };
+                    if ai < sh.len() && bi < sh.len() {
+                        let mut out = sh;
+                        out.swap(ai, bi);
+                        Some(out)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            // matmul (@): [..., M, K] @ [..., K, N] → [..., M, N]
+            "@" if args.len() == 2 => {
+                let lhs = try_infer_shape(&args[0], shapes)?;
+                let rhs = try_infer_shape(&args[1], shapes)?;
+                if lhs.len() >= 2 && rhs.len() >= 2 {
+                    let mut out = lhs[..lhs.len()-1].to_vec();
+                    out.push(*rhs.last().unwrap());
+                    Some(out)
+                } else {
+                    None
+                }
+            }
             _ => None,
         },
         _ => None,
