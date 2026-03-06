@@ -65,7 +65,7 @@ pub fn trace_function_signature(
         .iter()
         .zip(param_types.iter())
         .map(|(name, ty)| {
-            // For defparams-typed params, look up the ParamLayout to build a Dict
+            // For structured params, look up the ParamLayout to build a Dict
             if let Some(layout) = find_param_layout(compiler, func_def, name) {
                 param_layout_to_dummy_value(layout)
             } else {
@@ -127,7 +127,7 @@ fn stablehlo_to_dummy_value(ty: &StableHLOType) -> Value {
 }
 
 /// Create a dummy Value::Dict matching a ParamLayout structure.
-/// The interpreter uses Dicts (not Tuples) for defparams-typed params at runtime.
+/// The interpreter uses Dicts (not Tuples) for structured params at runtime.
 fn param_layout_to_dummy_value(layout: &ParamLayout) -> Value {
     // Group fields by top-level key
     let mut top_keys: Vec<String> = Vec::new();
@@ -235,7 +235,7 @@ pub fn value_to_stablehlo_type(val: &Value) -> SheafResult<StableHLOType> {
     }
 }
 
-/// Find the ParamLayout for a defparams-typed parameter.
+/// Find the ParamLayout for a structured parameter.
 /// Checks if the function has a type annotation for this param and looks it up
 /// in the compiler's param_types registry.
 fn find_param_layout<'a>(
@@ -245,7 +245,6 @@ fn find_param_layout<'a>(
 ) -> Option<&'a ParamLayout> {
     // Type annotations are stored as known_param_types with Tuple types,
     // but we need the original ParamLayout for Dict reconstruction.
-    // Check if the param's known type is a Tuple (from defparams).
     let has_tuple_type = func_def
         .known_param_types
         .iter()
@@ -279,7 +278,7 @@ fn register_trace_overrides(env: &mut Env) {
 
 /// Convert a runtime `Value::Dict` (observed from tracing) to a `ParamLayout`.
 /// This is the inverse of `param_layout_to_dummy_value`: given a nested Dict of
-/// tensors, produce the same layout that `defparams` would create.
+/// tensors, produce the corresponding ParamLayout.
 ///
 /// Keys are sorted alphabetically at each level (BTreeMap order), and tuple
 /// indices are assigned in that order — matching the codegen convention.

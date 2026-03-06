@@ -25,7 +25,7 @@ pub use base::SpecialForm;
 pub use binding::{DefmacroForm, DefnForm, FnForm, LetForm};
 pub use control::{CaseForm, DoForm, GuardForm, IfForm, RepeatForm, WhileForm};
 pub use flow::{ThreadAsForm, ThreadFirstForm};
-pub use ml::{DefparamsForm, WithParamsForm};
+pub use ml::WithParamsForm;
 pub use utils::{AssocForm, DictForm, GetForm, GetInForm, LastForm, QuoteForm, UseForm};
 
 /// Create the registry of all special forms
@@ -70,7 +70,6 @@ pub fn special_forms_registry() -> HashMap<&'static str, Box<dyn SpecialForm>> {
     forms.insert("use", Box::new(UseForm));
 
     // ML forms
-    forms.insert("defparams", Box::new(DefparamsForm));
     forms.insert("with-params", Box::new(WithParamsForm));
 
     forms

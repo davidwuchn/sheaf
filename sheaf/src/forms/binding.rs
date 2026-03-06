@@ -31,7 +31,7 @@ impl SpecialForm for DefnForm {
 
         // Extract parameter names, handling typed params:
         //   - symbol: simple param  e.g. `x`
-        //   - (p :as TypeName): defparams-typed param
+        //   - (p :as TypeName): typed param
         //   - (x [4 2]): shape-annotated param → tensor<4x2xf32>
         let mut params: Vec<String> = Vec::new();
         let mut type_annotations: Vec<(String, String)> = Vec::new(); // (param, type_name)
@@ -164,7 +164,7 @@ impl SpecialForm for DefnForm {
 
         let (body_compiled_opt, signature_opt, known_param_types) = match compile_result {
             Ok(body_compiled) => {
-                // Build known param types from defparams and shape annotations
+                // Build known param types from type and shape annotations
                 let mut known_param_types: Vec<(
                     String,
                     crate::compiler::stablehlo::StableHLOType,

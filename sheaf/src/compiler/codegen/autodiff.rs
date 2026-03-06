@@ -13,7 +13,7 @@ use super::CodeGenerator;
 impl CodeGenerator {
     /// Inline value-and-grad: forward pass + symbolic backward passes -> tuple.
     ///
-    /// When a wrt parameter is a tuple (e.g. from defparams), the body contains
+    /// When a wrt parameter is a tuple (e.g. from traced dict layout), the body contains
     /// `GetTupleElement { param, indices }` references to its leaves. We replace
     /// each leaf with a synthetic symbol, differentiate with respect to each one,
     /// and reassemble the gradients into a tuple matching the parameter structure.

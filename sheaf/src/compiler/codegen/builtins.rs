@@ -975,7 +975,7 @@ impl CodeGenerator {
         // get-in: (get-in tuple [:k1 :k2]) — should be lowered by lower_get_calls
         else if name == "get-in" && args.len() >= 2 {
             Err(SheafError::Compile {
-                message: "get-in requires type info (use defparams or --trace-with)".to_string(),
+                message: "get-in requires type info (use --trace-with or auto-trace)".to_string(),
                 location: crate::core::error::SourceLocation::unknown(),
             })
         }

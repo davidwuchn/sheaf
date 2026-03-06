@@ -25,7 +25,7 @@ pub struct ParamField {
     pub tuple_index: Vec<usize>,
 }
 
-/// A resolved parameter layout for a `defparams` declaration.
+/// A resolved parameter layout for structured dict parameters.
 /// The layout is a flat list of fields derived from the nested dict schema.
 #[derive(Debug, Clone)]
 pub struct ParamLayout {
@@ -62,7 +62,7 @@ pub struct CompilerContext {
     /// Local variables (for let bindings, function params)
     pub local_vars: HashMap<String, SheafValue>,
 
-    /// Parameter type registry (defparams declarations)
+    /// Parameter type registry (structured dict layouts)
     pub param_types: HashMap<String, ParamLayout>,
 
     /// Param scope: maps symbol name -> (param_name, tuple_indices)
@@ -100,7 +100,7 @@ pub struct FunctionDef {
     pub body_compiled: Option<CompiledExpr>,
     pub signature: Option<crate::core::inference::FunctionSignature>,
     pub vmfb_session_idx: Option<usize>,
-    /// Known parameter types from annotations (shape annotations + defparams).
+    /// Known parameter types from annotations (shape annotations + traced layouts).
     /// Used by the tracing compiler to create dummy inputs.
     pub known_param_types: Vec<(String, crate::compiler::stablehlo::StableHLOType)>,
 }
@@ -418,7 +418,7 @@ impl CompilerContext {
         loc: &crate::core::error::SourceLocation,
     ) -> Option<SheafResult<CompiledExpr>> {
         // Static dispatch to special forms
-        use crate::forms::ml::{DefparamsForm, GradForm, ValueAndGradForm, WithParamsForm};
+        use crate::forms::ml::{GradForm, ValueAndGradForm, WithParamsForm};
         use crate::forms::*;
 
         let result = match op {
@@ -441,7 +441,6 @@ impl CompilerContext {
             "assoc" => AssocForm.compile(self, args, loc),
             "last" => LastForm.compile(self, args, loc),
             "use" => UseForm.compile(self, args, loc),
-            "defparams" => DefparamsForm.compile(self, args, loc),
             "with-params" => WithParamsForm.compile(self, args, loc),
             "grad" => GradForm.compile(self, args, loc),
             "value-and-grad" => ValueAndGradForm.compile(self, args, loc),

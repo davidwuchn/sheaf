@@ -23,7 +23,7 @@ pub struct FunctionSignature {
 /// 2. Infer types for each parameter based on how they're used
 /// 3. Infer return type from body
 ///
-/// `known_param_types`: pre-known types for specific params (e.g. from defparams),
+/// `known_param_types`: pre-known types for specific params (e.g. from tracing),
 /// overrides inference. Maps param name -> StableHLOType.
 pub fn infer_function_signature(
     compiler: &CompilerContext,
