@@ -63,6 +63,7 @@ Usage:
 
 Interpreter options:
     --trace [FUNCTIONS]    Trace execution (optionally scoped to functions)
+    --blame                Profile execution and print timing report
     --guard SPEC           Runtime guard: [scope:]variable:check (repeatable)
 
 Build options:
@@ -111,7 +112,7 @@ fn run_expr(source: &str) {
 
 fn run_file(args: &[String]) {
     use std::path::PathBuf;
-    use sheaf_compiler::interpreter::eval::{eval_source_with_path, eval_source_with_tracing};
+    use sheaf_compiler::interpreter::eval::{eval_source_with_blame, eval_source_with_path, eval_source_with_tracing};
     use sheaf_compiler::interpreter::tracer::{CliGuard, LogFormat, TraceLevel, TracerConfig};
 
     let path = &args[0];
@@ -121,6 +122,7 @@ fn run_file(args: &[String]) {
     let mut trace_level = TraceLevel::Normal;
     let mut trace_format = LogFormat::Console;
     let mut cli_guards: Vec<CliGuard> = Vec::new();
+    let mut blame = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -172,6 +174,9 @@ fn run_file(args: &[String]) {
                     }
                 }
             }
+            "--blame" => {
+                blame = true;
+            }
             arg => {
                 eprintln!("sheaf: unknown option '{}' for file mode", arg);
                 eprintln!("Run 'sheaf --help' for usage.");
@@ -198,7 +203,20 @@ fn run_file(args: &[String]) {
     );
 
     let needs_tracing = trace_enabled || !cli_guards.is_empty();
-    let result = if needs_tracing {
+    let result = if blame {
+        let tracer_config = if needs_tracing {
+            Some(TracerConfig {
+                enabled: trace_enabled,
+                scope_filter: trace_scope,
+                level: trace_level,
+                format: trace_format,
+                cli_guards,
+            })
+        } else {
+            None
+        };
+        eval_source_with_blame(&source, Some(&abs_path), tracer_config)
+    } else if needs_tracing {
         let config = TracerConfig {
             enabled: trace_enabled,
             scope_filter: trace_scope,

@@ -136,6 +136,54 @@ pub fn eval_source_with_tracing(
     Ok(last)
 }
 
+/// Evaluate source with --blame profiling (and optionally tracing).
+pub fn eval_source_with_blame(
+    source: &str,
+    file_path: Option<&std::path::Path>,
+    tracer_config: Option<TracerConfig>,
+) -> Result<Value, SheafError> {
+    let filename = file_path
+        .and_then(|p| p.to_str())
+        .unwrap_or("<eval>");
+    let exprs = crate::core::parse(source, filename)?;
+    let mut compiler = CompilerContext::new();
+    if let Some(path) = file_path {
+        if let Some(dir) = path.parent() {
+            compiler.set_current_dir(
+                dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()),
+            );
+        }
+    }
+    let mut compiled = Vec::new();
+    for expr in &exprs {
+        compiled.push(compiler.compile(expr)?);
+    }
+
+    #[cfg(iree_runtime)]
+    if let Some(path) = file_path {
+        let all_fns: Vec<String> = compiler.registry.keys().cloned().collect();
+        crate::runtime::vmfb_loader::try_load_vmfb(&mut compiler, path, &all_fns);
+    }
+
+    let mut env = Env::with_registry(compiler.registry.clone());
+    env.vmfb_sessions = compiler.vmfb_sessions.clone();
+    env.profiler = Some(crate::interpreter::profiler::Profiler::new());
+    if let Some(config) = tracer_config {
+        env.tracer = Some(Tracer::from_config(config));
+    }
+    register_builtins(&mut env);
+    let mut last = Value::Nil;
+    for c in &compiled {
+        if !matches!(c, CompiledExpr::Nil) {
+            last = interpreter::eval(c, &mut env)?;
+        }
+    }
+    if let Some(ref profiler) = env.profiler {
+        profiler.report();
+    }
+    Ok(last)
+}
+
 /// Stateful interpreter: accumulates definitions and bindings across calls.
 /// Used by the REPL so that `(defn f ...)` in one line is visible in the next.
 pub struct Interpreter {

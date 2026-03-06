@@ -7,6 +7,7 @@ pub mod builtins;
 pub mod env;
 pub mod eval;
 pub mod pickle;
+pub mod profiler;
 pub mod tracer;
 pub mod value;
 
@@ -391,23 +392,36 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
 
     // Higher-order functions need &mut Env to call lambdas
     match name {
-        "map" => return eval_map(&pos_args, env),
-        "filter" => return eval_filter(&pos_args, env),
-        "reduce" => return eval_reduce(&pos_args, env),
-        "scan" => return eval_scan(&pos_args, env),
-        "apply" => return eval_apply(&pos_args, env),
-        "find" => return eval_find(&pos_args, env),
-        "tree-map" => return eval_tree_map(&pos_args, env),
-        "tree-reduce" => return eval_tree_reduce(&pos_args, env),
-        "flatten" => return eval_flatten(&pos_args),
-        "vmap" => return eval_vmap(&pos_args, env),
-        "__value-and-grad-hof__" => return eval_value_and_grad_hof(&pos_args, env),
+        "map" | "filter" | "reduce" | "scan" | "apply" | "find"
+        | "tree-map" | "tree-reduce" | "flatten" | "vmap"
+        | "__value-and-grad-hof__" => {
+            if let Some(ref mut p) = env.profiler { p.enter(name); }
+            let result = match name {
+                "map" => eval_map(&pos_args, env),
+                "filter" => eval_filter(&pos_args, env),
+                "reduce" => eval_reduce(&pos_args, env),
+                "scan" => eval_scan(&pos_args, env),
+                "apply" => eval_apply(&pos_args, env),
+                "find" => eval_find(&pos_args, env),
+                "tree-map" => eval_tree_map(&pos_args, env),
+                "tree-reduce" => eval_tree_reduce(&pos_args, env),
+                "flatten" => eval_flatten(&pos_args),
+                "vmap" => eval_vmap(&pos_args, env),
+                "__value-and-grad-hof__" => eval_value_and_grad_hof(&pos_args, env),
+                _ => unreachable!(),
+            };
+            if let Some(ref mut p) = env.profiler { p.exit(); }
+            return result;
+        }
         _ => {}
     }
 
     // Try builtin from env
     if let Ok(Value::BuiltinFn { func, .. }) = env.get(name) {
-        return func(&pos_args, &kwargs);
+        if let Some(ref mut p) = env.profiler { p.enter(name); }
+        let result = func(&pos_args, &kwargs);
+        if let Some(ref mut p) = env.profiler { p.exit(); }
+        return result;
     }
 
     // Try user-defined function from registry
@@ -421,15 +435,17 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
             });
         }
 
+        if let Some(ref mut p) = env.profiler { p.enter(name); }
+
         // VMFB dispatch: pure compiled functions run via IREE
         #[cfg(iree_runtime)]
         if let Some(result) = try_iree_dispatch(&func_def, &pos_args, env) {
+            if let Some(ref mut p) = env.profiler { p.exit(); }
             return result;
         }
 
         // Fallback: interpret
         if let Some(ref body) = func_def.body_compiled {
-            // Tracing: log_call before, log_return after
             let tracing = env.tracer.as_ref().map_or(false, |t| t.is_active(name));
             if tracing {
                 let mut tracer = env.tracer.take().unwrap();
@@ -453,8 +469,11 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
                 env.tracer = Some(tracer);
             }
 
+            if let Some(ref mut p) = env.profiler { p.exit(); }
             return result;
         }
+
+        if let Some(ref mut p) = env.profiler { p.exit(); }
     }
 
     // Try function value in env
@@ -535,6 +554,7 @@ fn call_function(func: &Value, args: &[Value], env: &mut Env) -> Result<Value, S
             }
             // Normal function call
             let Value::Function { params, body, closure } = func else { unreachable!() };
+            if let Some(ref mut p) = env.profiler { p.enter("<lambda>"); }
             env.push_scope();
             for (name, val) in closure {
                 env.set(name, val.clone());
@@ -544,10 +564,14 @@ fn call_function(func: &Value, args: &[Value], env: &mut Env) -> Result<Value, S
             }
             let result = eval(body, env);
             env.pop_scope();
+            if let Some(ref mut p) = env.profiler { p.exit(); }
             result
         }
-        Value::BuiltinFn { func, .. } => {
-            func(args, &BTreeMap::new())
+        Value::BuiltinFn { name, func } => {
+            if let Some(ref mut p) = env.profiler { p.enter(name); }
+            let result = func(args, &BTreeMap::new());
+            if let Some(ref mut p) = env.profiler { p.exit(); }
+            result
         }
         _ => Err(runtime_error(format!("Not a function: {}", func.type_name()))),
     }

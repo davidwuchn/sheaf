@@ -26,6 +26,7 @@ const REPL_COMMANDS: &[&str] = &[
     ":show",
     ":trace",
     ":scope",
+    ":blame",
     ":clear",
 ];
 
@@ -381,6 +382,38 @@ fn handle_command(input: &str, interp: &mut Interpreter) -> bool {
             }
         }
 
+        ":blame" => {
+            match arg {
+                "" => {
+                    let status = if interp.env().profiler.is_some() { "on" } else { "off" };
+                    println!("Blame: {}", status);
+                }
+                "on" => {
+                    interp.env_mut().profiler = Some(
+                        sheaf_compiler::interpreter::profiler::Profiler::new()
+                    );
+                    println!("Profiler enabled.");
+                }
+                "off" => {
+                    if let Some(ref profiler) = interp.env().profiler {
+                        profiler.report();
+                    }
+                    interp.env_mut().profiler = None;
+                    println!("Profiler disabled.");
+                }
+                "report" => {
+                    if let Some(ref profiler) = interp.env().profiler {
+                        profiler.report();
+                    } else {
+                        eprintln!("Profiler is not active. Use :blame on to enable first.");
+                    }
+                }
+                _ => {
+                    eprintln!("Usage: :blame [on|off|report]");
+                }
+            }
+        }
+
         ":clear" => {
             print!("\x1b[2J\x1b[H");
         }
@@ -419,6 +452,7 @@ fn print_general_help() {
   :show <name>           Show a variable's value
   :trace [off|fast|normal|verbose]  Control execution tracing
   :scope [name|off]      Filter tracing to specific functions
+  :blame [on|off|report] Profile execution and print timing report
   :clear                 Clear the screen
   :quit, :q              Exit the REPL
 
