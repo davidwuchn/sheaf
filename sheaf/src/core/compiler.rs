@@ -84,6 +84,9 @@ pub struct CompilerContext {
     /// When true, skip VMFB loading (used during sheaf build --trace-with)
     pub disable_vmfb: bool,
 
+    /// Directories already checked for VMFB loading (prevents duplicate warnings)
+    pub checked_vmfb_dirs: HashSet<PathBuf>,
+
     /// Macro expansion engine
     pub macro_engine: MacroEngine,
 }
@@ -188,6 +191,7 @@ impl CompilerContext {
             current_dir: None,
             vmfb_sessions: Vec::new(),
             disable_vmfb: false,
+            checked_vmfb_dirs: HashSet::new(),
             macro_engine: MacroEngine::new(),
         }
     }

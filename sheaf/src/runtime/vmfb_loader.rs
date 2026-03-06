@@ -33,6 +33,12 @@ pub fn try_load_vmfb(
     }
     let dir = shf_path.parent().unwrap_or_else(|| Path::new("."));
 
+    // Skip if we already checked this directory (prevents duplicate warnings)
+    let canon_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    if !compiler.checked_vmfb_dirs.insert(canon_dir) {
+        return false;
+    }
+
     // Filter to pure functions only
     let pure_fns: Vec<String> = candidate_fns
         .iter()
