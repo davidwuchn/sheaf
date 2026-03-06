@@ -252,6 +252,10 @@ fn run_repl() {
     repl::run();
 }
 
+fn compact_type(mlir: &str) -> &str {
+    if mlir.len() <= 80 { mlir } else { &mlir[..80] }
+}
+
 fn run_build(args: &[String]) {
     use std::fs;
     use std::path::PathBuf;
@@ -277,7 +281,7 @@ Compile all pure functions from .shf files into a single VMFB artifact.
     --config JSON       Shape config for dict params (manual)
     --trace-with FILE   Interpret FILE to discover shapes automatically
     --backend B         IREE target backend (default: llvm-cpu)
-    -v, --verbose       Verbose output
+    -v, --verbose       Verbose output (full verbosity: -vv)
 
 Examples:
     sheaf build                         Compile all .shf in current dir
@@ -296,7 +300,7 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
     let mut emit_mlir_only = false;
     let mut recursive = false;
     let mut backend = "llvm-cpu".to_string();
-    let mut verbose = false;
+    let mut verbosity: u8 = 0;
     let mut config_json: Option<serde_json::Value> = None;
     let mut trace_with: Option<PathBuf> = None;
 
@@ -321,7 +325,8 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
                 }
                 backend = args[i].clone();
             }
-            "-v" | "--verbose" => verbose = true,
+            "-v" | "--verbose" => verbosity += 1,
+            "-vv" => verbosity = 2,
             "--config" => {
                 i += 1;
                 if i >= args.len() {
@@ -477,14 +482,14 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         exit(1);
     }
 
-    let extra_decls = resolve_vag_decls(&compiler, &all_compiled_exprs, verbose);
+    let extra_decls = resolve_vag_decls(&compiler, &all_compiled_exprs, verbosity);
 
     let mut all_decls = extra_decls;
 
     // Trace-driven shape discovery: interpret the runner file to observe concrete arg shapes
     let (traced_configs, traced_constants) = match trace_with {
         Some(runner_path) => {
-            let (configs, constants) = trace_with_runner(&runner_path, &compiler, &all_fn_names, verbose);
+            let (configs, constants) = trace_with_runner(&runner_path, &compiler, &all_fn_names, verbosity);
             (Some(configs), constants)
         }
         None => (None, std::collections::HashMap::new()),
@@ -598,8 +603,11 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
                 }
             };
             let index_map = build_index_map(param_config);
-            if verbose {
-                println!("  Lowering '{}' param '{}' → {}", name, param_name, tuple_ty.to_mlir());
+            if verbosity >= 1 {
+                let ty_str = tuple_ty.to_mlir();
+                let display = if verbosity >= 2 { &ty_str } else { compact_type(&ty_str) };
+                println!("  Lowering '{}' param '{}' → {}{}", name, param_name,
+                    display, if verbosity < 2 && ty_str.len() > 80 { "…" } else { "" });
             }
             body = lower_get_calls(&body, param_name, &index_map);
             param_index_maps.push((param_name.clone(), index_map));
@@ -614,8 +622,11 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
                     if known_types.iter().any(|(n, _)| n == param_name) {
                         continue;
                     }
-                    if verbose {
-                        println!("  Traced '{}' param '{}' → {}", name, param_name, tuple_ty.to_mlir());
+                    if verbosity >= 1 {
+                        let ty_str = tuple_ty.to_mlir();
+                        let display = if verbosity >= 2 { &ty_str } else { compact_type(&ty_str) };
+                        println!("  Traced '{}' param '{}' → {}{}", name, param_name,
+                            display, if verbosity < 2 && ty_str.len() > 80 { "…" } else { "" });
                     }
                     body = lower_get_calls(&body, param_name, index_map);
                     param_index_maps.push((param_name.clone(), index_map.clone()));
@@ -662,7 +673,7 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         // Also folds (shape X) → [d0, d1, ...] and (get [d0, d1] -2) → Integer(d)
         let empty_consts = std::collections::HashMap::new();
         let fn_consts = traced_constants.get(name.as_str()).unwrap_or(&empty_consts);
-        if verbose && !fn_consts.is_empty() {
+        if verbosity >= 1 && !fn_consts.is_empty() {
             for ((p, idx), val) in fn_consts {
                 println!("  const: '{}'.{}[{:?}] = {}", name, p, idx, val);
             }
@@ -733,7 +744,7 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
                     .find(|(_, names)| names.contains(name))
                     .map(|(p, _)| p.display().to_string())
                     .unwrap_or_else(|| "?".to_string());
-                let reason = if verbose {
+                let reason = if verbosity >= 1 {
                     format!("codegen: {}", e)
                 } else {
                     "codegen error (use -v for details)".to_string()
@@ -807,7 +818,7 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         exit(1);
     });
 
-    if verbose {
+    if verbosity >= 1 {
         eprintln!("running iree-compile ({})...", iree_compile);
     }
 
@@ -832,7 +843,7 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
     }
 
     // Write manifest with function hashes
-    write_manifest(&output, &compiled_functions, verbose);
+    write_manifest(&output, &compiled_functions, verbosity);
 
     eprintln!("{} compiled, {} interpreted → {}", n_compiled, n_interpreted, output.display());
 }
@@ -848,7 +859,7 @@ struct ManifestEntry {
 
 /// Write manifest.json alongside the VMFB with hashes and inferred signatures.
 /// Used by `sheaf run` and `(use)` to detect stale artifacts and load signatures.
-fn write_manifest(vmfb_path: &std::path::Path, functions: &[ManifestEntry], verbose: bool) {
+fn write_manifest(vmfb_path: &std::path::Path, functions: &[ManifestEntry], verbosity: u8) {
     let dir = vmfb_path.parent().unwrap_or(std::path::Path::new("."));
     let manifest_path = dir.join("manifest.json");
     let vmfb_name = vmfb_path.file_name()
@@ -879,7 +890,7 @@ fn write_manifest(vmfb_path: &std::path::Path, functions: &[ManifestEntry], verb
     let json = serde_json::to_string_pretty(&serde_json::Value::Object(map)).unwrap();
     if let Err(e) = std::fs::write(&manifest_path, &json) {
         eprintln!("warning: could not write manifest '{}': {}", manifest_path.display(), e);
-    } else if verbose {
+    } else if verbosity >= 1 {
         eprintln!("Wrote {}", manifest_path.display());
     }
 }
@@ -901,7 +912,7 @@ fn trace_with_runner(
     runner_path: &std::path::Path,
     compiler: &sheaf_compiler::core::compiler::CompilerContext,
     target_fns: &[String],
-    verbose: bool,
+    verbosity: u8,
 ) -> (TracedConfigs, TracedConstants) {
     use std::collections::HashMap;
     use sheaf_compiler::compiler::layout_to_index_map;
@@ -924,7 +935,7 @@ fn trace_with_runner(
         &source,
     );
 
-    if verbose {
+    if verbosity >= 1 {
         println!("Tracing with '{}'...", runner_path.display());
     }
 
@@ -983,7 +994,7 @@ fn trace_with_runner(
         let record = match records.get(fn_name) {
             Some(r) => r,
             None => {
-                if verbose {
+                if verbosity >= 1 {
                     eprintln!("  trace: no call recorded for '{}' — skipping", fn_name);
                 }
                 continue;
@@ -1003,9 +1014,12 @@ fn trace_with_runner(
             // If the arg is a Dict, generate a ParamLayout + index_map for lowering
             if let Some(layout) = value_to_param_layout(param_name, arg_val) {
                 let tuple_ty = sheaf_compiler::forms::ml::param_layout_to_stablehlo_type(&layout);
-                if verbose {
-                    println!("  trace: '{}' param '{}' → {} (dict with {} fields)",
-                        fn_name, param_name, tuple_ty.to_mlir(), layout.fields.len());
+                if verbosity >= 1 {
+                    let ty_str = tuple_ty.to_mlir();
+                    let display = if verbosity >= 2 { &ty_str } else { compact_type(&ty_str) };
+                    println!("  trace: '{}' param '{}' → {}{} ({} fields)",
+                        fn_name, param_name, display,
+                        if verbosity < 2 && ty_str.len() > 80 { "…" } else { "" }, layout.fields.len());
                 }
                 let imap = layout_to_index_map(&layout);
                 // Extract scalar constants from config-like dicts (all-scalar values)
@@ -1046,9 +1060,12 @@ fn trace_with_runner(
                         }
                     }
                 }
-                if verbose {
-                    println!("  trace: '{}' param '{}' → {} (dict with lists, {} keys)",
-                        fn_name, param_name, ty.to_mlir(), imap.len());
+                if verbosity >= 1 {
+                    let ty_str = ty.to_mlir();
+                    let display = if verbosity >= 2 { &ty_str } else { compact_type(&ty_str) };
+                    println!("  trace: '{}' param '{}' → {}{} ({} keys)",
+                        fn_name, param_name, display,
+                        if verbosity < 2 && ty_str.len() > 80 { "…" } else { "" }, imap.len());
                 }
                 extract_scalar_constants(arg_val, param_name, &imap, &mut fn_constants);
                 imap
@@ -1056,8 +1073,11 @@ fn trace_with_runner(
                 std::collections::BTreeMap::new()
             };
 
-            if verbose {
-                println!("  trace: '{}' param '{}' → {}", fn_name, param_name, ty.to_mlir());
+            if verbosity >= 1 {
+                let ty_str = ty.to_mlir();
+                let display = if verbosity >= 2 { &ty_str } else { compact_type(&ty_str) };
+                println!("  trace: '{}' param '{}' → {}{}", fn_name, param_name,
+                    display, if verbosity < 2 && ty_str.len() > 80 { "…" } else { "" });
             }
             fn_configs.push((param_name.clone(), ty, index_map));
         }
@@ -1528,7 +1548,7 @@ fn run_init_ai() {
 fn resolve_vag_decls(
     compiler: &sheaf_compiler::core::compiler::CompilerContext,
     compiled_exprs: &[sheaf_compiler::core::compiler::CompiledExpr],
-    verbose: bool,
+    verbosity: u8,
 ) -> Vec<String> {
     use sheaf_compiler::autodiff::value_and_grad::{GradParam, emit_value_and_grad_func};
     use sheaf_compiler::core::inference::infer_function_signature_with_known;
@@ -1612,7 +1632,7 @@ fn resolve_vag_decls(
             })
             .collect();
 
-        if verbose {
+        if verbosity >= 1 {
             println!("Emitting value-and-grad '{}'...", fn_name);
         }
 
