@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::Mutex;
 
 use crate::core::error::SheafError;
 use crate::interpreter::value::{Dtype, Value};
@@ -26,11 +28,90 @@ unsafe fn libc_stderr() -> *mut c_void {
     }
 }
 
+/// Lightweight fingerprint for detecting tensor changes between calls.
+/// Stores shape + 4 spread-sampled elements (as exact f64 bits).
+struct TensorFingerprint {
+    shape: Vec<usize>,
+    num_elems: usize,
+    sample: [u64; 4],
+}
+
+impl TensorFingerprint {
+    /// Build a fingerprint from a value (allocates shape Vec). Use only on cache miss.
+    fn from_value(val: &Value) -> Option<Self> {
+        match val {
+            Value::Tensor { data, .. } => {
+                let shape = data.shape().to_vec();
+                let num_elems = data.len();
+                let sample = Self::sample_tensor(data);
+                Some(Self { shape, num_elems, sample })
+            }
+            Value::Float(f) => Some(Self {
+                shape: vec![],
+                num_elems: 1,
+                sample: [f.to_bits(), 0, 0, 0],
+            }),
+            Value::Int(n) => Some(Self {
+                shape: vec![],
+                num_elems: 1,
+                sample: [(*n as f64).to_bits(), 0, 0, 0],
+            }),
+            _ => None,
+        }
+    }
+
+    /// Check if a value matches this fingerprint without allocating.
+    fn matches(&self, val: &Value) -> bool {
+        match val {
+            Value::Tensor { data, .. } => {
+                let n = data.len();
+                n == self.num_elems
+                    && data.shape() == self.shape.as_slice()
+                    && Self::sample_tensor(data) == self.sample
+            }
+            Value::Float(f) => self.num_elems == 1 && self.sample[0] == f.to_bits(),
+            Value::Int(n) => self.num_elems == 1 && self.sample[0] == (*n as f64).to_bits(),
+            _ => false,
+        }
+    }
+
+    fn sample_tensor(data: &ArrayD<f64>) -> [u64; 4] {
+        let n = data.len();
+        let mut sample = [0u64; 4];
+        if n == 0 { return sample; }
+        if n <= 4 {
+            for (i, &x) in data.iter().take(4).enumerate() {
+                sample[i] = x.to_bits();
+            }
+        } else if let Some(slice) = data.as_slice() {
+            let indices = [0, n / 4, 3 * n / 4, n - 1];
+            for (i, &idx) in indices.iter().enumerate() {
+                sample[i] = slice[idx].to_bits();
+            }
+        } else {
+            let flat: Vec<f64> = data.iter().copied().collect();
+            let indices = [0, n / 4, 3 * n / 4, n - 1];
+            for (i, &idx) in indices.iter().enumerate() {
+                sample[i] = flat[idx].to_bits();
+            }
+        }
+        sample
+    }
+}
+
+struct CachedBufferView {
+    fingerprint: TensorFingerprint,
+    bv: *mut iree_hal_buffer_view_t,
+}
+
 pub struct IreeSession {
     instance: *mut iree_runtime_instance_t,
     device: *mut iree_hal_device_t,
     session: *mut iree_runtime_session_t,
     _vmfb_data: Option<Vec<u8>>,
+    /// Per-function buffer view cache: fn_name -> per-position cached buffer views.
+    /// Static arguments (e.g. model weights) are allocated once and reused across calls.
+    buffer_cache: Mutex<HashMap<String, Vec<Option<CachedBufferView>>>>,
 }
 
 unsafe impl Send for IreeSession {}
@@ -82,6 +163,7 @@ impl IreeSession {
                 device,
                 session,
                 _vmfb_data: None,
+                buffer_cache: Mutex::new(HashMap::new()),
             })
         }
     }
@@ -124,16 +206,49 @@ impl IreeSession {
                 return Err(iree_err("failed to create input list"));
             }
 
-            for val in &flat_inputs {
-                let bv = value_to_buffer_view(device, device_alloc, val)?;
-                let ref_ = iree_hal_buffer_view_retain_ref(bv);
+            // Build input buffer views with caching.
+            // Static arguments (model weights) are fingerprinted and reused across calls.
+            let mut cache = self.buffer_cache.lock().unwrap();
+            // Avoid String allocation on cache hit: try get_mut first
+            let cached_fn = match cache.get_mut(fn_name) {
+                Some(c) => c,
+                None => cache.entry(fn_name.to_string()).or_default(),
+            };
+            // Ensure cache vec is large enough
+            cached_fn.resize_with(cached_fn.len().max(flat_inputs.len()), || None);
+
+            for (i, val) in flat_inputs.iter().enumerate() {
+                // Check cache without allocating a fingerprint
+                let is_cached = cached_fn[i]
+                    .as_ref()
+                    .map_or(false, |entry| entry.fingerprint.matches(val));
+
+                let bv = if is_cached {
+                    cached_fn[i].as_ref().unwrap().bv
+                } else {
+                    // Cache miss: allocate new buffer view + fingerprint
+                    let new_bv = value_to_buffer_view(device, device_alloc, val)?;
+                    if let Some(old) = cached_fn[i].take() {
+                        iree_hal_buffer_view_release(old.bv);
+                    }
+                    if let Some(fp) = TensorFingerprint::from_value(val) {
+                        cached_fn[i] = Some(CachedBufferView { fingerprint: fp, bv: new_bv });
+                    }
+                    new_bv
+                };
+
+                // Create a VM ref for the input list (retains the buffer view)
+                let mut ref_ = iree_hal_buffer_view_retain_ref(bv);
                 let status = iree_vm_list_push_ref_retain(input_list, &ref_);
-                iree_hal_buffer_view_release(bv);
+                iree_vm_ref_release(&mut ref_);
                 if !iree_status_is_ok(status) {
                     iree_vm_list_release(input_list);
                     return Err(iree_err("failed to push input to list"));
                 }
             }
+
+            // Drop cache lock before the IREE call
+            drop(cache);
 
             let mut output_list: *mut iree_vm_list_t = std::ptr::null_mut();
             let status =
@@ -168,7 +283,7 @@ impl IreeSession {
                 }
                 let bv = ref_.ptr as *mut iree_hal_buffer_view_t;
                 let val = buffer_view_to_value(bv)?;
-                iree_hal_buffer_view_release(bv);
+                iree_vm_ref_release(&mut ref_);
                 results.push(val);
             }
             iree_vm_list_release(output_list);
@@ -204,6 +319,14 @@ impl IreeSession {
 impl Drop for IreeSession {
     fn drop(&mut self) {
         unsafe {
+            // Release all cached buffer views before tearing down the session
+            if let Ok(cache) = self.buffer_cache.lock() {
+                for entries in cache.values() {
+                    for entry in entries.iter().flatten() {
+                        iree_hal_buffer_view_release(entry.bv);
+                    }
+                }
+            }
             if !self.session.is_null() {
                 iree_runtime_session_release(self.session);
             }
@@ -447,10 +570,11 @@ fn collect_value_shapes(val: &Value, out: &mut Vec<Vec<i64>>) {
     }
 }
 
-/// Flatten a list of values into individual tensor leaves.
+/// Flatten a list of values into individual tensor leaf references.
 /// Dicts are sorted by key (matching codegen convention), then recursed.
 /// Tuples are recursed. Scalars/tensors pass through.
-fn flatten_values(inputs: &[Value]) -> Result<Vec<Value>, SheafError> {
+/// Returns references to avoid cloning tensor data.
+fn flatten_values<'a>(inputs: &'a [Value]) -> Result<Vec<&'a Value>, SheafError> {
     let mut flat = Vec::new();
     for val in inputs {
         flatten_value(val, &mut flat)?;
@@ -458,7 +582,7 @@ fn flatten_values(inputs: &[Value]) -> Result<Vec<Value>, SheafError> {
     Ok(flat)
 }
 
-fn flatten_value(val: &Value, out: &mut Vec<Value>) -> Result<(), SheafError> {
+fn flatten_value<'a>(val: &'a Value, out: &mut Vec<&'a Value>) -> Result<(), SheafError> {
     match val {
         Value::Dict(map) => {
             // Keys are already sorted (BTreeMap)
@@ -474,7 +598,7 @@ fn flatten_value(val: &Value, out: &mut Vec<Value>) -> Result<(), SheafError> {
             Ok(())
         }
         Value::Tensor { .. } | Value::Float(_) | Value::Int(_) => {
-            out.push(val.clone());
+            out.push(val);
             Ok(())
         }
         _ => Err(iree_err(&format!(
