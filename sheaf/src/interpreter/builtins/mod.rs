@@ -5,6 +5,7 @@
 
 mod arithmetic;
 mod activations;
+pub(crate) mod pickle;
 mod comparison;
 mod reductions;
 mod tensor_ops;

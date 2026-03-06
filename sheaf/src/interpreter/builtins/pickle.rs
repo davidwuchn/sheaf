@@ -45,6 +45,7 @@ enum NpDtype {
 }
 
 impl NpDtype {
+    #[allow(dead_code)]
     fn byte_size(self) -> usize {
         match self {
             NpDtype::F64 | NpDtype::I64 => 8,

@@ -223,7 +223,7 @@ fn builtin_io(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 .map_err(|e| runtime_error(format!("io load '{}': {}", path, e)))?;
             // Detect format: pickle (0x80) vs JSON ('{')
             if data.first() == Some(&0x80) {
-                return crate::interpreter::pickle::load_pickle_bytes(&data);
+                return super::pickle::load_pickle_bytes(&data);
             }
             let json: serde_json::Value = serde_json::from_slice(&data)
                 .map_err(|e| runtime_error(format!("io load: parse '{}': {}", path, e)))?;
