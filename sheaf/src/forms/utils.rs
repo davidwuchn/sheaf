@@ -27,7 +27,7 @@ impl SpecialForm for QuoteForm {
     }
 }
 
-/// get - Map/vector access: (get coll key) or (get coll key default)
+/// get - Map/vector access: (get coll key) or (get coll :k1 :k2)
 pub struct GetForm;
 
 impl SpecialForm for GetForm {
@@ -61,6 +61,21 @@ impl SpecialForm for GetInForm {
         args: &[SheafValue],
         _loc: &SourceLocation,
     ) -> SheafResult<CompiledExpr> {
+        // Desugar (get-in m [:k1 :k2 :k3]) → (get (get (get m :k1) :k2) :k3)
+        if args.len() == 2 {
+            if let SheafValue::Vector(keys, _) = &args[1] {
+                let mut result = compiler.compile(&args[0])?;
+                for key in keys {
+                    let compiled_key = compiler.compile(key)?;
+                    result = CompiledExpr::FunctionCall {
+                        name: "get".to_string(),
+                        args: vec![result, compiled_key],
+                    };
+                }
+                return Ok(result);
+            }
+        }
+        // Fallback: compile as function call
         let compiled: SheafResult<Vec<CompiledExpr>> =
             args.iter().map(|a| compiler.compile(a)).collect();
         Ok(CompiledExpr::FunctionCall { name: "get-in".to_string(), args: compiled? })
