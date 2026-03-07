@@ -24,7 +24,6 @@ use crate::compiler::transforms::{
 use crate::core::compiler::{FunctionDef, VmfbSession};
 use crate::core::inference::{infer_function_signature_with_known, FunctionSignature};
 use crate::core::trace::{value_to_param_layout, value_to_stablehlo_type};
-use crate::forms::ml::param_layout_to_stablehlo_type;
 use crate::interpreter::value::Value;
 use crate::StableHLOType;
 
@@ -95,22 +94,22 @@ impl JitCompiler {
         let mut constants: HashMap<(String, Vec<usize>), f64> = HashMap::new();
 
         for (param_name, arg_val) in func_def.params.iter().zip(args) {
+            let ty = match value_to_stablehlo_type(arg_val) {
+                Ok(ty) => ty,
+                Err(e) => {
+                    self.jit_fail(name, &format!("type inference: {}", e));
+                    return None;
+                }
+            };
+
             if let Some(layout) = value_to_param_layout(param_name, arg_val) {
-                let tuple_ty = param_layout_to_stablehlo_type(&layout);
                 let imap = layout_to_index_map(&layout);
                 extract_scalar_constants(arg_val, param_name, &imap, &mut constants);
                 body = lower_get_calls(&body, param_name, &imap);
                 param_index_maps.push((param_name.clone(), imap));
-                known_types.push((param_name.clone(), tuple_ty));
-            } else {
-                match value_to_stablehlo_type(arg_val) {
-                    Ok(ty) => known_types.push((param_name.clone(), ty)),
-                    Err(e) => {
-                        self.jit_fail(name, &format!("type inference: {}", e));
-                        return None;
-                    }
-                }
             }
+
+            known_types.push((param_name.clone(), ty));
         }
 
         // Signature inference
