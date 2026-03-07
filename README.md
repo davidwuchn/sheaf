@@ -1,15 +1,20 @@
-<img width="479" height="154" alt="Screenshot 2026-01-27 at 22 55 15" src="https://github.com/user-attachments/assets/b79b4f7f-dc77-459e-a3a6-987bda4e70f2" />
+<img width="479" height="154" alt="Sheaf" src="https://github.com/user-attachments/assets/b79b4f7f-dc77-459e-a3a6-987bda4e70f2" />
 
 Sheaf is a functional language for differentiable computation.
-It is inspired by Clojure and is designed to operate within the Python/JAX machine learning ecosystem.
+Inspired by Clojure, it compiles to [StableHLO](https://github.com/openxla/stablehlo) and runs on CPU, Metal GPU, and CUDA via [IREE](https://github.com/iree-org/iree).
 
-Sheaf has three main goals:
+Sheaf ships as a **single native binary** with zero runtime dependencies.
 
-- Clojure Paradigm: Homoiconicity (code is data), immutability and minimalist syntax.
-- Native XLA Performance: Sheaf code runs on GPUs/TPUs through JAX.
-- Seamless Interop with Python: Compiled to pure JAX functions natively callable from Python.
+> **Note:** This is Sheaf V2, a ground-up rewrite in Rust replacing the original Python/JAX implementation while keeping the language and syntax. The [website](http://sheaf-lang.org/) will be updated as V2 stabilizes.
 
-### Sample code:
+### Goals
+
+- **Clojure paradigm**: homoiconicity, immutability, minimalist syntax
+- **Native hardware performance**: compiles to StableHLO, executes via IREE on CPU/GPU/TPU
+- **JIT compilation**: pure functions are automatically compiled and dispatched to the best available device
+- **Symbolic autodiff**: reverse-mode automatic differentiation on the AST, before compilation
+
+### Sample code
 
 ```clojure
 (defn transformer-block [x layer-p config]
@@ -26,16 +31,21 @@ Sheaf has three main goals:
         (+ h)))) ;; Residual 2
 ```
 
-### Python interoperability
+### Architecture
 
-```python
-from sheaf import Sheaf
-shf = Sheaf("mlp.shf")
-
-for x, y in zip(X, shf.forward(X, params)):
-    print(f"  {x} -> {y[0]:.3f}")
+```
+Sheaf source (.shf)
+  --> Parser --> AST
+  --> Type inference
+  --> StableHLO codegen (MLIR)
+  --> IREE compiler (VMFB)
+  --> IREE runtime (CPU / Metal / CUDA)
 ```
 
+The interpreter handles effectful operations (I/O, randomness) while pure numerical functions are JIT-compiled to IREE for hardware-accelerated execution.
+
+### Links
+
 - [Website](http://sheaf-lang.org/)
-- [Reference documentation](http://sheaf-lang.org/starting/)
-- [Quick Start guide](http://sheaf-lang.org/reference/)
+- [Documentation](http://sheaf-lang.org/starting/)
+- [Reference](http://sheaf-lang.org/reference/)
