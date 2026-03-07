@@ -48,6 +48,7 @@ impl JitCompiler {
         args: &[Value],
         registry: &HashMap<String, FunctionDef>,
         vmfb_sessions: &mut Vec<VmfbSession>,
+        target_backend: &str,
     ) -> Option<(usize, FunctionSignature)> {
         let iree_compile = self.iree_compile_path.as_ref()?;
         let name = &func_def.name;
@@ -74,7 +75,7 @@ impl JitCompiler {
             return None;
         }
 
-        self.compile_function(iree_compile.clone(), func_def, args, registry, vmfb_sessions)
+        self.compile_function(iree_compile.clone(), func_def, args, registry, vmfb_sessions, target_backend)
     }
 
     fn compile_function(
@@ -84,6 +85,7 @@ impl JitCompiler {
         args: &[Value],
         registry: &HashMap<String, FunctionDef>,
         vmfb_sessions: &mut Vec<VmfbSession>,
+        target_backend: &str,
     ) -> Option<(usize, FunctionSignature)> {
         let name = &func_def.name;
         let mut body = func_def.body_compiled.clone()?;
@@ -242,7 +244,7 @@ impl JitCompiler {
 
         let status = std::process::Command::new(&iree_compile)
             .arg(&mlir_path)
-            .arg("--iree-hal-target-backends=llvm-cpu")
+            .arg(format!("--iree-hal-target-backends={}", target_backend))
             .arg("-o")
             .arg(&vmfb_path)
             .stderr(stderr_cfg)

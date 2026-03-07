@@ -116,6 +116,8 @@ pub struct IreeSession {
     device: *mut iree_hal_device_t,
     session: *mut iree_runtime_session_t,
     _vmfb_data: Option<Vec<u8>>,
+    /// HAL driver name: "metal", "local-task", etc.
+    driver_name: String,
     /// Per-function buffer view cache: fn_name -> per-position cached buffer views.
     /// Static arguments (e.g. model weights) are allocated once and reused across calls.
     buffer_cache: Mutex<HashMap<String, Vec<Option<CachedBufferView>>>>,
@@ -148,13 +150,37 @@ impl IreeSession {
                 return Err(iree_err("failed to create IREE instance"));
             }
 
-            let driver = iree_string_view_t::from_str("local-task");
+            // Try drivers in preference order: GPU > CPU
+            // SHEAF_DEVICE overrides: "cpu", "metal", "cuda", "vulkan", etc.
+            let device_override = std::env::var("SHEAF_DEVICE").ok();
+            let driver_names: Vec<&str> = match device_override.as_deref() {
+                Some("cpu") => vec!["local-task"],
+                Some(d) => vec![d, "local-task"],
+                None => vec!["cuda", "metal", "vulkan", "local-task"],
+            };
             let mut device: *mut iree_hal_device_t = std::ptr::null_mut();
-            let status =
-                iree_runtime_instance_try_create_default_device(instance, driver, &mut device);
-            if !iree_status_is_ok(status) {
+            let mut chosen_driver = "";
+            let verbose = std::env::var("SHEAF_JIT_VERBOSE").is_ok();
+            for name in &driver_names {
+                let driver = iree_string_view_t::from_str(name);
+                let status =
+                    iree_runtime_instance_try_create_default_device(instance, driver, &mut device);
+                if iree_status_is_ok(status) {
+                    chosen_driver = name;
+                    break;
+                } else if verbose {
+                    eprintln!("iree: driver '{}' not available", name);
+                }
+            }
+            if device.is_null() {
                 iree_runtime_instance_release(instance);
-                return Err(iree_err("failed to create local-task device"));
+                let tried = driver_names.join(", ");
+                return Err(iree_err(&format!(
+                    "failed to create IREE device (tried: {})", tried
+                )));
+            }
+            if chosen_driver != "local-task" {
+                eprintln!("iree: using {} device", chosen_driver);
             }
 
             let mut session_opts: iree_runtime_session_options_t = std::mem::zeroed();
@@ -179,6 +205,7 @@ impl IreeSession {
                 device,
                 session,
                 _vmfb_data: None,
+                driver_name: chosen_driver.to_string(),
                 buffer_cache: Mutex::new(HashMap::new()),
                 profile: std::env::var("SHEAF_PROFILE_IREE").is_ok(),
                 t_flatten_ns: AtomicU64::new(0),
@@ -190,6 +217,21 @@ impl IreeSession {
                 n_cache_misses: AtomicU64::new(0),
             })
         }
+    }
+
+    /// Returns the iree-compile target backend for the active HAL driver.
+    pub fn target_backend(&self) -> &str {
+        match self.driver_name.as_str() {
+            "metal" => "metal-spirv",
+            "vulkan" => "vulkan-spirv",
+            "cuda" => "cuda",
+            _ => "llvm-cpu",
+        }
+    }
+
+    /// Returns the HAL driver name ("metal", "local-task", etc.)
+    pub fn driver_name(&self) -> &str {
+        &self.driver_name
     }
 
     pub fn load_vmfb(&mut self, data: Vec<u8>) -> Result<(), SheafError> {
