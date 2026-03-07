@@ -35,7 +35,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: iree-install
-          key: iree-runtime-${{ env.IREE_VERSION }}-${{ matrix.target }}
+          key: iree-runtime-${{ env.IREE_VERSION }}-${{ matrix.target }}-v2
 
       - name: Install cross-compilation toolchain (linux-aarch64)
         if: steps.cache-iree.outputs.cache-hit != 'true' && matrix.target == 'linux-aarch64'
@@ -79,6 +79,11 @@ jobs:
           if [[ "${{ matrix.target }}" == "linux-aarch64" ]]; then
             EXTRA_FLAGS="$EXTRA_FLAGS -DIREE_HOST_BIN_DIR=${{ github.workspace }}/iree-host-install/bin"
           fi
+          # Enable Metal HAL driver on macOS
+          METAL_FLAG=""
+          if [[ "${{ matrix.os }}" == macos-* ]]; then
+            METAL_FLAG="-DIREE_HAL_DRIVER_METAL=ON"
+          fi
           cmake -G Ninja -B iree-build -S iree \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/iree-install \
@@ -88,6 +93,7 @@ jobs:
             -DIREE_HAL_DRIVER_LOCAL_SYNC=ON \
             -DIREE_HAL_DRIVER_LOCAL_TASK=ON \
             -DIREE_HAL_DRIVER_VULKAN=OFF \
+            $METAL_FLAG \
             $EXTRA_FLAGS
           cmake --build iree-build --target iree_runtime_unified
           mkdir -p iree-install/lib
@@ -153,18 +159,18 @@ jobs:
           linker = "${{ matrix.linker }}"
           TOML
           fi
-          cd rust
+          cd sheaf
           cargo build --release --target ${{ matrix.rust_target }}
 
       - name: Strip and package
         run: |
-          BIN=rust/target/${{ matrix.rust_target }}/release/sheaf
+          BIN=sheaf/target/${{ matrix.rust_target }}/release/sheaf
           if [[ "${{ matrix.target }}" == linux-aarch64 ]]; then
             aarch64-linux-gnu-strip "$BIN"
           else
             strip "$BIN"
           fi
-          tar czf sheaf-${{ matrix.target }}.tar.gz -C rust/target/${{ matrix.rust_target }}/release sheaf
+          tar czf sheaf-${{ matrix.target }}.tar.gz -C sheaf/target/${{ matrix.rust_target }}/release sheaf
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
