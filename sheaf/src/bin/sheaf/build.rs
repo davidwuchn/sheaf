@@ -607,7 +607,12 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
     }
 
     // VMFB path — requires iree-compile
-    let iree_compile = find_iree_compile();
+    let iree_compile = sheaf_compiler::runtime::jit::find_iree_compile().unwrap_or_else(|| {
+        eprintln!("error: 'sheaf build' requires the Sheaf SDK (iree-compile not found)");
+        eprintln!("  Install the SDK or set IREE_COMPILE=/path/to/iree-compile");
+        eprintln!("  To emit MLIR only (no SDK): sheaf build FILE -o FILE.mlir -S");
+        exit(1);
+    });
 
     // Write intermediate MLIR to a temp file
     let mlir_path = output.with_extension("mlir");
@@ -715,37 +720,3 @@ fn collect_shf_files(dir: &std::path::Path, recursive: bool) -> Vec<std::path::P
     files
 }
 
-fn find_iree_compile() -> String {
-    // 1. Explicit env var
-    if let Ok(path) = std::env::var("IREE_COMPILE") {
-        return path;
-    }
-    // 2. Standard SDK install location
-    if let Ok(home) = std::env::var("HOME") {
-        let candidate = format!("{}/bin/iree-build/tools/iree-compile", home);
-        if std::path::Path::new(&candidate).exists() {
-            return candidate;
-        }
-    }
-    // 3. PATH
-    if let Some(path) = which("iree-compile") {
-        return path;
-    }
-    eprintln!("error: 'sheaf build' requires the Sheaf SDK (iree-compile not found)");
-    eprintln!("  Install the SDK or set IREE_COMPILE=/path/to/iree-compile");
-    eprintln!("  To emit MLIR only (no SDK): sheaf build FILE -o FILE.mlir -S");
-    exit(1);
-}
-
-fn which(name: &str) -> Option<String> {
-    std::env::var("PATH").ok().and_then(|path_var| {
-        path_var.split(':').find_map(|dir| {
-            let candidate = format!("{}/{}", dir, name);
-            if std::path::Path::new(&candidate).exists() {
-                Some(candidate)
-            } else {
-                None
-            }
-        })
-    })
-}
