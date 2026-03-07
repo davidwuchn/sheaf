@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::core::error::SheafError;
@@ -118,6 +119,15 @@ pub struct IreeSession {
     /// Per-function buffer view cache: fn_name -> per-position cached buffer views.
     /// Static arguments (e.g. model weights) are allocated once and reused across calls.
     buffer_cache: Mutex<HashMap<String, Vec<Option<CachedBufferView>>>>,
+    /// Dispatch timing (nanoseconds, accumulated). Enabled by SHEAF_PROFILE_IREE=1.
+    profile: bool,
+    t_flatten_ns: AtomicU64,
+    t_buffers_ns: AtomicU64,
+    t_call_ns: AtomicU64,
+    t_output_ns: AtomicU64,
+    n_calls: AtomicU64,
+    n_cache_hits: AtomicU64,
+    n_cache_misses: AtomicU64,
 }
 
 unsafe impl Send for IreeSession {}
@@ -170,6 +180,14 @@ impl IreeSession {
                 session,
                 _vmfb_data: None,
                 buffer_cache: Mutex::new(HashMap::new()),
+                profile: std::env::var("SHEAF_PROFILE_IREE").is_ok(),
+                t_flatten_ns: AtomicU64::new(0),
+                t_buffers_ns: AtomicU64::new(0),
+                t_call_ns: AtomicU64::new(0),
+                t_output_ns: AtomicU64::new(0),
+                n_calls: AtomicU64::new(0),
+                n_cache_hits: AtomicU64::new(0),
+                n_cache_misses: AtomicU64::new(0),
             })
         }
     }
@@ -201,8 +219,12 @@ impl IreeSession {
             let device = iree_runtime_session_device(self.session);
             let device_alloc = iree_runtime_session_device_allocator(self.session);
 
+            let t0 = if self.profile { Some(std::time::Instant::now()) } else { None };
+
             // Flatten tuples/dicts into individual tensor leaves for IREE
             let flat_inputs = flatten_values(inputs)?;
+
+            let t1 = t0.map(|_| std::time::Instant::now());
 
             let mut input_list: *mut iree_vm_list_t = std::ptr::null_mut();
             let variant_type = iree_vm_type_def_t { value: 0 };
@@ -230,8 +252,10 @@ impl IreeSession {
                     .map_or(false, |entry| entry.fingerprint.matches(val));
 
                 let bv = if is_cached {
+                    if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
                     cached_fn[i].as_ref().unwrap().bv
                 } else {
+                    if self.profile { self.n_cache_misses.fetch_add(1, Ordering::Relaxed); }
                     // Cache miss: allocate new buffer view + fingerprint
                     let new_bv = value_to_buffer_view(device, device_alloc, val)?;
                     if let Some(old) = cached_fn[i].take() {
@@ -256,6 +280,8 @@ impl IreeSession {
             // Drop cache lock before the IREE call
             drop(cache);
 
+            let t2 = t0.map(|_| std::time::Instant::now());
+
             let mut output_list: *mut iree_vm_list_t = std::ptr::null_mut();
             let status =
                 iree_vm_list_create(variant_type, 16, alloc, &mut output_list);
@@ -278,6 +304,8 @@ impl IreeSession {
                 return Err(iree_err(&format!("IREE call '{}' failed", fn_name)));
             }
 
+            let t3 = t0.map(|_| std::time::Instant::now());
+
             let n_outputs = iree_vm_list_size(output_list);
             let mut results = Vec::with_capacity(n_outputs);
             for i in 0..n_outputs {
@@ -293,6 +321,15 @@ impl IreeSession {
                 results.push(val);
             }
             iree_vm_list_release(output_list);
+
+            if let (Some(t0), Some(t1), Some(t2), Some(t3)) = (t0, t1, t2, t3) {
+                let t4 = std::time::Instant::now();
+                self.t_flatten_ns.fetch_add((t1 - t0).as_nanos() as u64, Ordering::Relaxed);
+                self.t_buffers_ns.fetch_add((t2 - t1).as_nanos() as u64, Ordering::Relaxed);
+                self.t_call_ns.fetch_add((t3 - t2).as_nanos() as u64, Ordering::Relaxed);
+                self.t_output_ns.fetch_add((t4 - t3).as_nanos() as u64, Ordering::Relaxed);
+                self.n_calls.fetch_add(1, Ordering::Relaxed);
+            }
 
             match results.len() {
                 0 => Ok(Value::Nil),
@@ -324,6 +361,24 @@ impl IreeSession {
 
 impl Drop for IreeSession {
     fn drop(&mut self) {
+        if self.profile {
+            let n = self.n_calls.load(Ordering::Relaxed);
+            if n > 0 {
+                let flatten = self.t_flatten_ns.load(Ordering::Relaxed) as f64 / 1e6;
+                let buffers = self.t_buffers_ns.load(Ordering::Relaxed) as f64 / 1e6;
+                let call = self.t_call_ns.load(Ordering::Relaxed) as f64 / 1e6;
+                let output = self.t_output_ns.load(Ordering::Relaxed) as f64 / 1e6;
+                let total = flatten + buffers + call + output;
+                let hits = self.n_cache_hits.load(Ordering::Relaxed);
+                let misses = self.n_cache_misses.load(Ordering::Relaxed);
+                eprintln!("\nIREE dispatch profile ({} calls, {:.1}ms total):", n, total);
+                eprintln!("  flatten:  {:7.1}ms ({:4.1}%)", flatten, flatten / total * 100.0);
+                eprintln!("  buffers:  {:7.1}ms ({:4.1}%)  [hits: {}, misses: {}]",
+                    buffers, buffers / total * 100.0, hits, misses);
+                eprintln!("  call:     {:7.1}ms ({:4.1}%)", call, call / total * 100.0);
+                eprintln!("  output:   {:7.1}ms ({:4.1}%)", output, output / total * 100.0);
+            }
+        }
         unsafe {
             // Release all cached buffer views before tearing down the session
             if let Ok(cache) = self.buffer_cache.lock() {
