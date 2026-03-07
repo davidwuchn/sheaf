@@ -477,6 +477,9 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
                 if tracer.should_trace(name) {
                     tracer.log_compiled_dispatch(name);
                 }
+                if let Ok(ref val) = result {
+                    tracer.check_cli_guards(name, val);
+                }
             }
             if let Some(ref mut p) = env.profiler { p.exit(); }
             return result;
