@@ -16,6 +16,19 @@ pub type iree_vm_ref_type_t = usize;
 
 pub type iree_status_t = *mut c_void;
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct iree_timeout_t {
+    pub type_: u32,  // iree_timeout_type_t
+    pub nanos: i64,  // iree_time_t
+}
+
+impl iree_timeout_t {
+    pub fn infinite() -> Self {
+        Self { type_: 0, nanos: i64::MAX } // IREE_TIMEOUT_ABSOLUTE + IREE_TIME_INFINITE_FUTURE
+    }
+}
+
 pub const IREE_HAL_ELEMENT_TYPE_FLOAT_32: u32 = (0x21 << 24) | 32;
 pub const IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR: u32 = 1;
 pub const IREE_HAL_QUEUE_AFFINITY_ANY: u64 = u64::MAX;
@@ -206,12 +219,23 @@ unsafe extern "C" {
         view: *const iree_hal_buffer_view_t,
     ) -> iree_hal_element_type_t;
 
-    // Buffer read
+    // Buffer read (CPU-only, requires HOST_VISIBLE buffer)
     pub fn iree_hal_buffer_map_read(
         buf: *mut iree_hal_buffer_t,
         offset: iree_device_size_t,
         target: *mut c_void,
         len: iree_device_size_t,
+    ) -> iree_status_t;
+
+    // Device-to-host transfer (for GPU buffers)
+    pub fn iree_hal_device_transfer_d2h(
+        device: *mut iree_hal_device_t,
+        source: *mut iree_hal_buffer_t,
+        source_offset: iree_device_size_t,
+        target: *mut c_void,
+        data_length: iree_device_size_t,
+        flags: u32,
+        timeout: iree_timeout_t,
     ) -> iree_status_t;
 
     // VM list

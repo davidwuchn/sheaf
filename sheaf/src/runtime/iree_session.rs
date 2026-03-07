@@ -249,6 +249,8 @@ impl IreeSession {
                 null_alloc,
             );
             if !iree_status_is_ok(status) {
+                unsafe extern "C" { static __stderrp: *mut std::ffi::c_void; }
+                iree_status_fprint(__stderrp, status);
                 return Err(iree_err("failed to load VMFB module"));
             }
             Ok(())
@@ -358,7 +360,7 @@ impl IreeSession {
                     return Err(iree_err("failed to get output from list"));
                 }
                 let bv = ref_.ptr as *mut iree_hal_buffer_view_t;
-                let val = buffer_view_to_value(bv)?;
+                let val = buffer_view_to_value(device, bv)?;
                 iree_vm_ref_release(&mut ref_);
                 results.push(val);
             }
@@ -531,6 +533,7 @@ unsafe fn value_to_buffer_view(
 }
 
 unsafe fn buffer_view_to_value(
+    device: *mut iree_hal_device_t,
     bv: *mut iree_hal_buffer_view_t,
 ) -> Result<Value, SheafError> {
     unsafe {
@@ -552,13 +555,20 @@ unsafe fn buffer_view_to_value(
         let mut f32_buf: Vec<f32> = vec![0.0; n_elems];
 
         let buf = iree_hal_buffer_view_buffer(bv);
-        let status = iree_hal_buffer_map_read(
+        // Use device_transfer_d2h which works for both CPU and GPU buffers.
+        // iree_hal_buffer_map_read only works for HOST_VISIBLE buffers.
+        let status = iree_hal_device_transfer_d2h(
+            device,
             buf,
             0,
             f32_buf.as_mut_ptr() as *mut c_void,
             byte_len as u64,
+            0, // flags
+            iree_timeout_t::infinite(),
         );
         if !iree_status_is_ok(status) {
+            unsafe extern "C" { static __stderrp: *mut std::ffi::c_void; }
+            unsafe { iree_status_fprint(__stderrp, status); }
             return Err(iree_err("failed to read IREE buffer data"));
         }
 

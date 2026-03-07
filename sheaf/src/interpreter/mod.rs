@@ -489,16 +489,11 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
         #[cfg(iree_runtime)]
         if func_def.vmfb_session_idx.is_none() {
             if let Some(jit) = &mut env.jit_compiler {
-                let backend = env.vmfb_sessions.first()
-                    .and_then(|s| s.downcast_ref::<crate::runtime::iree_session::IreeSession>())
-                    .map(|s| s.target_backend().to_string())
-                    .unwrap_or_else(|| "llvm-cpu".to_string());
                 if let Some((session_idx, sig)) = jit.try_jit_compile(
                     &func_def,
                     &pos_args,
                     &env.registry,
                     &mut env.vmfb_sessions,
-                    &backend,
                 ) {
                     if let Some(fd) = env.registry.get_mut(name) {
                         fd.vmfb_session_idx = Some(session_idx);
@@ -1548,8 +1543,8 @@ fn try_iree_dispatch(
             // Unexpected IREE error → fall back to interpreter with warning.
             if env.iree_mismatch_warned.insert(format!("{}:call", func_def.name)) {
                 eprintln!(
-                    "warning: '{}' IREE call failed — falling back to interpreted",
-                    func_def.name,
+                    "warning: '{}' IREE call failed — falling back to interpreted: {}",
+                    func_def.name, _e,
                 );
             }
             return None;

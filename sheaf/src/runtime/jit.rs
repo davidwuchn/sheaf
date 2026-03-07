@@ -29,17 +29,42 @@ use crate::StableHLOType;
 
 pub struct JitCompiler {
     iree_compile_path: Option<String>,
+    target_backend: String,
     failed_fns: HashSet<String>,
     verbose: bool,
 }
 
 impl JitCompiler {
     pub fn new() -> Self {
+        // Probe which backend the runtime supports, matching IreeSession::new() logic.
+        let target_backend = Self::detect_target_backend();
         Self {
             iree_compile_path: find_iree_compile(),
+            target_backend,
             failed_fns: HashSet::new(),
             verbose: std::env::var("SHEAF_JIT_VERBOSE").is_ok(),
         }
+    }
+
+    fn detect_target_backend() -> String {
+        match std::env::var("SHEAF_DEVICE") {
+            Ok(ref d) if d == "cpu" => return "llvm-cpu".to_string(),
+            Ok(ref d) => {
+                return match d.as_str() {
+                    "metal" => "metal-spirv",
+                    "cuda" => "cuda",
+                    "vulkan" => "vulkan-spirv",
+                    _ => "llvm-cpu",
+                }.to_string();
+            }
+            Err(_) => {}
+        }
+        // Try creating a Metal/CUDA session to see what's available.
+        // If IreeSession::new() succeeds, use its detected backend.
+        if let Ok(session) = crate::runtime::iree_session::IreeSession::new() {
+            return session.target_backend().to_string();
+        }
+        "llvm-cpu".to_string()
     }
 
     pub fn try_jit_compile(
@@ -48,7 +73,6 @@ impl JitCompiler {
         args: &[Value],
         registry: &HashMap<String, FunctionDef>,
         vmfb_sessions: &mut Vec<VmfbSession>,
-        target_backend: &str,
     ) -> Option<(usize, FunctionSignature)> {
         let iree_compile = self.iree_compile_path.as_ref()?;
         let name = &func_def.name;
@@ -75,7 +99,8 @@ impl JitCompiler {
             return None;
         }
 
-        self.compile_function(iree_compile.clone(), func_def, args, registry, vmfb_sessions, target_backend)
+        let backend = self.target_backend.clone();
+        self.compile_function(iree_compile.clone(), func_def, args, registry, vmfb_sessions, &backend)
     }
 
     fn compile_function(
@@ -242,13 +267,18 @@ impl JitCompiler {
             std::process::Stdio::null()
         };
 
-        let status = std::process::Command::new(&iree_compile)
-            .arg(&mlir_path)
+        let mut cmd = std::process::Command::new(&iree_compile);
+        cmd.arg(&mlir_path)
             .arg(format!("--iree-hal-target-backends={}", target_backend))
             .arg("-o")
             .arg(&vmfb_path)
-            .stderr(stderr_cfg)
-            .status();
+            .stderr(stderr_cfg);
+        // Embed MSL source instead of compiled metallib — avoids Xcode dependency.
+        // The Metal runtime compiles MSL on first load via MTLDevice.makeLibrary(source:).
+        if target_backend == "metal-spirv" {
+            cmd.arg("--iree-metal-compile-to-metallib=false");
+        }
+        let status = cmd.status();
 
         let _ = std::fs::remove_file(&mlir_path);
 

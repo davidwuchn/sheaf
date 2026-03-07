@@ -62,7 +62,7 @@ fn try_cmake_layout() -> bool {
     }
 
     println!("cargo:rustc-link-search=native={}", runtime_dir.display());
-    println!("cargo:rustc-link-lib=static=iree_runtime_unified");
+    println!("cargo:rustc-link-lib=static:+whole-archive=iree_runtime_unified");
 
     let flatcc_dir = iree_build_dir.join("build_tools/third_party/flatcc");
     if flatcc_dir.join("libflatcc_parsing.a").exists() {
@@ -105,10 +105,13 @@ fn try_explicit_lib_dir() -> bool {
     link_from_dir(&lib_dir)
 }
 
-/// Link iree_runtime_unified + flatcc_parsing from a single directory
+/// Link iree_runtime_unified + flatcc_parsing from a single directory.
+/// We use +whole-archive to ensure all driver modules (Metal, CUDA, etc.)
+/// are included even when not directly referenced — IREE discovers them
+/// at runtime via its driver registry.
 fn link_from_dir(lib_dir: &PathBuf) -> bool {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    println!("cargo:rustc-link-lib=static=iree_runtime_unified");
+    println!("cargo:rustc-link-lib=static:+whole-archive=iree_runtime_unified");
 
     if lib_dir.join("libflatcc_parsing.a").exists() {
         println!("cargo:rustc-link-lib=static=flatcc_parsing");
