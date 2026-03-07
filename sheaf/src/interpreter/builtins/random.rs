@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 pub(super) fn register(env: &mut Env) {
     env.set_builtin("random-key", builtin_random_key);
@@ -211,7 +212,7 @@ fn builtin_top_k(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let idxs = ArrayD::from_shape_vec(IxDyn(&[k]), top_idxs)
         .map_err(|e| runtime_error(format!("top_k: {}", e)))?;
     Ok(Value::Tuple(vec![
-        Value::Tensor { data: vals, dtype },
+        Value::Tensor { data: Arc::new(vals), dtype },
         Value::tensor_i32(idxs),
     ]))
 }

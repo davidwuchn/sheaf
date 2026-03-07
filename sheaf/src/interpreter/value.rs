@@ -7,6 +7,7 @@ use crate::core::compiler::CompiledExpr;
 use ndarray::{ArrayD, IxDyn};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Dtype {
@@ -25,7 +26,7 @@ pub enum Value {
     Nil,
     String(String),
     Keyword(String),
-    Tensor { data: ArrayD<f64>, dtype: Dtype },
+    Tensor { data: Arc<ArrayD<f64>>, dtype: Dtype },
     List(Vec<Value>),
     /// Fixed-size heterogeneous tuple — output of VMFB calls and value-and-grad.
     /// Destructured with `let [[a b] expr]`.
@@ -66,17 +67,17 @@ impl Value {
         match self {
             Value::Int(n) => Some(ArrayD::from_elem(vec![], *n as f64)),
             Value::Float(f) => Some(ArrayD::from_elem(vec![], *f)),
-            Value::Tensor { data, .. } => Some(data.clone()),
+            Value::Tensor { data, .. } => Some((**data).clone()),
             _ => None,
         }
     }
 
     pub fn tensor_f32(data: ArrayD<f64>) -> Self {
-        Value::Tensor { data, dtype: Dtype::F32 }
+        Value::Tensor { data: Arc::new(data), dtype: Dtype::F32 }
     }
 
     pub fn tensor_i32(data: ArrayD<f64>) -> Self {
-        Value::Tensor { data, dtype: Dtype::I32 }
+        Value::Tensor { data: Arc::new(data), dtype: Dtype::I32 }
     }
 
     pub fn type_name(&self) -> &'static str {

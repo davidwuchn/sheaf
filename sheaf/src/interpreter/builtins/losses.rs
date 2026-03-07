@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 pub(super) fn register(env: &mut Env) {
     env.set_builtin("mse-loss", builtin_mse_loss);
@@ -13,7 +14,7 @@ pub fn tree_zeros(val: &Value) -> Value {
             Value::Dict(map.iter().map(|(k, v)| (k.clone(), tree_zeros(v))).collect())
         }
         Value::Tensor { data, dtype } => {
-            Value::Tensor { data: ArrayD::zeros(data.raw_dim()), dtype: *dtype }
+            Value::Tensor { data: Arc::new(ArrayD::zeros(data.raw_dim())), dtype: *dtype }
         }
         Value::Float(_) => Value::Float(0.0),
         Value::Int(_) => Value::Int(0),

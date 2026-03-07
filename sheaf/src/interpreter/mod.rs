@@ -17,6 +17,7 @@ use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::Value;
 use ndarray::{ArrayD, IxDyn};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
     match expr {
@@ -378,6 +379,7 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
         "softmax" | "log-softmax" | "sum" | "mean" | "product"
         | "min" | "max" | "argmax" | "argmin" | "concat"
         | "leaky-relu" | "celu" | "var" | "normalize" | "range"
+        | "tensor-split"
         | "print" | "choice"
     );
 
@@ -661,7 +663,7 @@ fn eval_map(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
                 let mut results = Vec::with_capacity(n);
                 for i in 0..n {
                     let row = data.index_axis(ndarray::Axis(0), i).to_owned();
-                    let row_val = Value::Tensor { data: row, dtype: *dtype };
+                    let row_val = Value::Tensor { data: Arc::new(row), dtype: *dtype };
                     results.push(call_function(func, &[row_val], env)?);
                 }
                 Ok(Value::List(results))
@@ -1008,7 +1010,7 @@ fn eval_vmap_call(
                 Some(ax) => match arg {
                     Value::Tensor { data, dtype } => {
                         let row = data.index_axis(ndarray::Axis(*ax), i).to_owned();
-                        sliced.push(Value::Tensor { data: row, dtype: *dtype });
+                        sliced.push(Value::Tensor { data: Arc::new(row), dtype: *dtype });
                     }
                     _ => sliced.push(arg.clone()),
                 },
@@ -1031,7 +1033,7 @@ fn eval_vmap_call(
             Value::Tensor { dtype, .. } => *dtype,
             _ => unreachable!(),
         };
-        Ok(Value::Tensor { data: stacked, dtype })
+        Ok(Value::Tensor { data: Arc::new(stacked), dtype })
     } else if results.iter().all(|r| matches!(r, Value::Float(_) | Value::Int(_))) {
         // Scalar results → 1D tensor
         let vals: Vec<f64> = results.iter().map(|r| match r {
@@ -1041,7 +1043,7 @@ fn eval_vmap_call(
         }).collect();
         let arr = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[vals.len()]), vals)
             .map_err(|e| runtime_error(format!("vmap: {}", e)))?;
-        Ok(Value::Tensor { data: arr, dtype: value::Dtype::F32 })
+        Ok(Value::Tensor { data: Arc::new(arr), dtype: value::Dtype::F32 })
     } else {
         Ok(Value::List(results))
     }
@@ -1207,10 +1209,10 @@ fn perturb_leaf_inner(val: &Value, leaf_idx: usize, delta: f64, counter: &mut us
             let n = data.len();
             if *counter <= leaf_idx && leaf_idx < *counter + n {
                 let local = leaf_idx - *counter;
-                let mut new_data = data.clone();
+                let mut new_data = (**data).clone();
                 new_data.as_slice_mut().unwrap()[local] += delta;
                 *counter += n;
-                Value::Tensor { data: new_data, dtype: *dtype }
+                Value::Tensor { data: Arc::new(new_data), dtype: *dtype }
             } else {
                 *counter += n;
                 val.clone()
@@ -1250,7 +1252,7 @@ fn build_grad_tree(params: &Value, grads: &[f64], counter: &mut usize) -> Value 
             let slice = grads[*counter..*counter + n].to_vec();
             *counter += n;
             Value::Tensor {
-                data: ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(data.shape()), slice).unwrap(),
+                data: Arc::new(ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(data.shape()), slice).unwrap()),
                 dtype: *dtype,
             }
         }
@@ -1347,7 +1349,7 @@ fn zeros_like(val: &Value) -> Value {
     match val {
         Value::Tensor { data, dtype } => {
             Value::Tensor {
-                data: ArrayD::zeros(IxDyn(data.shape())),
+                data: Arc::new(ArrayD::zeros(IxDyn(data.shape()))),
                 dtype: *dtype,
             }
         }
@@ -1376,7 +1378,7 @@ fn reduce_grad_to_param_shape(grad: &Value, param: &Value) -> Result<Value, Shea
             let p_ndim = p_shape.len();
             if g_ndim > p_ndim {
                 let extra = g_ndim - p_ndim;
-                let mut reduced = g_data.clone();
+                let mut reduced = (**g_data).clone();
                 for _ in 0..extra {
                     reduced = reduced.sum_axis(ndarray::Axis(0));
                 }
@@ -1388,17 +1390,17 @@ fn reduce_grad_to_param_shape(grad: &Value, param: &Value) -> Result<Value, Shea
                         reduced = reduced.insert_axis(ndarray::Axis(i));
                     }
                 }
-                Ok(Value::Tensor { data: reduced, dtype: *dtype })
+                Ok(Value::Tensor { data: Arc::new(reduced), dtype: *dtype })
             } else if g_ndim == p_ndim {
                 // Same rank but different sizes (broadcast case)
-                let mut reduced = g_data.clone();
+                let mut reduced = (**g_data).clone();
                 for (i, (&gd, &pd)) in g_shape.iter().zip(p_shape.iter()).enumerate() {
                     if pd == 1 && gd > 1 {
                         reduced = reduced.sum_axis(ndarray::Axis(i));
                         reduced = reduced.insert_axis(ndarray::Axis(i));
                     }
                 }
-                Ok(Value::Tensor { data: reduced, dtype: *dtype })
+                Ok(Value::Tensor { data: Arc::new(reduced), dtype: *dtype })
             } else {
                 // Grad has fewer dims than param — shouldn't happen, return as-is
                 Ok(grad.clone())

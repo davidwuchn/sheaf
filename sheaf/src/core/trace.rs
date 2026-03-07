@@ -19,6 +19,7 @@ use crate::interpreter::env::Env;
 use crate::interpreter::value::{Dtype, Value};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// Trace a function by executing it with dummy inputs to discover the concrete
 /// return type. Creates zero-filled tensors matching each parameter's declared type,
@@ -116,7 +117,7 @@ fn stablehlo_to_dummy_value(ty: &StableHLOType) -> Value {
             let dims: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
             let data = ArrayD::zeros(IxDyn(&dims));
             Value::Tensor {
-                data,
+                data: Arc::new(data),
                 dtype: Dtype::F32,
             }
         }
@@ -154,7 +155,7 @@ fn param_layout_to_dummy_value(layout: &ParamLayout) -> Value {
             result.insert(
                 key.clone(),
                 Value::Tensor {
-                    data,
+                    data: Arc::new(data),
                     dtype: Dtype::F32,
                 },
             );
@@ -168,7 +169,7 @@ fn param_layout_to_dummy_value(layout: &ParamLayout) -> Value {
                     sub.insert(
                         sub_key.clone(),
                         Value::Tensor {
-                            data,
+                            data: Arc::new(data),
                             dtype: Dtype::F32,
                         },
                     );

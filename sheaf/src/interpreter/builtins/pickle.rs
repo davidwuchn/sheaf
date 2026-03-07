@@ -9,6 +9,7 @@ use crate::interpreter::env::runtime_error;
 use crate::interpreter::value::{Dtype, Value};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn load_pickle_bytes(data: &[u8]) -> Result<Value, SheafError> {
     let mut vm = PickleVM::new(data);
@@ -770,7 +771,7 @@ fn pickle_to_value(pv: PV) -> Result<Value, SheafError> {
             };
             let arr = ArrayD::from_shape_vec(IxDyn(&shape), values)
                 .map_err(|e| runtime_error(format!("pickle: array reshape: {}", e)))?;
-            Ok(Value::Tensor { data: arr, dtype: sheaf_dtype })
+            Ok(Value::Tensor { data: Arc::new(arr), dtype: sheaf_dtype })
         }
         PV::NumpyDtype(_) | PV::Global { .. } | PV::Placeholder => {
             Ok(Value::Nil)

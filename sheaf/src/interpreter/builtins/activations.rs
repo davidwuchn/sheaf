@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 pub(super) fn register(env: &mut Env) {
     env.set_builtin("relu", builtin_relu);
@@ -29,7 +30,7 @@ fn builtin_leaky_relu(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if result.ndim() == 0 {
         Ok(Value::Float(*result.first().unwrap()))
     } else {
-        Ok(Value::Tensor { data: result, dtype: Dtype::F32 })
+        Ok(Value::Tensor { data: Arc::new(result), dtype: Dtype::F32 })
     }
 }
 
@@ -61,7 +62,7 @@ fn builtin_selu(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if result.ndim() == 0 {
         Ok(Value::Float(*result.first().unwrap()))
     } else {
-        Ok(Value::Tensor { data: result, dtype: Dtype::F32 })
+        Ok(Value::Tensor { data: Arc::new(result), dtype: Dtype::F32 })
     }
 }
 
@@ -75,7 +76,7 @@ fn builtin_celu(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if result.ndim() == 0 {
         Ok(Value::Float(*result.first().unwrap()))
     } else {
-        Ok(Value::Tensor { data: result, dtype: Dtype::F32 })
+        Ok(Value::Tensor { data: Arc::new(result), dtype: Dtype::F32 })
     }
 }
 

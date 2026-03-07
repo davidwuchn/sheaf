@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 pub(super) fn register(env: &mut Env) {
     env.set_builtin("reshape", builtin_reshape);
@@ -11,6 +12,7 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("index-update", builtin_index_update);
     env.set_builtin("swapaxes", builtin_swapaxes);
     env.set_builtin("dynamic-slice", builtin_dynamic_slice);
+    env.set_builtin("tensor-split", builtin_tensor_split);
 }
 
 fn builtin_reshape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
@@ -35,7 +37,7 @@ fn builtin_reshape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     };
     let arr = arr.as_standard_layout().into_owned();
     let result = arr.into_shape_with_order(IxDyn(&new_shape)).map_err(|e| runtime_error(e.to_string()))?;
-    Ok(Value::Tensor { data: result, dtype: dt })
+    Ok(Value::Tensor { data: Arc::new(result), dtype: dt })
 }
 
 fn builtin_transpose(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
@@ -68,7 +70,7 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             let views: Vec<ndarray::ArrayViewD<f64>> = arrays.iter().map(|(a, _)| a.view()).collect();
             let result = ndarray::concatenate(ndarray::Axis(axis), &views)
                 .map_err(|e| runtime_error(e.to_string()))?;
-            return Ok(Value::Tensor { data: result, dtype });
+            return Ok(Value::Tensor { data: Arc::new(result), dtype });
         }
     }
 
@@ -295,6 +297,28 @@ fn builtin_swapaxes(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     axes[ax0] = ax1;
     axes[ax1] = ax0;
     Ok(Value::tensor_f32(arr.permuted_axes(IxDyn(&axes))))
+}
+
+fn builtin_tensor_split(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
+    let (arr, _dt) = to_array(&args[0])?;
+    let num = args[1].to_f64()
+        .ok_or_else(|| runtime_error("tensor-split: num-sections must be a number"))? as usize;
+    let ax = get_axis(kw).unwrap_or(0);
+    let axis = resolve_idx(ax as f64, arr.ndim());
+    let dim = arr.shape()[axis];
+    if dim % num != 0 {
+        return Err(runtime_error(format!(
+            "tensor-split: dimension {} ({}) not divisible by {}", axis, dim, num
+        )));
+    }
+    let chunk = dim / num;
+    let chunks: Vec<Value> = (0..num).map(|i| {
+        let start = i * chunk;
+        let end = start + chunk;
+        let sliced = arr.slice_axis(ndarray::Axis(axis), ndarray::Slice::from(start..end));
+        Value::tensor_f32(sliced.to_owned())
+    }).collect();
+    Ok(Value::List(chunks))
 }
 
 fn builtin_dynamic_slice(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {

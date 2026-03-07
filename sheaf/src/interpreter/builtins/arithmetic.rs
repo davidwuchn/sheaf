@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 pub(super) fn register(env: &mut Env) {
     env.set_builtin("+", builtin_add);
@@ -35,7 +36,7 @@ fn builtin_sub(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             if dt == Dtype::I32 { return Ok(Value::Int(x as i64)); }
             return Ok(Value::Float(x));
         }
-        return Ok(Value::Tensor { data: result, dtype: dt });
+        return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
     }
     binary_op(args, |a, b| a - b)
 }
@@ -93,7 +94,7 @@ fn builtin_ash(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 let n = x as i64;
                 if shift >= 0 { (n << shift) as f64 } else { (n >> (-shift)) as f64 }
             });
-            Ok(Value::Tensor { data: result, dtype: Dtype::I32 })
+            Ok(Value::Tensor { data: Arc::new(result), dtype: Dtype::I32 })
         }
         _ => Err(runtime_error(format!("ash: expected number or tensor, got {}", args[0].type_name()))),
     }

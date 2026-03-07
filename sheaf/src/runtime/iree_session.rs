@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::core::error::SheafError;
 use crate::interpreter::value::{Dtype, Value};
@@ -400,14 +400,14 @@ unsafe fn value_to_buffer_view(
             }
             Value::Float(f) => {
                 let tensor = Value::Tensor {
-                    data: ArrayD::from_elem(vec![], *f),
+                    data: Arc::new(ArrayD::from_elem(vec![], *f)),
                     dtype: Dtype::F32,
                 };
                 value_to_buffer_view(device, allocator, &tensor)
             }
             Value::Int(n) => {
                 let tensor = Value::Tensor {
-                    data: ArrayD::from_elem(vec![], *n as f64),
+                    data: Arc::new(ArrayD::from_elem(vec![], *n as f64)),
                     dtype: Dtype::F32,
                 };
                 value_to_buffer_view(device, allocator, &tensor)
@@ -457,7 +457,7 @@ unsafe fn buffer_view_to_value(
             .map_err(|e| iree_err(&format!("shape mismatch: {}", e)))?;
 
         Ok(Value::Tensor {
-            data,
+            data: Arc::new(data),
             dtype: Dtype::F32,
         })
     }

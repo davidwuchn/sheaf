@@ -161,7 +161,7 @@ fn builtin_float(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::Float(f) => Ok(Value::Float(*f)),
         Value::Bool(b) => Ok(Value::Float(if *b { 1.0 } else { 0.0 })),
         Value::Tensor { data, .. } => {
-            Ok(Value::tensor_f32(data.clone()))
+            Ok(Value::Tensor { data: data.clone(), dtype: Dtype::F32 })
         }
         _ => Err(runtime_error(format!("float: cannot convert {}", args[0].type_name()))),
     }
