@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 pub(super) fn register(env: &mut Env) {
     env.set_builtin("print", builtin_print);
@@ -221,7 +222,10 @@ fn builtin_io(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             };
             let data = std::fs::read(path)
                 .map_err(|e| runtime_error(format!("io load '{}': {}", path, e)))?;
-            // Detect format: pickle (0x80) vs JSON ('{')
+            // Detect format by extension first, then by magic bytes
+            if path.ends_with(".safetensors") {
+                return super::safetensors::load_safetensors(&data);
+            }
             if data.first() == Some(&0x80) {
                 return super::pickle::load_pickle_bytes(&data);
             }
@@ -312,7 +316,7 @@ fn json_to_value(json: &serde_json::Value) -> Result<Value, crate::core::error::
                 };
                 let arr = ArrayD::from_shape_vec(IxDyn(&shape), flat)
                     .map_err(|e| runtime_error(format!("io load: tensor reshape: {}", e)))?;
-                Ok(Value::Tensor { data: arr, dtype })
+                Ok(Value::Tensor { data: Arc::new(arr), dtype })
             } else if let Some(items) = obj.get("__tuple") {
                 let arr = items.as_array()
                     .ok_or_else(|| runtime_error("io load: __tuple must be array"))?;

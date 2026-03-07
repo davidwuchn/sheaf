@@ -6,6 +6,7 @@
 mod arithmetic;
 mod activations;
 pub(crate) mod pickle;
+mod safetensors;
 mod comparison;
 mod reductions;
 mod tensor_ops;
@@ -19,6 +20,7 @@ use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::{Dtype, Value};
 use ndarray::{ArrayD, Dimension, IxDyn};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub(self) type R = Result<Value, crate::core::error::SheafError>;
 
@@ -52,7 +54,7 @@ pub(self) fn to_array(val: &Value) -> Result<(ArrayD<f64>, Dtype), crate::core::
         Value::Int(n) => Ok((ArrayD::from_elem(IxDyn(&[]), *n as f64), Dtype::I32)),
         Value::Float(f) => Ok((ArrayD::from_elem(IxDyn(&[]), *f), Dtype::F32)),
         Value::Bool(b) => Ok((ArrayD::from_elem(IxDyn(&[]), if *b { 1.0 } else { 0.0 }), Dtype::I32)),
-        Value::Tensor { data, dtype } => Ok((data.clone(), *dtype)),
+        Value::Tensor { data, dtype } => Ok(((**data).clone(), *dtype)),
         _ => Err(runtime_error(format!("Expected numeric value, got {} ({})", val.type_name(), val))),
     }
 }
@@ -106,7 +108,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f64, f64) -> f64) -> R {
             Ok(Value::Float(x))
         }
     } else {
-        Ok(Value::Tensor { data: acc, dtype: dt })
+        Ok(Value::Tensor { data: Arc::new(acc), dtype: dt })
     }
 }
 
@@ -119,7 +121,7 @@ pub(self) fn unary_op(args: &[Value], op: fn(f64) -> f64) -> R {
     if result.ndim() == 0 {
         Ok(Value::Float(*result.first().unwrap()))
     } else {
-        Ok(Value::Tensor { data: result, dtype: Dtype::F32 })
+        Ok(Value::Tensor { data: Arc::new(result), dtype: Dtype::F32 })
     }
 }
 
@@ -132,7 +134,7 @@ pub(self) fn unary_op_f32(args: &[Value], op: fn(f32) -> f32) -> R {
     if result.ndim() == 0 {
         Ok(Value::Float(*result.first().unwrap()))
     } else {
-        Ok(Value::Tensor { data: result, dtype: Dtype::F32 })
+        Ok(Value::Tensor { data: Arc::new(result), dtype: Dtype::F32 })
     }
 }
 
@@ -219,7 +221,7 @@ pub(self) fn shape_from_value(val: &Value) -> Result<Vec<usize>, crate::core::er
 
 pub(self) fn list_to_tensor(v: &Value) -> Option<(ArrayD<f64>, Dtype)> {
     match v {
-        Value::Tensor { data, dtype } => Some((data.clone(), *dtype)),
+        Value::Tensor { data, dtype } => Some(((**data).clone(), *dtype)),
         Value::List(items) => {
             let all_int = items.iter().all(|x| matches!(x, Value::Int(_)));
             let nums: Option<Vec<f64>> = items.iter().map(|x| x.to_f64()).collect();
@@ -268,5 +270,5 @@ pub(self) fn cmp_op(args: &[Value], op: fn(f64, f64) -> f64, _dt: Dtype) -> R {
 }
 
 pub(self) fn bool_tensor(data: ArrayD<f64>) -> Value {
-    Value::Tensor { data, dtype: Dtype::Bool }
+    Value::Tensor { data: Arc::new(data), dtype: Dtype::Bool }
 }
