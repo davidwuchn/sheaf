@@ -172,18 +172,38 @@ fn lower_inlined_gets_rec(
     reverse: &HashMap<(String, Vec<usize>), Vec<String>>,
 ) -> CompiledExpr {
     match expr {
-        CompiledExpr::FunctionCall { name, args } if name == "get" && args.len() >= 2 => {
+        CompiledExpr::FunctionCall { name, args }
+            if (name == "get" || name == "get-in") && args.len() >= 2 =>
+        {
             if let CompiledExpr::Symbol(alias) = &args[0] {
                 if let Some((root_param, prefix_path)) = aliases.get(alias) {
                     let mut path = prefix_path.clone();
-                    let mut all_kw = true;
-                    for arg in &args[1..] {
-                        match arg {
-                            CompiledExpr::Keyword(k) => path.push(k.clone()),
-                            _ => { all_kw = false; break; }
+                    let resolved = if name == "get-in" {
+                        // (get-in alias [:k1 :k2 ...])
+                        if let CompiledExpr::Vector(keys) = &args[1] {
+                            let mut ok = true;
+                            for k in keys {
+                                match k {
+                                    CompiledExpr::Keyword(s) => path.push(s.clone()),
+                                    _ => { ok = false; break; }
+                                }
+                            }
+                            ok
+                        } else {
+                            false
                         }
-                    }
-                    if all_kw {
+                    } else {
+                        // (get alias :k1 :k2 ...)
+                        let mut ok = true;
+                        for arg in &args[1..] {
+                            match arg {
+                                CompiledExpr::Keyword(k) => path.push(k.clone()),
+                                _ => { ok = false; break; }
+                            }
+                        }
+                        ok
+                    };
+                    if resolved {
                         if let Some(imap) = index_maps.iter().find(|(p, _)| p == root_param).map(|(_, m)| m) {
                             if let Some(indices) = imap.get(&path) {
                                 return CompiledExpr::GetTupleElement {
@@ -195,9 +215,54 @@ fn lower_inlined_gets_rec(
                     }
                 }
             }
+            // Recurse into args, then check if args[0] resolved to a GetTupleElement.
+            // This handles nested (get (get alias :k1) :k2) where the inner get resolved
+            // but the outer get's receiver is now a GetTupleElement, not a Symbol.
+            let resolved_args: Vec<_> = args.iter()
+                .map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse))
+                .collect();
+            if let CompiledExpr::GetTupleElement { param, indices } = &resolved_args[0] {
+                let key = (param.clone(), indices.clone());
+                if let Some(prefix_path) = reverse.get(&key) {
+                    let mut path = prefix_path.clone();
+                    let keys_ok = if name == "get-in" {
+                        if let CompiledExpr::Vector(keys) = &resolved_args[1] {
+                            let mut ok = true;
+                            for k in keys {
+                                match k {
+                                    CompiledExpr::Keyword(s) => path.push(s.clone()),
+                                    _ => { ok = false; break; }
+                                }
+                            }
+                            ok
+                        } else {
+                            false
+                        }
+                    } else {
+                        let mut ok = true;
+                        for arg in &resolved_args[1..] {
+                            match arg {
+                                CompiledExpr::Keyword(k) => path.push(k.clone()),
+                                _ => { ok = false; break; }
+                            }
+                        }
+                        ok
+                    };
+                    if keys_ok {
+                        if let Some(imap) = index_maps.iter().find(|(p, _)| p == param).map(|(_, m)| m) {
+                            if let Some(full_indices) = imap.get(&path) {
+                                return CompiledExpr::GetTupleElement {
+                                    param: param.clone(),
+                                    indices: full_indices.clone(),
+                                };
+                            }
+                        }
+                    }
+                }
+            }
             CompiledExpr::FunctionCall {
                 name: name.clone(),
-                args: args.iter().map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse)).collect(),
+                args: resolved_args,
             }
         }
         CompiledExpr::Let { bindings, body } => {
