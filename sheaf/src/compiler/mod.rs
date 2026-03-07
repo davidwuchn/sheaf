@@ -7,6 +7,7 @@ pub mod codegen;
 pub mod config;
 pub mod effects;
 pub mod stablehlo;
+pub mod transforms;
 
 pub use codegen::CodeGenerator;
 pub use config::{build_index_map, json_to_stablehlo_type, layout_to_index_map, lower_get_calls};

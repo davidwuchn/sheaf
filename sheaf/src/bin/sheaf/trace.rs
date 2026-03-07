@@ -334,37 +334,4 @@ fn extract_traced_configs(
     (result, constants)
 }
 
-/// Extract scalar values from a dict Value for compile-time constant propagation.
-fn extract_scalar_constants(
-    val: &Value,
-    param_name: &str,
-    index_map: &std::collections::BTreeMap<Vec<String>, Vec<usize>>,
-    out: &mut HashMap<(String, Vec<usize>), f64>,
-) {
-    extract_scalars_rec(val, param_name, &mut vec![], index_map, out);
-}
-
-fn extract_scalars_rec(
-    val: &Value,
-    param_name: &str,
-    path: &mut Vec<String>,
-    index_map: &std::collections::BTreeMap<Vec<String>, Vec<usize>>,
-    out: &mut HashMap<(String, Vec<usize>), f64>,
-) {
-    let scalar = match val {
-        Value::Int(n) => Some(*n as f64),
-        Value::Float(f) => Some(*f),
-        Value::Dict(map) => {
-            for (key, child) in map {
-                path.push(key.clone());
-                extract_scalars_rec(child, param_name, path, index_map, out);
-                path.pop();
-            }
-            return;
-        }
-        _ => return,
-    };
-    if let (Some(v), Some(indices)) = (scalar, index_map.get(path)) {
-        out.insert((param_name.to_string(), indices.clone()), v);
-    }
-}
+use sheaf_compiler::compiler::transforms::extract_scalar_constants;

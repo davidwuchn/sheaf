@@ -1,0 +1,455 @@
+// Copyright (c) 2025 Damien Boureille
+// Licensed under the MIT License.
+
+//! Compiler transforms: constant resolution, inlined-get lowering, layout propagation,
+//! and scalar constant extraction. Shared between `sheaf build` (AOT) and JIT compilation.
+
+use crate::core::compiler::CompiledExpr;
+use crate::interpreter::value::Value;
+use std::collections::{BTreeMap, HashMap};
+
+/// Substitute known scalar constants and propagate Let-bound constants.
+/// Handles: GetTupleElement → Integer, (static expr) → evaluate, Symbol → local constant,
+/// and constant folding of arithmetic on known values.
+pub fn resolve_static_constants(
+    expr: &CompiledExpr,
+    constants: &HashMap<(String, Vec<usize>), f64>,
+    param_shapes: &HashMap<String, Vec<i64>>,
+) -> CompiledExpr {
+    let mut locals: HashMap<String, CompiledExpr> = HashMap::new();
+    let mut shapes: HashMap<String, Vec<i64>> = param_shapes.clone();
+    resolve_constants_rec(expr, constants, &mut locals, &mut shapes)
+}
+
+fn resolve_constants_rec(
+    expr: &CompiledExpr,
+    constants: &HashMap<(String, Vec<usize>), f64>,
+    locals: &mut HashMap<String, CompiledExpr>,
+    shapes: &mut HashMap<String, Vec<i64>>,
+) -> CompiledExpr {
+    match expr {
+        CompiledExpr::GetTupleElement { param, indices } => {
+            let key = (param.clone(), indices.clone());
+            match constants.get(&key) {
+                Some(&val) => f64_to_const(val),
+                None => expr.clone(),
+            }
+        }
+        CompiledExpr::Symbol(name) => {
+            locals.get(name).cloned().unwrap_or_else(|| expr.clone())
+        }
+        CompiledExpr::FunctionCall { name, args } if name == "static" && args.len() == 1 => {
+            resolve_constants_rec(&args[0], constants, locals, shapes)
+        }
+        CompiledExpr::FunctionCall { name, args } if name == "shape" && args.len() == 1 => {
+            let shape_from_sym = match &args[0] {
+                CompiledExpr::Symbol(s) => shapes.get(s.as_str()).cloned(),
+                _ => None,
+            };
+            let shape = shape_from_sym.or_else(|| {
+                let resolved = resolve_constants_rec(&args[0], constants, locals, shapes);
+                try_infer_shape(&resolved, shapes)
+            });
+            if let Some(sh) = shape {
+                return CompiledExpr::Vector(
+                    sh.iter().map(|&d| CompiledExpr::Integer(d)).collect(),
+                );
+            }
+            CompiledExpr::FunctionCall {
+                name: name.clone(),
+                args: args.iter().map(|a| resolve_constants_rec(a, constants, locals, shapes)).collect(),
+            }
+        }
+        CompiledExpr::FunctionCall { name, args } if name == "get" && args.len() == 2 => {
+            let recv = resolve_constants_rec(&args[0], constants, locals, shapes);
+            let idx = resolve_constants_rec(&args[1], constants, locals, shapes);
+            if let (CompiledExpr::Vector(elems), CompiledExpr::Integer(i)) = (&recv, &idx) {
+                let len = elems.len() as i64;
+                let norm = if *i < 0 { len + i } else { *i };
+                if norm >= 0 && norm < len {
+                    return elems[norm as usize].clone();
+                }
+            }
+            CompiledExpr::FunctionCall { name: name.clone(), args: vec![recv, idx] }
+        }
+        CompiledExpr::FunctionCall { name, args }
+            if (name == "first" || name == "last") && args.len() == 1 =>
+        {
+            let recv = resolve_constants_rec(&args[0], constants, locals, shapes);
+            push_first_last(name, recv)
+        }
+        CompiledExpr::FunctionCall { name, args } => {
+            let resolved: Vec<_> = args.iter()
+                .map(|a| resolve_constants_rec(a, constants, locals, shapes))
+                .collect();
+            try_fold_arithmetic(name, &resolved)
+                .unwrap_or_else(|| CompiledExpr::FunctionCall { name: name.clone(), args: resolved })
+        }
+        CompiledExpr::Let { bindings, body } => {
+            let new_bindings: Vec<_> = bindings.iter().map(|(k, v)| {
+                let resolved = resolve_constants_rec(v, constants, locals, shapes);
+                match &resolved {
+                    CompiledExpr::Integer(_) | CompiledExpr::Float(_) => {
+                        locals.insert(k.clone(), resolved.clone());
+                    }
+                    CompiledExpr::Symbol(aliased) => {
+                        if let Some(sh) = shapes.get(aliased).cloned() {
+                            shapes.insert(k.clone(), sh);
+                        }
+                    }
+                    CompiledExpr::Vector(elems) if elems.iter().all(|e| matches!(e, CompiledExpr::Integer(_))) => {
+                        let sh: Vec<i64> = elems.iter().filter_map(|e| {
+                            if let CompiledExpr::Integer(n) = e { Some(*n) } else { None }
+                        }).collect();
+                        shapes.insert(k.clone(), sh);
+                    }
+                    _ => {
+                        if let Some(sh) = try_infer_shape(&resolved, shapes) {
+                            shapes.insert(k.clone(), sh);
+                        }
+                    }
+                }
+                (k.clone(), resolved)
+            }).collect();
+            CompiledExpr::Let {
+                bindings: new_bindings,
+                body: Box::new(resolve_constants_rec(body, constants, locals, shapes)),
+            }
+        }
+        CompiledExpr::Do(exprs) => CompiledExpr::Do(
+            exprs.iter().map(|e| resolve_constants_rec(e, constants, locals, shapes)).collect(),
+        ),
+        CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
+            condition: Box::new(resolve_constants_rec(condition, constants, locals, shapes)),
+            then_branch: Box::new(resolve_constants_rec(then_branch, constants, locals, shapes)),
+            else_branch: else_branch.as_ref().map(|e| Box::new(resolve_constants_rec(e, constants, locals, shapes))),
+        },
+        CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
+            params: params.clone(),
+            body: Box::new(resolve_constants_rec(body, constants, locals, shapes)),
+        },
+        CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
+            callee: Box::new(resolve_constants_rec(callee, constants, locals, shapes)),
+            args: args.iter().map(|a| resolve_constants_rec(a, constants, locals, shapes)).collect(),
+        },
+        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => CompiledExpr::Repeat {
+            index_var: index_var.clone(),
+            count: Box::new(resolve_constants_rec(count, constants, locals, shapes)),
+            acc_var: acc_var.clone(),
+            acc_init: Box::new(resolve_constants_rec(acc_init, constants, locals, shapes)),
+            body: Box::new(resolve_constants_rec(body, constants, locals, shapes)),
+        },
+        CompiledExpr::Vector(elems) => CompiledExpr::Vector(
+            elems.iter().map(|e| resolve_constants_rec(e, constants, locals, shapes)).collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Lower (get alias :key) patterns introduced after inlining stdlib functions.
+///
+/// After inlining, a call like (layer-norm h (GetTupleElement layer-p [1]) 2)
+/// becomes (let [p (GetTupleElement layer-p [1])] (let [gamma (get p :gamma)] ...)).
+/// This pass tracks such aliases and resolves (get alias :key) to
+/// GetTupleElement { param: root_param, indices: full_indices }.
+pub fn lower_inlined_gets(
+    body: &CompiledExpr,
+    index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+) -> CompiledExpr {
+    let mut reverse: HashMap<(String, Vec<usize>), Vec<String>> = HashMap::new();
+    for (param, imap) in index_maps {
+        for (path, indices) in imap {
+            reverse.insert((param.clone(), indices.clone()), path.clone());
+        }
+    }
+    lower_inlined_gets_rec(body, index_maps, &mut HashMap::new(), &reverse)
+}
+
+fn lower_inlined_gets_rec(
+    expr: &CompiledExpr,
+    index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+    aliases: &mut HashMap<String, (String, Vec<String>)>,
+    reverse: &HashMap<(String, Vec<usize>), Vec<String>>,
+) -> CompiledExpr {
+    match expr {
+        CompiledExpr::FunctionCall { name, args } if name == "get" && args.len() >= 2 => {
+            if let CompiledExpr::Symbol(alias) = &args[0] {
+                if let Some((root_param, prefix_path)) = aliases.get(alias) {
+                    let mut path = prefix_path.clone();
+                    let mut all_kw = true;
+                    for arg in &args[1..] {
+                        match arg {
+                            CompiledExpr::Keyword(k) => path.push(k.clone()),
+                            _ => { all_kw = false; break; }
+                        }
+                    }
+                    if all_kw {
+                        if let Some(imap) = index_maps.iter().find(|(p, _)| p == root_param).map(|(_, m)| m) {
+                            if let Some(indices) = imap.get(&path) {
+                                return CompiledExpr::GetTupleElement {
+                                    param: root_param.clone(),
+                                    indices: indices.clone(),
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            CompiledExpr::FunctionCall {
+                name: name.clone(),
+                args: args.iter().map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse)).collect(),
+            }
+        }
+        CompiledExpr::Let { bindings, body } => {
+            let new_bindings: Vec<_> = bindings.iter().map(|(k, v)| {
+                let resolved = lower_inlined_gets_rec(v, index_maps, aliases, reverse);
+                if let CompiledExpr::GetTupleElement { param, indices } = &resolved {
+                    let key = (param.clone(), indices.clone());
+                    if let Some(path) = reverse.get(&key) {
+                        aliases.insert(k.clone(), (param.clone(), path.clone()));
+                    }
+                }
+                (k.clone(), resolved)
+            }).collect();
+            CompiledExpr::Let {
+                bindings: new_bindings,
+                body: Box::new(lower_inlined_gets_rec(body, index_maps, aliases, reverse)),
+            }
+        }
+        CompiledExpr::FunctionCall { name, args } => CompiledExpr::FunctionCall {
+            name: name.clone(),
+            args: args.iter().map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse)).collect(),
+        },
+        CompiledExpr::Do(exprs) => CompiledExpr::Do(
+            exprs.iter().map(|e| lower_inlined_gets_rec(e, index_maps, aliases, reverse)).collect(),
+        ),
+        CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
+            condition: Box::new(lower_inlined_gets_rec(condition, index_maps, aliases, reverse)),
+            then_branch: Box::new(lower_inlined_gets_rec(then_branch, index_maps, aliases, reverse)),
+            else_branch: else_branch.as_ref().map(|e| Box::new(lower_inlined_gets_rec(e, index_maps, aliases, reverse))),
+        },
+        CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
+            params: params.clone(),
+            body: Box::new(lower_inlined_gets_rec(body, index_maps, aliases, reverse)),
+        },
+        CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
+            callee: Box::new(lower_inlined_gets_rec(callee, index_maps, aliases, reverse)),
+            args: args.iter().map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse)).collect(),
+        },
+        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => CompiledExpr::Repeat {
+            index_var: index_var.clone(),
+            count: Box::new(lower_inlined_gets_rec(count, index_maps, aliases, reverse)),
+            acc_var: acc_var.clone(),
+            acc_init: Box::new(lower_inlined_gets_rec(acc_init, index_maps, aliases, reverse)),
+            body: Box::new(lower_inlined_gets_rec(body, index_maps, aliases, reverse)),
+        },
+        CompiledExpr::Vector(elems) => CompiledExpr::Vector(
+            elems.iter().map(|e| lower_inlined_gets_rec(e, index_maps, aliases, reverse)).collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Propagate tuple_key_layouts from dict key names to Let-bound variable names.
+/// e.g. `input-layer = GetTupleElement("params", [2])` where index 2 = key "input"
+/// → copy tuple_key_layouts["input"] to tuple_key_layouts["input-layer"]
+pub fn propagate_let_layouts(
+    expr: &CompiledExpr,
+    idx_to_key: &HashMap<(String, usize), String>,
+    layouts: &mut HashMap<String, BTreeMap<String, usize>>,
+) {
+    match expr {
+        CompiledExpr::Let { bindings, body } => {
+            for (var_name, value_expr) in bindings {
+                if let CompiledExpr::GetTupleElement { param, indices } = value_expr {
+                    if indices.len() == 1 {
+                        let lookup = (param.clone(), indices[0]);
+                        if let Some(key_name) = idx_to_key.get(&lookup) {
+                            if let Some(sub_layout) = layouts.get(key_name).cloned() {
+                                layouts.insert(var_name.clone(), sub_layout);
+                            }
+                        }
+                    }
+                }
+                propagate_let_layouts(value_expr, idx_to_key, layouts);
+            }
+            propagate_let_layouts(body, idx_to_key, layouts);
+        }
+        CompiledExpr::FunctionCall { args, .. } => {
+            for a in args {
+                propagate_let_layouts(a, idx_to_key, layouts);
+            }
+        }
+        CompiledExpr::Do(exprs) => {
+            for e in exprs {
+                propagate_let_layouts(e, idx_to_key, layouts);
+            }
+        }
+        CompiledExpr::If { condition, then_branch, else_branch } => {
+            propagate_let_layouts(condition, idx_to_key, layouts);
+            propagate_let_layouts(then_branch, idx_to_key, layouts);
+            if let Some(e) = else_branch {
+                propagate_let_layouts(e, idx_to_key, layouts);
+            }
+        }
+        CompiledExpr::Lambda { body, .. } => {
+            propagate_let_layouts(body, idx_to_key, layouts);
+        }
+        _ => {}
+    }
+}
+
+/// Extract scalar values from a dict Value for compile-time constant propagation.
+pub fn extract_scalar_constants(
+    val: &Value,
+    param_name: &str,
+    index_map: &BTreeMap<Vec<String>, Vec<usize>>,
+    out: &mut HashMap<(String, Vec<usize>), f64>,
+) {
+    extract_scalars_rec(val, param_name, &mut vec![], index_map, out);
+}
+
+fn extract_scalars_rec(
+    val: &Value,
+    param_name: &str,
+    path: &mut Vec<String>,
+    index_map: &BTreeMap<Vec<String>, Vec<usize>>,
+    out: &mut HashMap<(String, Vec<usize>), f64>,
+) {
+    let scalar = match val {
+        Value::Int(n) => Some(*n as f64),
+        Value::Float(f) => Some(*f),
+        Value::Dict(map) => {
+            for (key, child) in map {
+                path.push(key.clone());
+                extract_scalars_rec(child, param_name, path, index_map, out);
+                path.pop();
+            }
+            return;
+        }
+        _ => return,
+    };
+    if let (Some(v), Some(indices)) = (scalar, index_map.get(path)) {
+        out.insert((param_name.to_string(), indices.clone()), v);
+    }
+}
+
+fn push_first_last(name: &str, expr: CompiledExpr) -> CompiledExpr {
+    match expr {
+        CompiledExpr::Vector(elems) => {
+            if name == "first" {
+                elems.into_iter().next()
+            } else {
+                elems.into_iter().last()
+            }
+            .unwrap_or_else(|| CompiledExpr::Vector(vec![]))
+        }
+        CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
+            bindings,
+            body: Box::new(push_first_last(name, *body)),
+        },
+        other => CompiledExpr::FunctionCall {
+            name: name.to_string(),
+            args: vec![other],
+        },
+    }
+}
+
+fn try_infer_shape(
+    expr: &CompiledExpr,
+    shapes: &HashMap<String, Vec<i64>>,
+) -> Option<Vec<i64>> {
+    match expr {
+        CompiledExpr::Symbol(s) => shapes.get(s).cloned(),
+        CompiledExpr::Let { bindings, body } => {
+            let mut inner = shapes.clone();
+            for (name, rhs) in bindings {
+                if let Some(sh) = try_infer_shape(rhs, &inner) {
+                    inner.insert(name.clone(), sh);
+                }
+            }
+            try_infer_shape(body, &inner)
+        }
+        CompiledExpr::FunctionCall { name, args } => match name.as_str() {
+            "+" | "-" | "*" | "/" | "**" | "sqrt" | "exp" | "log" | "abs"
+            | "relu" | "gelu" | "tanh" | "sigmoid" | "neg"
+            | "maximum" | "minimum" | "clamp"
+            | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not"
+            | "where" => args.iter().find_map(|a| try_infer_shape(a, shapes)),
+            "layer-norm" | "softmax" | "normalize"
+                => args.first().and_then(|a| try_infer_shape(a, shapes)),
+            "first" => args.first().and_then(|a| try_infer_shape(a, shapes)),
+            "reshape" if args.len() == 2 => {
+                if let CompiledExpr::Vector(elems) = &args[1] {
+                    elems.iter().map(|e| {
+                        if let CompiledExpr::Integer(n) = e { Some(*n) } else { None }
+                    }).collect()
+                } else {
+                    None
+                }
+            }
+            "swapaxes" if args.len() == 3 => {
+                if let (Some(sh), Some(CompiledExpr::Integer(a)), Some(CompiledExpr::Integer(b)))
+                    = (try_infer_shape(&args[0], shapes), args.get(1), args.get(2))
+                {
+                    let ndim = sh.len() as i64;
+                    let ai = if *a < 0 { (ndim + a) as usize } else { *a as usize };
+                    let bi = if *b < 0 { (ndim + b) as usize } else { *b as usize };
+                    if ai < sh.len() && bi < sh.len() {
+                        let mut out = sh;
+                        out.swap(ai, bi);
+                        Some(out)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            "@" if args.len() == 2 => {
+                let lhs = try_infer_shape(&args[0], shapes)?;
+                let rhs = try_infer_shape(&args[1], shapes)?;
+                if lhs.len() >= 2 && rhs.len() >= 2 {
+                    let mut out = lhs[..lhs.len()-1].to_vec();
+                    out.push(*rhs.last().unwrap());
+                    Some(out)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn f64_to_const(val: f64) -> CompiledExpr {
+    if val.fract() == 0.0 && val.abs() < i64::MAX as f64 {
+        CompiledExpr::Integer(val as i64)
+    } else {
+        CompiledExpr::Float(val)
+    }
+}
+
+fn try_fold_arithmetic(name: &str, args: &[CompiledExpr]) -> Option<CompiledExpr> {
+    if args.len() != 2 { return None; }
+    let a = extract_numeric(&args[0])?;
+    let b = extract_numeric(&args[1])?;
+    let result = match name {
+        "+" => a + b,
+        "-" => a - b,
+        "*" => a * b,
+        "/" => a / b,
+        "//" => (a / b).floor(),
+        _ => return None,
+    };
+    Some(f64_to_const(result))
+}
+
+fn extract_numeric(expr: &CompiledExpr) -> Option<f64> {
+    match expr {
+        CompiledExpr::Integer(n) => Some(*n as f64),
+        CompiledExpr::Float(f) => Some(*f),
+        _ => None,
+    }
+}
