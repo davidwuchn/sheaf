@@ -42,6 +42,9 @@ pub struct Env {
     /// Counts consecutive registry function calls without a new recording.
     /// When this exceeds a threshold, auto-trace stops (no new shapes to learn).
     pub trace_stale_calls: usize,
+    /// JIT compiler for transparent on-demand compilation of pure functions.
+    #[cfg(iree_runtime)]
+    pub jit_compiler: Option<crate::runtime::jit::JitCompiler>,
 }
 
 impl Env {
@@ -57,6 +60,8 @@ impl Env {
             eval_deadline: None,
             trace_targets: None,
             trace_stale_calls: 0,
+            #[cfg(iree_runtime)]
+            jit_compiler: Some(crate::runtime::jit::JitCompiler::new()),
         }
     }
 
@@ -72,6 +77,8 @@ impl Env {
             eval_deadline: None,
             trace_targets: None,
             trace_stale_calls: 0,
+            #[cfg(iree_runtime)]
+            jit_compiler: Some(crate::runtime::jit::JitCompiler::new()),
         }
     }
 
