@@ -550,34 +550,31 @@ impl SpecialForm for ValueAndGradForm {
 /// Nested layout: {:attn {:Wq [512 512] :Wk [512 512]} :mlp {:W1 [512 2048]}}
 ///   → tuple<tuple<tensor<512x512xf32>, tensor<512x512xf32>>, tuple<tensor<512x2048xf32>>>
 pub fn param_layout_to_stablehlo_type(layout: &ParamLayout) -> StableHLOType {
-    // Group fields by their first path segment
-    let mut top_keys: Vec<String> = Vec::new();
-    for field in &layout.fields {
-        if let Some(k) = field.path.first() {
-            if !top_keys.contains(k) {
-                top_keys.push(k.clone());
-            }
+    let field_refs: Vec<&ParamField> = layout.fields.iter().collect();
+    fields_to_tuple_type(&field_refs, 0)
+}
+
+fn fields_to_tuple_type(fields: &[&ParamField], depth: usize) -> StableHLOType {
+    // Group fields by path[depth], preserving insertion order
+    let mut group_keys: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, Vec<&ParamField>> =
+        std::collections::HashMap::new();
+    for field in fields {
+        let key = &field.path[depth];
+        if !group_keys.contains(key) {
+            group_keys.push(key.clone());
         }
+        groups.entry(key.clone()).or_default().push(field);
     }
 
-    // Build element types for each top-level group
-    let elements: Vec<StableHLOType> = top_keys
+    let elements: Vec<StableHLOType> = group_keys
         .iter()
         .map(|key| {
-            let children: Vec<&ParamField> = layout
-                .fields
-                .iter()
-                .filter(|f| f.path.first().map(|k| k == key).unwrap_or(false))
-                .collect();
-
-            if children.len() == 1 && children[0].path.len() == 1 {
-                // Leaf: simple tensor
-                field_to_tensor_type(children[0])
+            let group = &groups[key];
+            if group.len() == 1 && group[0].path.len() == depth + 1 {
+                field_to_tensor_type(group[0])
             } else {
-                // Group: sub-tuple
-                let sub_elements: Vec<StableHLOType> =
-                    children.iter().map(|f| field_to_tensor_type(f)).collect();
-                StableHLOType::Tuple(sub_elements)
+                fields_to_tuple_type(group, depth + 1)
             }
         })
         .collect();

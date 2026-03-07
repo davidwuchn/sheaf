@@ -290,33 +290,7 @@ pub fn value_to_param_layout(name: &str, val: &Value) -> Option<ParamLayout> {
     };
 
     let mut fields = Vec::new();
-    let top_keys: Vec<&String> = dict.keys().collect(); // BTreeMap: already sorted
-
-    for (top_idx, key) in top_keys.iter().enumerate() {
-        match &dict[*key] {
-            // Nested dict: two-level path
-            Value::Dict(sub) => {
-                let sub_keys: Vec<&String> = sub.keys().collect();
-                for (sub_idx, sub_key) in sub_keys.iter().enumerate() {
-                    let shape = extract_shape(&sub[*sub_key])?;
-                    fields.push(ParamField {
-                        path: vec![(*key).clone(), (*sub_key).clone()],
-                        shape,
-                        tuple_index: vec![top_idx, sub_idx],
-                    });
-                }
-            }
-            // Leaf tensor: one-level path
-            other => {
-                let shape = extract_shape(other)?;
-                fields.push(ParamField {
-                    path: vec![(*key).clone()],
-                    shape,
-                    tuple_index: vec![top_idx],
-                });
-            }
-        }
-    }
+    collect_layout_fields(dict, &mut vec![], &mut vec![], &mut fields)?;
 
     Some(ParamLayout {
         name: name.to_string(),
@@ -324,11 +298,39 @@ pub fn value_to_param_layout(name: &str, val: &Value) -> Option<ParamLayout> {
     })
 }
 
+fn collect_layout_fields(
+    dict: &std::collections::BTreeMap<String, Value>,
+    path: &mut Vec<String>,
+    indices: &mut Vec<usize>,
+    fields: &mut Vec<ParamField>,
+) -> Option<()> {
+    for (idx, (key, val)) in dict.iter().enumerate() {
+        path.push(key.clone());
+        indices.push(idx);
+        match val {
+            Value::Dict(sub) => {
+                collect_layout_fields(sub, path, indices, fields)?;
+            }
+            other => {
+                let shape = extract_shape(other)?;
+                fields.push(ParamField {
+                    path: path.clone(),
+                    shape,
+                    tuple_index: indices.clone(),
+                });
+            }
+        }
+        path.pop();
+        indices.pop();
+    }
+    Some(())
+}
+
 /// Extract shape from a Value (tensor or scalar).
 fn extract_shape(val: &Value) -> Option<Vec<i64>> {
     match val {
         Value::Tensor { data, .. } => Some(data.shape().iter().map(|&d| d as i64).collect()),
-        Value::Float(_) | Value::Int(_) => Some(vec![]),
+        Value::Float(_) | Value::Int(_) | Value::Bool(_) => Some(vec![]),
         _ => None,
     }
 }
