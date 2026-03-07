@@ -80,6 +80,9 @@ impl StableHLOEmitter {
     }
 
     /// Emit stablehlo.reduce to compute mean along one axis.
+    /// Results are cached: calling with the same (input, axis, keepdims) returns
+    /// the previously computed register, avoiding duplicate reductions (e.g. var
+    /// internally calling mean on the same operand that mean already computed).
     pub fn emit_reduce_mean(
         &mut self,
         input: &Register,
@@ -100,6 +103,11 @@ impl StableHLOEmitter {
         } else {
             axis as usize
         };
+
+        let cache_key = (*input, axis_usize, keepdims);
+        if let Some(cached) = self.reduce_mean_cache.get(&cache_key) {
+            return cached.clone();
+        }
         let n = shape[axis_usize] as f64;
 
         let (sum_reg, sum_ty) = self.emit_reduce_sum(input, input_ty, axis, keepdims);
@@ -134,6 +142,7 @@ impl StableHLOEmitter {
                 sum_ty.to_mlir(),
             ));
         }
+        self.reduce_mean_cache.insert(cache_key, (result_reg, sum_ty.clone()));
         (result_reg, sum_ty)
     }
 

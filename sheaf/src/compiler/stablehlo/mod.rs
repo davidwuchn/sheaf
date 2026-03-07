@@ -9,6 +9,7 @@ mod reduce_ops;
 mod tensor_ops;
 
 use crate::ast::SheafValue;
+use std::collections::HashMap;
 use std::fmt::Write;
 
 /// StableHLO type representation
@@ -179,7 +180,7 @@ fn split_tuple_args(s: &str) -> Vec<&str> {
 }
 
 /// Register name in SSA form: %0, %1, etc. or %arg0, %arg1, etc.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Register {
     /// Regular SSA register: %0, %1, etc.
     Reg(usize),
@@ -208,6 +209,9 @@ impl Register {
 pub struct StableHLOEmitter {
     counter: usize,
     pub(crate) body: Vec<String>,
+    /// Cache for reduce_mean results: (input_register, normalized_axis, keepdims) → (result_reg, result_type).
+    /// Avoids recomputing mean(x, axis) when var(x, axis) also needs it internally.
+    reduce_mean_cache: HashMap<(Register, usize, bool), (Register, StableHLOType)>,
 }
 
 impl StableHLOEmitter {
@@ -215,6 +219,7 @@ impl StableHLOEmitter {
         Self {
             counter: 0,
             body: Vec::new(),
+            reduce_mean_cache: HashMap::new(),
         }
     }
 
