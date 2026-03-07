@@ -697,19 +697,31 @@ impl StableHLOEmitter {
         start: i64,
         end: i64,
     ) -> (Register, StableHLOType) {
+        self.emit_slice_axis(input, input_ty, start, end, 0)
+    }
+
+    /// Emit slice along a given axis: (slice tensor start end :axis N)
+    pub fn emit_slice_axis(
+        &mut self,
+        input: &Register,
+        input_ty: &StableHLOType,
+        start: i64,
+        end: i64,
+        axis: usize,
+    ) -> (Register, StableHLOType) {
         let shape = input_ty.shape();
         let ndim = shape.len();
 
         let mut start_indices = vec![0i64; ndim];
         let mut limit_indices = shape.to_vec();
         let strides = vec![1i64; ndim];
-        start_indices[0] = start;
-        limit_indices[0] = end;
+        start_indices[axis] = start;
+        limit_indices[axis] = end;
 
         let dims_str = format_slice_dims(&start_indices, &limit_indices, &strides);
 
         let mut result_shape = shape.to_vec();
-        result_shape[0] = end - start;
+        result_shape[axis] = end - start;
         let result_ty = StableHLOType::f32_tensor(result_shape);
 
         let result_reg = self.fresh_register();

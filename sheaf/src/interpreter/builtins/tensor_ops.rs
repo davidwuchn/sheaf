@@ -105,16 +105,18 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     Ok(Value::tensor_f32(result))
 }
 
-fn builtin_slice(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+fn builtin_slice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if let Value::String(s) = &args[0] {
         let start = args[1].to_f64().unwrap() as usize;
         let end = if args.len() > 2 { args[2].to_f64().unwrap() as usize } else { s.len() };
         return Ok(Value::String(s[start..end.min(s.len())].to_string()));
     }
     let (arr, _dt) = to_array(&args[0])?;
+    let axis_raw = kw.get("axis").and_then(|v| v.to_f64()).map(|v| v as i64).unwrap_or(0);
+    let axis = if axis_raw < 0 { (arr.ndim() as i64 + axis_raw) as usize } else { axis_raw as usize };
     let start = args[1].to_f64().unwrap() as usize;
-    let end = if args.len() > 2 { args[2].to_f64().unwrap() as usize } else { arr.shape()[0] };
-    let sliced = arr.slice_axis(ndarray::Axis(0), ndarray::Slice::from(start..end));
+    let end = if args.len() > 2 { args[2].to_f64().unwrap() as usize } else { arr.shape()[axis] };
+    let sliced = arr.slice_axis(ndarray::Axis(axis), ndarray::Slice::from(start..end));
     Ok(Value::tensor_f32(sliced.to_owned()))
 }
 

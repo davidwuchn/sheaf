@@ -1162,11 +1162,28 @@ impl CodeGenerator {
         else if name == "float" && args.len() == 1 {
             self.generate(&args[0])
         }
-        // slice: (slice tensor start end) — start inclusive, end exclusive
-        else if name == "slice" && (args.len() == 2 || args.len() == 3) {
+        // slice: (slice tensor start end :axis N) — start inclusive, end exclusive
+        else if name == "slice" && args.len() >= 2 {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
-            let start = match &args[1] {
-                CompiledExpr::Integer(n) => *n,
+            // Parse positional args (start, end) and keyword :axis
+            let mut positionals = Vec::new();
+            let mut axis: Option<i64> = None;
+            let mut i = 1;
+            while i < args.len() {
+                if let CompiledExpr::Keyword(k) = &args[i] {
+                    if k == "axis" && i + 1 < args.len() {
+                        if let CompiledExpr::Integer(n) = &args[i + 1] {
+                            axis = Some(*n);
+                        }
+                        i += 2;
+                        continue;
+                    }
+                }
+                positionals.push(&args[i]);
+                i += 1;
+            }
+            let start = match positionals.first() {
+                Some(CompiledExpr::Integer(n)) => *n,
                 _ => {
                     return Err(SheafError::Compile {
                         message: "slice: start must be integer".to_string(),
@@ -1174,8 +1191,11 @@ impl CodeGenerator {
                     });
                 }
             };
-            let end = if args.len() == 3 {
-                match &args[2] {
+            let shape = operand_ty.shape();
+            let axis_val = axis.unwrap_or(0);
+            let axis_usize = if axis_val < 0 { (shape.len() as i64 + axis_val) as usize } else { axis_val as usize };
+            let end = if positionals.len() > 1 {
+                match positionals[1] {
                     CompiledExpr::Integer(n) => *n,
                     _ => {
                         return Err(SheafError::Compile {
@@ -1185,9 +1205,9 @@ impl CodeGenerator {
                     }
                 }
             } else {
-                operand_ty.shape()[0]
+                shape[axis_usize]
             };
-            let (reg, ty) = tensor_ops::emit_slice(&mut self.emitter, &operand_reg, &operand_ty, start, end);
+            let (reg, ty) = tensor_ops::emit_slice(&mut self.emitter, &operand_reg, &operand_ty, start, end, axis_usize);
             Ok((reg, ty))
         }
         // tensor-split: (tensor-split tensor num-sections)
