@@ -56,6 +56,11 @@ impl TensorFingerprint {
                 num_elems: 1,
                 sample: [(*n as f64).to_bits(), 0, 0, 0],
             }),
+            Value::Bool(b) => Some(Self {
+                shape: vec![],
+                num_elems: 1,
+                sample: [(*b as u64), 0, 0, 0],
+            }),
             _ => None,
         }
     }
@@ -71,6 +76,7 @@ impl TensorFingerprint {
             }
             Value::Float(f) => self.num_elems == 1 && self.sample[0] == f.to_bits(),
             Value::Int(n) => self.num_elems == 1 && self.sample[0] == (*n as f64).to_bits(),
+            Value::Bool(b) => self.num_elems == 1 && self.sample[0] == (*b as u64),
             _ => false,
         }
     }
@@ -412,6 +418,13 @@ unsafe fn value_to_buffer_view(
                 };
                 value_to_buffer_view(device, allocator, &tensor)
             }
+            Value::Bool(b) => {
+                let tensor = Value::Tensor {
+                    data: Arc::new(ArrayD::from_elem(vec![], if *b { 1.0 } else { 0.0 })),
+                    dtype: Dtype::F32,
+                };
+                value_to_buffer_view(device, allocator, &tensor)
+            }
             _ => Err(iree_err(&format!(
                 "cannot convert {} to IREE buffer",
                 val.type_name()
@@ -486,7 +499,7 @@ fn count_one_value(val: &Value) -> usize {
     match val {
         Value::Dict(map) => map.values().map(count_one_value).sum(),
         Value::Tuple(elems) | Value::List(elems) => elems.iter().map(count_one_value).sum(),
-        Value::Tensor { .. } | Value::Float(_) | Value::Int(_) => 1,
+        Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::Bool(_) => 1,
         _ => 0,
     }
 }
@@ -563,7 +576,7 @@ fn collect_value_shapes(val: &Value, out: &mut Vec<Vec<i64>>) {
         Value::Tensor { data, .. } => {
             out.push(data.shape().iter().map(|&d| d as i64).collect());
         }
-        Value::Float(_) | Value::Int(_) => {
+        Value::Float(_) | Value::Int(_) | Value::Bool(_) => {
             out.push(vec![]);
         }
         _ => {}
@@ -597,7 +610,7 @@ fn flatten_value<'a>(val: &'a Value, out: &mut Vec<&'a Value>) -> Result<(), She
             }
             Ok(())
         }
-        Value::Tensor { .. } | Value::Float(_) | Value::Int(_) => {
+        Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::Bool(_) => {
             out.push(val);
             Ok(())
         }
