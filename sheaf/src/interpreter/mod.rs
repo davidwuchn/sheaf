@@ -1108,6 +1108,12 @@ fn eval_value_and_grad_hof(args: &[Value], _env: &mut Env) -> Result<Value, Shea
 /// Tries symbolic autodiff first (exact, fast). Falls back to finite differences
 /// if the function body contains ops the AD engine cannot handle (get, reduce, etc.).
 fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Result<Value, SheafError> {
+    // Try JIT compilation first: compile forward+backward into a single VMFB
+    #[cfg(iree_runtime)]
+    if let Some(result) = try_jit_vag(func, params, env) {
+        return result;
+    }
+
     use crate::autodiff::{contains_undiffable_ops, grad_simplified, inline_function_calls};
 
     if let Value::Function { params: fn_params, body, closure } = func {
@@ -1560,4 +1566,228 @@ fn try_iree_dispatch(
     };
 
     Some(Ok(result))
+}
+
+/// Try to JIT-compile a value-and-grad call into a single VMFB (forward + backward).
+/// Returns `Some(Ok(result))` on success, `None` to fall through to the interpreter.
+#[cfg(iree_runtime)]
+fn try_jit_vag(
+    func: &Value,
+    params: &Value,
+    env: &mut Env,
+) -> Option<Result<Value, SheafError>> {
+    // Augment the closure with free variables resolved from the environment.
+    // Sheaf uses dynamic scoping, so lambdas don't capture free vars at creation.
+    // The JIT needs them as explicit captures.
+    let augmented_func = augment_closure_with_free_vars(func, env)?;
+
+    let jit = env.jit_compiler.as_mut()?;
+
+    let (session_idx, sig, param_names) = jit.try_jit_value_and_grad(
+        &augmented_func,
+        params,
+        &env.registry,
+        &mut env.vmfb_sessions,
+    )?;
+
+    // Build the argument list: fn params first, then captures (same order as param_names)
+    let (fn_params, closure) = match &augmented_func {
+        Value::Function {
+            params: p,
+            closure: c,
+            ..
+        } => (p, c),
+        _ => return None,
+    };
+
+    let mut args: Vec<Value> = Vec::new();
+    for name in &param_names {
+        if fn_params.contains(name) {
+            args.push(params.clone());
+        } else if let Some((_, val)) = closure.iter().find(|(k, _)| k == name) {
+            args.push(val.clone());
+        } else {
+            // Scalar capture — not passed to IREE
+            continue;
+        }
+    }
+
+    // Dispatch via IREE
+    let session = env.vmfb_sessions.get(session_idx)?;
+    let iree_session = session.downcast_ref::<crate::runtime::iree_session::IreeSession>()?;
+
+    let result = match iree_session.call_typed("module.value_and_grad", &args, &sig.return_type) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("warning: value-and-grad JIT dispatch failed: {}", e);
+            return None;
+        }
+    };
+
+    // Unpack: IREE returns Tuple([loss_tensor, grad_elements...])
+    // We need to return List([Float(loss), grad_value])
+    let unpacked = match unpack_vag_result(&result, params) {
+        Some(v) => v,
+        None => {
+            eprintln!("warning: value-and-grad result unpacking failed");
+            return None;
+        }
+    };
+
+    Some(Ok(unpacked))
+}
+
+/// Augment a lambda's closure with free variables from the dynamic environment.
+/// Sheaf lambdas have empty closures (dynamic scoping); the JIT needs explicit captures.
+#[cfg(iree_runtime)]
+fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
+    let (fn_params, body, closure) = match func {
+        Value::Function { params, body, closure } => (params, body, closure),
+        _ => return None,
+    };
+
+    let mut free = std::collections::HashSet::new();
+    collect_free_vars_compiled(body, &mut free);
+
+    // Remove the lambda's own params
+    for p in fn_params {
+        free.remove(p.as_str());
+    }
+    // Remove vars already in the closure
+    for (k, _) in closure {
+        free.remove(k.as_str());
+    }
+
+    let mut augmented_closure = closure.clone();
+    for name in &free {
+        if let Ok(val) = env.get(name) {
+            augmented_closure.push((name.to_string(), val.clone()));
+        }
+        // If not in env, leave it — the JIT will fail gracefully
+    }
+
+    Some(Value::Function {
+        params: fn_params.clone(),
+        body: body.clone(),
+        closure: augmented_closure,
+    })
+}
+
+/// Collect all symbol names referenced in a CompiledExpr (not bound by inner let/lambda).
+#[cfg(iree_runtime)]
+fn collect_free_vars_compiled(expr: &CompiledExpr, out: &mut std::collections::HashSet<String>) {
+    use crate::core::compiler::CompiledExpr;
+    match expr {
+        CompiledExpr::Symbol(name) => {
+            out.insert(name.clone());
+        }
+        CompiledExpr::FunctionCall { args, .. } => {
+            for a in args {
+                collect_free_vars_compiled(a, out);
+            }
+        }
+        CompiledExpr::Let { bindings, body } => {
+            for (_, v) in bindings {
+                collect_free_vars_compiled(v, out);
+            }
+            // Let-bound names shadow, but we're collecting conservatively
+            // (the JIT will just ignore extra captures)
+            collect_free_vars_compiled(body, out);
+        }
+        CompiledExpr::Do(exprs) => {
+            for e in exprs {
+                collect_free_vars_compiled(e, out);
+            }
+        }
+        CompiledExpr::If { condition, then_branch, else_branch } => {
+            collect_free_vars_compiled(condition, out);
+            collect_free_vars_compiled(then_branch, out);
+            if let Some(e) = else_branch {
+                collect_free_vars_compiled(e, out);
+            }
+        }
+        CompiledExpr::Lambda { params, body } => {
+            let mut inner = std::collections::HashSet::new();
+            collect_free_vars_compiled(body, &mut inner);
+            for p in params {
+                inner.remove(p.as_str());
+            }
+            out.extend(inner);
+        }
+        CompiledExpr::LambdaCall { callee, args } => {
+            collect_free_vars_compiled(callee, out);
+            for a in args {
+                collect_free_vars_compiled(a, out);
+            }
+        }
+        CompiledExpr::GetTupleElement { param, .. } => {
+            out.insert(param.clone());
+        }
+        CompiledExpr::Vector(elems) => {
+            for e in elems {
+                collect_free_vars_compiled(e, out);
+            }
+        }
+        _ => {} // Literals, Float, Integer, etc.
+    }
+}
+
+/// Unpack a value-and-grad IREE result into [Float(loss), grad_dict_or_tensor].
+#[cfg(iree_runtime)]
+fn unpack_vag_result(result: &Value, original_params: &Value) -> Option<Value> {
+    let elems = match result {
+        Value::Tuple(elems) => elems,
+        _ => return None,
+    };
+
+    if elems.len() < 2 {
+        return None;
+    }
+
+    // First element: loss (scalar tensor → Float)
+    let loss = match &elems[0] {
+        Value::Tensor { data, .. } if data.len() == 1 => Value::Float(data[0]),
+        Value::Float(f) => Value::Float(*f),
+        _ => return None,
+    };
+
+    // Second element: gradient (same structure as original params)
+    let grad = if elems.len() == 2 {
+        match original_params {
+            Value::Dict(map) => tuple_to_dict(&elems[1], map)?,
+            _ => elems[1].clone(),
+        }
+    } else {
+        // Multiple wrt params: pack remaining elements
+        Value::Tuple(elems[1..].to_vec())
+    };
+
+    Some(Value::List(vec![loss, grad]))
+}
+
+/// Reconstruct a Dict from a Tuple, using the original Dict's key structure.
+/// Dict keys are sorted (BTreeMap), matching the tuple element order from codegen.
+#[cfg(iree_runtime)]
+fn tuple_to_dict(tuple_val: &Value, original: &BTreeMap<String, Value>) -> Option<Value> {
+    let elems = match tuple_val {
+        Value::Tuple(elems) => elems,
+        _ => {
+            // Leaf value — not a dict, return as-is
+            return Some(tuple_val.clone());
+        }
+    };
+
+    if elems.len() != original.len() {
+        return None;
+    }
+
+    let mut result = BTreeMap::new();
+    for ((key, orig_val), elem) in original.iter().zip(elems.iter()) {
+        let val = match orig_val {
+            Value::Dict(sub_map) => tuple_to_dict(elem, sub_map)?,
+            _ => elem.clone(),
+        };
+        result.insert(key.clone(), val);
+    }
+    Some(Value::Dict(result))
 }
