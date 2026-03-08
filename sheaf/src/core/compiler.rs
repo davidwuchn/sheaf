@@ -180,7 +180,7 @@ fn is_builtin_name(name: &str) -> bool {
 
 impl CompilerContext {
     pub fn new() -> Self {
-        Self {
+        let mut ctx = Self {
             env: Self::init_env(),
             registry: HashMap::new(),
             local_vars: HashMap::new(),
@@ -193,6 +193,28 @@ impl CompilerContext {
             disable_vmfb: false,
             checked_vmfb_dirs: HashSet::new(),
             macro_engine: MacroEngine::new(),
+        };
+        ctx.load_prelude();
+        ctx
+    }
+
+    /// Load core macros from the standard library (macros.shf).
+    /// These are always available without explicit `(use macros)`.
+    fn load_prelude(&mut self) {
+        for dir in &self.load_path {
+            let path = dir.join("macros.shf");
+            if path.exists() {
+                if let Ok(source) = std::fs::read_to_string(&path) {
+                    let filename = path.to_str().unwrap_or("<prelude>");
+                    if let Ok(exprs) = crate::core::parse(&source, filename) {
+                        for expr in &exprs {
+                            let _ = self.compile(expr);
+                        }
+                    }
+                    self.loaded_modules.insert(path);
+                }
+                return;
+            }
         }
     }
 
