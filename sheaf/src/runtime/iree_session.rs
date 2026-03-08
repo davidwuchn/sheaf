@@ -119,8 +119,9 @@ pub struct IreeSession {
     /// HAL driver name: "metal", "local-task", etc.
     driver_name: String,
     /// Per-function buffer view cache: fn_name -> per-position cached buffer views.
-    /// Static arguments (e.g. model weights) are allocated once and reused across calls.
-    buffer_cache: Mutex<HashMap<String, Vec<Option<CachedBufferView>>>>,
+    /// Each position holds up to MAX_CACHE_ENTRIES entries to avoid thrashing when
+    /// the same function is called with different weight sets (e.g. transformer layers).
+    buffer_cache: Mutex<HashMap<String, Vec<Vec<CachedBufferView>>>>,
     /// Dispatch timing (nanoseconds, accumulated). Enabled by SHEAF_PROFILE_IREE=1.
     profile: bool,
     t_flatten_ns: AtomicU64,
@@ -279,34 +280,38 @@ impl IreeSession {
             }
 
             // Build input buffer views with caching.
-            // Static arguments (model weights) are fingerprinted and reused across calls.
+            // Each position holds up to 8 entries to avoid thrashing when the same
+            // function is called with different weight sets (e.g. 6 transformer layers).
+            const MAX_CACHE_ENTRIES: usize = 8;
             let mut cache = self.buffer_cache.lock().unwrap();
-            // Avoid String allocation on cache hit: try get_mut first
             let cached_fn = match cache.get_mut(fn_name) {
                 Some(c) => c,
                 None => cache.entry(fn_name.to_string()).or_default(),
             };
-            // Ensure cache vec is large enough
-            cached_fn.resize_with(cached_fn.len().max(flat_inputs.len()), || None);
+            if cached_fn.len() < flat_inputs.len() {
+                cached_fn.resize_with(flat_inputs.len(), Vec::new);
+            }
 
             for (i, val) in flat_inputs.iter().enumerate() {
-                // Check cache without allocating a fingerprint
-                let is_cached = cached_fn[i]
-                    .as_ref()
-                    .map_or(false, |entry| entry.fingerprint.matches(val));
+                // Search all entries at this position for a fingerprint match
+                let hit_idx = cached_fn[i].iter().position(|entry| entry.fingerprint.matches(val));
 
-                let bv = if is_cached {
+                let bv = if let Some(idx) = hit_idx {
                     if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
-                    cached_fn[i].as_ref().unwrap().bv
+                    // Move hit to front (MRU) for better locality
+                    if idx > 0 { cached_fn[i].swap(0, idx); }
+                    cached_fn[i][0].bv
                 } else {
                     if self.profile { self.n_cache_misses.fetch_add(1, Ordering::Relaxed); }
-                    // Cache miss: allocate new buffer view + fingerprint
                     let new_bv = value_to_buffer_view(device, device_alloc, val)?;
-                    if let Some(old) = cached_fn[i].take() {
-                        iree_hal_buffer_view_release(old.bv);
-                    }
                     if let Some(fp) = TensorFingerprint::from_value(val) {
-                        cached_fn[i] = Some(CachedBufferView { fingerprint: fp, bv: new_bv });
+                        // Evict oldest if at capacity
+                        if cached_fn[i].len() >= MAX_CACHE_ENTRIES {
+                            let evicted = cached_fn[i].pop().unwrap();
+                            iree_hal_buffer_view_release(evicted.bv);
+                        }
+                        // Insert at front (MRU position)
+                        cached_fn[i].insert(0, CachedBufferView { fingerprint: fp, bv: new_bv });
                     }
                     new_bv
                 };
@@ -426,9 +431,11 @@ impl Drop for IreeSession {
         unsafe {
             // Release all cached buffer views before tearing down the session
             if let Ok(cache) = self.buffer_cache.lock() {
-                for entries in cache.values() {
-                    for entry in entries.iter().flatten() {
-                        iree_hal_buffer_view_release(entry.bv);
+                for positions in cache.values() {
+                    for slot in positions {
+                        for entry in slot {
+                            iree_hal_buffer_view_release(entry.bv);
+                        }
                     }
                 }
             }
