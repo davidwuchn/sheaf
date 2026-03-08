@@ -606,13 +606,15 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         return;
     }
 
-    // VMFB path — requires iree-compile
-    let iree_compile = sheaf_compiler::runtime::jit::find_iree_compile().unwrap_or_else(|| {
-        eprintln!("error: 'sheaf build' requires the Sheaf SDK (iree-compile not found)");
-        eprintln!("  Install the SDK or set IREE_COMPILE=/path/to/iree-compile");
-        eprintln!("  To emit MLIR only (no SDK): sheaf build FILE -o FILE.mlir -S");
-        exit(1);
-    });
+    // VMFB path — requires iree-compile (auto-download if needed)
+    let iree_compile = sheaf_compiler::runtime::jit::find_iree_compile()
+        .or_else(|| sheaf_compiler::runtime::jit::ensure_toolchain().ok())
+        .unwrap_or_else(|| {
+            eprintln!("error: iree-compile not found and auto-download failed");
+            eprintln!("  Set IREE_COMPILE=/path/to/iree-compile or check network connection");
+            eprintln!("  To emit MLIR only (no SDK): sheaf build FILE -o FILE.mlir -S");
+            exit(1);
+        });
 
     // Write intermediate MLIR to a temp file
     let mlir_path = output.with_extension("mlir");
