@@ -7,11 +7,23 @@ on:
   workflow_dispatch:
 
 env:
-  IREE_VERSION: "3.10.0"
   IREE_REPO: "https://github.com/iree-org/iree.git"
 
 jobs:
+  read-iree-version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read IREE version from Cargo.toml
+        id: read
+        run: |
+          VERSION=$(grep '^iree-version' sheaf/Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
   build-iree-runtime:
+    needs: read-iree-version
     strategy:
       matrix:
         include:
@@ -35,7 +47,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: iree-install
-          key: iree-runtime-${{ env.IREE_VERSION }}-${{ matrix.target }}-v2
+          key: iree-runtime-${{ needs.read-iree-version.outputs.version }}-${{ matrix.target }}-v2
 
       - name: Install cross-compilation toolchain (linux-aarch64)
         if: steps.cache-iree.outputs.cache-hit != 'true' && matrix.target == 'linux-aarch64'
@@ -56,7 +68,7 @@ jobs:
       - name: Clone IREE
         if: steps.cache-iree.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch v${{ env.IREE_VERSION }} ${{ env.IREE_REPO }}
+          git clone --depth 1 --branch v${{ needs.read-iree-version.outputs.version }} ${{ env.IREE_REPO }}
           cd iree
           git submodule update --init --depth 1
 

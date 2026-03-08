@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Must match IREE_VERSION in .github/workflows/release.yml
-const IREE_COMPILER_VERSION: &str = "3.10.0";
+/// IREE compiler version — single source of truth in Cargo.toml [package.metadata]
+const IREE_COMPILER_VERSION: &str = env!("IREE_VERSION");
 
 use crate::compiler::codegen::CodeGenerator;
 use crate::compiler::config::{layout_to_index_map, lower_get_calls};

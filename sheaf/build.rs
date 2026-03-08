@@ -5,8 +5,16 @@ fn main() {
     // Search order for IREE runtime libraries:
     // 1. IREE_BUILD_DIR env var (CMake build tree)
     // 2. IREE_DIST_DIR env var (nightly dist flat layout)
-    // 3. ~/bin/iree-build (default CMake build)
-    // 4. IREE_RUNTIME_LIB_DIR env var (explicit lib directory)
+    // 3. IREE_RUNTIME_LIB_DIR env var (explicit lib directory)
+
+    // Expose [package.metadata] iree-version as compile-time env var
+    let cargo_toml = std::fs::read_to_string("Cargo.toml").expect("cannot read Cargo.toml");
+    let iree_version = cargo_toml.lines()
+        .find(|l| l.starts_with("iree-version"))
+        .and_then(|l| l.split('"').nth(1))
+        .expect("missing iree-version in [package.metadata]");
+    println!("cargo:rustc-env=IREE_VERSION={}", iree_version);
+    println!("cargo:rerun-if-changed=Cargo.toml");
 
     let found = try_cmake_layout()
         || try_dist_layout()
@@ -45,14 +53,12 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 }
 
-/// CMake build tree layout: iree-build/runtime/src/iree/runtime/libiree_runtime_unified.a
+/// CMake build tree layout: IREE_BUILD_DIR/runtime/src/iree/runtime/libiree_runtime_unified.a
 fn try_cmake_layout() -> bool {
-    let iree_build_dir = env::var("IREE_BUILD_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = env::var("HOME").unwrap_or_default();
-            PathBuf::from(home).join("bin/iree-build")
-        });
+    let iree_build_dir = match env::var("IREE_BUILD_DIR") {
+        Ok(d) => PathBuf::from(d),
+        Err(_) => return false,
+    };
 
     let runtime_dir = iree_build_dir.join("runtime/src/iree/runtime");
     let unified_lib = runtime_dir.join("libiree_runtime_unified.a");
