@@ -24,7 +24,7 @@ Compile all pure functions from .shf files into a single VMFB artifact.
 
     DIR                 Directory to scan for .shf files (default: .)
     FILE                Single .shf file to compile
-    -o OUTPUT           Output file (default: compiled-functions.vmfb)
+    -o OUTPUT           Output file (default: module.vmfb)
     -r                  Scan directories recursively
     -S                  Emit MLIR only; do not invoke iree-compile
     --config JSON       Shape config for dict params (manual)
@@ -132,7 +132,7 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         exit(1);
     }
 
-    // Resolve output directory (where compiled-functions.vmfb goes)
+    // Resolve output directory (where module.vmfb goes)
     let output_dir = if input.is_dir() {
         input.canonicalize().unwrap_or_else(|_| input.clone())
     } else {
@@ -142,9 +142,9 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
 
     let output = output.unwrap_or_else(|| {
         if emit_mlir_only {
-            output_dir.join("compiled-functions.mlir")
+            output_dir.join("module.mlir")
         } else {
-            output_dir.join("compiled-functions.vmfb")
+            output_dir.join("module.vmfb")
         }
     });
 
@@ -662,14 +662,14 @@ struct ManifestEntry {
     return_type: String,       // MLIR type string
 }
 
-/// Write manifest.json alongside the VMFB with hashes and inferred signatures.
+/// Write module.json alongside the VMFB with hashes and inferred signatures.
 /// Used by `sheaf run` and `(use)` to detect stale artifacts and load signatures.
 fn write_manifest(vmfb_path: &std::path::Path, functions: &[ManifestEntry], verbosity: u8) {
     let dir = vmfb_path.parent().unwrap_or(std::path::Path::new("."));
-    let manifest_path = dir.join("manifest.json");
+    let manifest_path = dir.join("module.json");
     let vmfb_name = vmfb_path.file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("compiled-functions.vmfb");
+        .unwrap_or("module.vmfb");
 
     let mut map = serde_json::Map::new();
     map.insert("_comment".into(), serde_json::Value::String(

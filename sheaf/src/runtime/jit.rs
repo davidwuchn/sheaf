@@ -263,62 +263,91 @@ impl JitCompiler {
         // Emit MLIR module
         let mlir = StableHLOEmitter::emit_module(&[mlir_decl]);
 
-        // Compile with iree-compile
-        let tmp_dir = std::env::temp_dir();
-        let stamp = std::process::id();
-        let mlir_path = tmp_dir.join(format!("sheaf-jit-{}-{}.mlir", name, stamp));
-        let vmfb_path = tmp_dir.join(format!("sheaf-jit-{}-{}.vmfb", name, stamp));
+        // Content hash for VMFB cache: hash(MLIR + backend + compiler version)
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        mlir.hash(&mut hasher);
+        target_backend.hash(&mut hasher);
+        IREE_COMPILER_VERSION.hash(&mut hasher);
+        let cache_hash = hasher.finish();
 
-        if std::fs::write(&mlir_path, &mlir).is_err() {
-            self.jit_fail(name, "failed to write temp MLIR");
-            return None;
-        }
+        let cache_dir = PathBuf::from("__sheaf__");
+        let cached_vmfb = cache_dir.join(format!("{:016x}.vmfb", cache_hash));
 
-        eprintln!("jit: compiling {}...", name);
-
-        let stderr_cfg = if self.verbose {
-            std::process::Stdio::inherit()
+        // Try loading from cache
+        let vmfb_data = if cached_vmfb.exists() {
+            match std::fs::read(&cached_vmfb) {
+                Ok(d) => {
+                    if self.verbose {
+                        eprintln!("jit: {} (cached)", name);
+                    }
+                    d
+                }
+                Err(_) => {
+                    self.jit_fail(name, "failed to read cached VMFB");
+                    return None;
+                }
+            }
         } else {
-            std::process::Stdio::null()
-        };
+            eprintln!("jit: compiling {}...", name);
 
-        let mut cmd = std::process::Command::new(&iree_compile);
-        cmd.arg(&mlir_path)
-            .arg(format!("--iree-hal-target-backends={}", target_backend))
-            .arg("-o")
-            .arg(&vmfb_path)
-            .stderr(stderr_cfg);
-        // Embed MSL source instead of compiled metallib — avoids Xcode dependency.
-        // The Metal runtime compiles MSL on first load via MTLDevice.makeLibrary(source:).
-        if target_backend == "metal-spirv" {
-            cmd.arg("--iree-metal-compile-to-metallib=false");
-        }
-        let status = cmd.status();
+            let tmp_dir = std::env::temp_dir();
+            let stamp = std::process::id();
+            let mlir_path = tmp_dir.join(format!("sheaf-jit-{}-{}.mlir", name, stamp));
+            let vmfb_path = tmp_dir.join(format!("sheaf-jit-{}-{}.vmfb", name, stamp));
 
-        let _ = std::fs::remove_file(&mlir_path);
-
-        let status = match status {
-            Ok(s) => s,
-            Err(e) => {
-                self.jit_fail(name, &format!("iree-compile exec: {}", e));
+            if std::fs::write(&mlir_path, &mlir).is_err() {
+                self.jit_fail(name, "failed to write temp MLIR");
                 return None;
             }
-        };
 
-        if !status.success() {
+            let stderr_cfg = if self.verbose {
+                std::process::Stdio::inherit()
+            } else {
+                std::process::Stdio::null()
+            };
+
+            let mut cmd = std::process::Command::new(&iree_compile);
+            cmd.arg(&mlir_path)
+                .arg(format!("--iree-hal-target-backends={}", target_backend))
+                .arg("-o")
+                .arg(&vmfb_path)
+                .stderr(stderr_cfg);
+            if target_backend == "metal-spirv" {
+                cmd.arg("--iree-metal-compile-to-metallib=false");
+            }
+            let status = cmd.status();
+            let _ = std::fs::remove_file(&mlir_path);
+
+            let status = match status {
+                Ok(s) => s,
+                Err(e) => {
+                    self.jit_fail(name, &format!("iree-compile exec: {}", e));
+                    return None;
+                }
+            };
+
+            if !status.success() {
+                let _ = std::fs::remove_file(&vmfb_path);
+                self.jit_fail(name, "iree-compile failed");
+                return None;
+            }
+
+            let data = match std::fs::read(&vmfb_path) {
+                Ok(d) => d,
+                Err(_) => {
+                    self.jit_fail(name, "failed to read compiled VMFB");
+                    return None;
+                }
+            };
             let _ = std::fs::remove_file(&vmfb_path);
-            self.jit_fail(name, "iree-compile failed");
-            return None;
-        }
 
-        let vmfb_data = match std::fs::read(&vmfb_path) {
-            Ok(d) => d,
-            Err(_) => {
-                self.jit_fail(name, "failed to read compiled VMFB");
-                return None;
-            }
+            // Cache for next run
+            let _ = std::fs::create_dir_all(&cache_dir);
+            let _ = std::fs::write(&cached_vmfb, &data);
+
+            data
         };
-        let _ = std::fs::remove_file(&vmfb_path);
 
         // Load into IREE session
         let mut session = match crate::runtime::iree_session::IreeSession::new() {

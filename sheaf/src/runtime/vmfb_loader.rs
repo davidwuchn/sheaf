@@ -13,11 +13,11 @@ use crate::core::compiler::CompilerContext;
 use crate::core::inference::FunctionSignature;
 use crate::runtime::iree_session::IreeSession;
 
-/// Try to load a compiled-functions.vmfb from the directory of a Sheaf source file.
+/// Try to load a module.vmfb from the directory of a Sheaf source file.
 ///
-/// Looks for `manifest.json` in the same directory as `shf_path` to determine
+/// Looks for `module.json` in the same directory as `shf_path` to determine
 /// which VMFB to load and validates freshness via content hashes.
-/// Falls back to `compiled-functions.vmfb` with timestamp check if no manifest.
+/// Falls back to `module.vmfb` with timestamp check if no manifest.
 ///
 /// `candidate_fns`: function names to consider for IREE dispatch.
 /// Only pure (side-effect-free) functions among these will be tagged.
@@ -57,8 +57,8 @@ pub fn try_load_vmfb(
         return false;
     }
 
-    // Try manifest.json first, then fallback to bare VMFB with timestamp check
-    let manifest_path = dir.join("manifest.json");
+    // Try module.json first, then fallback to bare VMFB with timestamp check
+    let manifest_path = dir.join("module.json");
     let (vmfb_path, valid_fns, signatures) = match std::fs::read_to_string(&manifest_path) {
         Ok(manifest_str) => {
             match validate_manifest(&manifest_str, dir, compiler, &pure_fns) {
@@ -67,8 +67,8 @@ pub fn try_load_vmfb(
             }
         }
         Err(_) => {
-            // No manifest — try compiled-functions.vmfb with timestamp fallback
-            let vmfb_path = dir.join("compiled-functions.vmfb");
+            // No manifest — try module.vmfb with timestamp fallback
+            let vmfb_path = dir.join("module.vmfb");
             if !vmfb_path.exists() {
                 return false;
             }
@@ -140,13 +140,13 @@ pub fn try_load_vmfb(
     }
 
     eprintln!(
-        "using compiled-functions.vmfb: {}",
+        "using module.vmfb: {}",
         valid_fns.join(", ")
     );
     true
 }
 
-/// Validate a manifest.json and return (vmfb_path, valid_fns, signatures).
+/// Validate a module.json and return (vmfb_path, valid_fns, signatures).
 /// Returns None if stale or invalid.
 fn validate_manifest(
     manifest_str: &str,
@@ -157,7 +157,7 @@ fn validate_manifest(
     let manifest: serde_json::Value = match serde_json::from_str(manifest_str) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("warning: invalid manifest.json: {}", e);
+            eprintln!("warning: invalid module.json: {}", e);
             return None;
         }
     };
@@ -165,10 +165,10 @@ fn validate_manifest(
     // Resolve VMFB path from manifest
     let vmfb_name = manifest.get("vmfb")
         .and_then(|v| v.as_str())
-        .unwrap_or("compiled-functions.vmfb");
+        .unwrap_or("module.vmfb");
     let vmfb_path = dir.join(vmfb_name);
     if !vmfb_path.exists() {
-        eprintln!("warning: '{}' referenced by manifest.json not found", vmfb_path.display());
+        eprintln!("warning: '{}' referenced by module.json not found", vmfb_path.display());
         return None;
     }
 
@@ -184,7 +184,7 @@ fn validate_manifest(
             Some(fd) => {
                 if fd.body_hash() != expected_hash {
                     eprintln!(
-                        "warning: manifest.json is stale ('{}' changed), run `sheaf build`",
+                        "warning: module.json is stale ('{}' changed), run `sheaf build`",
                         name
                     );
                     return None;
@@ -192,7 +192,7 @@ fn validate_manifest(
             }
             None => {
                 eprintln!(
-                    "warning: manifest.json is stale ('{}' not found), run `sheaf build`",
+                    "warning: module.json is stale ('{}' not found), run `sheaf build`",
                     name
                 );
                 return None;
