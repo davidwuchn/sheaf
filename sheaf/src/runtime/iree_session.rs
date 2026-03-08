@@ -29,80 +29,35 @@ unsafe fn libc_stderr() -> *mut c_void {
     }
 }
 
-/// Lightweight fingerprint for detecting tensor changes between calls.
-/// Stores shape + 4 spread-sampled elements (as exact f64 bits).
-struct TensorFingerprint {
-    shape: Vec<usize>,
-    num_elems: usize,
-    sample: [u64; 4],
+/// Identity-based fingerprint for buffer view caching.
+/// Uses Arc identity for tensors (O(1), no false positives).
+/// Same Arc = same data = cache hit. New Arc = miss (correct for computed values).
+/// Stores a clone of the Arc to keep it alive — prevents address reuse (ABA problem).
+#[derive(Clone)]
+enum TensorFingerprint {
+    Tensor(Arc<ndarray::ArrayD<f64>>),
+    Scalar(u64),
 }
 
 impl TensorFingerprint {
-    /// Build a fingerprint from a value (allocates shape Vec). Use only on cache miss.
     fn from_value(val: &Value) -> Option<Self> {
         match val {
-            Value::Tensor { data, .. } => {
-                let shape = data.shape().to_vec();
-                let num_elems = data.len();
-                let sample = Self::sample_tensor(data);
-                Some(Self { shape, num_elems, sample })
-            }
-            Value::Float(f) => Some(Self {
-                shape: vec![],
-                num_elems: 1,
-                sample: [f.to_bits(), 0, 0, 0],
-            }),
-            Value::Int(n) => Some(Self {
-                shape: vec![],
-                num_elems: 1,
-                sample: [(*n as f64).to_bits(), 0, 0, 0],
-            }),
-            Value::Bool(b) => Some(Self {
-                shape: vec![],
-                num_elems: 1,
-                sample: [(*b as u64), 0, 0, 0],
-            }),
+            Value::Tensor { data, .. } => Some(Self::Tensor(Arc::clone(data))),
+            Value::Float(f) => Some(Self::Scalar(f.to_bits())),
+            Value::Int(n) => Some(Self::Scalar(*n as u64)),
+            Value::Bool(b) => Some(Self::Scalar(*b as u64)),
             _ => None,
         }
     }
 
-    /// Check if a value matches this fingerprint without allocating.
     fn matches(&self, val: &Value) -> bool {
-        match val {
-            Value::Tensor { data, .. } => {
-                let n = data.len();
-                n == self.num_elems
-                    && data.shape() == self.shape.as_slice()
-                    && Self::sample_tensor(data) == self.sample
-            }
-            Value::Float(f) => self.num_elems == 1 && self.sample[0] == f.to_bits(),
-            Value::Int(n) => self.num_elems == 1 && self.sample[0] == (*n as f64).to_bits(),
-            Value::Bool(b) => self.num_elems == 1 && self.sample[0] == (*b as u64),
+        match (self, val) {
+            (Self::Tensor(cached), Value::Tensor { data, .. }) => Arc::ptr_eq(cached, data),
+            (Self::Scalar(s), Value::Float(f)) => *s == f.to_bits(),
+            (Self::Scalar(s), Value::Int(n)) => *s == (*n as u64),
+            (Self::Scalar(s), Value::Bool(b)) => *s == (*b as u64),
             _ => false,
         }
-    }
-
-    fn sample_tensor(data: &ArrayD<f64>) -> [u64; 4] {
-        let n = data.len();
-        let mut sample = [0u64; 4];
-        if n == 0 { return sample; }
-        if n <= 4 {
-            for (i, &x) in data.iter().take(4).enumerate() {
-                sample[i] = x.to_bits();
-            }
-        } else if let Some(slice) = data.as_slice() {
-            let indices = [0, n / 4, 3 * n / 4, n - 1];
-            for (i, &idx) in indices.iter().enumerate() {
-                sample[i] = slice[idx].to_bits();
-            }
-        } else {
-            let flat: Vec<f64> = data.iter().copied().collect();
-            let indices = [0, n / 4, 3 * n / 4, n - 1];
-            for (i, &idx) in indices.iter().enumerate() {
-                sample[i] = flat[idx].to_bits();
-            }
-        }
-        sample
     }
 }
 
@@ -180,8 +135,14 @@ impl IreeSession {
                     "failed to create IREE device (tried: {})", tried
                 )));
             }
-            if chosen_driver != "local-task" {
-                eprintln!("iree: using {} device", chosen_driver);
+            {
+                use std::sync::atomic::AtomicBool;
+                static PRINTED: AtomicBool = AtomicBool::new(false);
+                if chosen_driver != "local-task"
+                    && !PRINTED.swap(true, Ordering::Relaxed)
+                {
+                    eprintln!("sheaf: using {} device", chosen_driver);
+                }
             }
 
             let mut session_opts: iree_runtime_session_options_t = std::mem::zeroed();
@@ -293,24 +254,20 @@ impl IreeSession {
             }
 
             for (i, val) in flat_inputs.iter().enumerate() {
-                // Search all entries at this position for a fingerprint match
                 let hit_idx = cached_fn[i].iter().position(|entry| entry.fingerprint.matches(val));
 
                 let bv = if let Some(idx) = hit_idx {
                     if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
-                    // Move hit to front (MRU) for better locality
                     if idx > 0 { cached_fn[i].swap(0, idx); }
                     cached_fn[i][0].bv
                 } else {
                     if self.profile { self.n_cache_misses.fetch_add(1, Ordering::Relaxed); }
                     let new_bv = value_to_buffer_view(device, device_alloc, val)?;
                     if let Some(fp) = TensorFingerprint::from_value(val) {
-                        // Evict oldest if at capacity
                         if cached_fn[i].len() >= MAX_CACHE_ENTRIES {
                             let evicted = cached_fn[i].pop().unwrap();
                             iree_hal_buffer_view_release(evicted.bv);
                         }
-                        // Insert at front (MRU position)
                         cached_fn[i].insert(0, CachedBufferView { fingerprint: fp, bv: new_bv });
                     }
                     new_bv
