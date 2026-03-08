@@ -311,6 +311,28 @@ fn collect_layout_fields(
             Value::Dict(sub) => {
                 collect_layout_fields(sub, path, indices, fields)?;
             }
+            Value::List(items) => {
+                // Treat list as indexed dict with keys "0", "1", ..., "N-1"
+                for (list_idx, item) in items.iter().enumerate() {
+                    path.push(list_idx.to_string());
+                    indices.push(list_idx);
+                    match item {
+                        Value::Dict(sub) => {
+                            collect_layout_fields(sub, path, indices, fields)?;
+                        }
+                        other => {
+                            let shape = extract_shape(other)?;
+                            fields.push(ParamField {
+                                path: path.clone(),
+                                shape,
+                                tuple_index: indices.clone(),
+                            });
+                        }
+                    }
+                    path.pop();
+                    indices.pop();
+                }
+            }
             other => {
                 let shape = extract_shape(other)?;
                 fields.push(ParamField {

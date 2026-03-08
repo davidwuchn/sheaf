@@ -327,12 +327,20 @@ pub fn propagate_let_layouts(
         CompiledExpr::Let { bindings, body } => {
             for (var_name, value_expr) in bindings {
                 if let CompiledExpr::GetTupleElement { param, indices } = value_expr {
-                    if indices.len() == 1 {
-                        let lookup = (param.clone(), indices[0]);
-                        if let Some(key_name) = idx_to_key.get(&lookup) {
-                            if let Some(sub_layout) = layouts.get(key_name).cloned() {
-                                layouts.insert(var_name.clone(), sub_layout);
-                            }
+                    // Walk idx_to_key chain for arbitrary depth
+                    let mut cur = param.clone();
+                    let mut resolved = true;
+                    for &idx in indices {
+                        if let Some(key) = idx_to_key.get(&(cur.clone(), idx)) {
+                            cur = key.clone();
+                        } else {
+                            resolved = false;
+                            break;
+                        }
+                    }
+                    if resolved {
+                        if let Some(sub_layout) = layouts.get(&cur).cloned() {
+                            layouts.insert(var_name.clone(), sub_layout);
                         }
                     }
                 }

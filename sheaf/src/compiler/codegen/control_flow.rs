@@ -221,16 +221,20 @@ impl CodeGenerator {
             .and_then(|s| self.tuple_key_layouts.get(s))
             .cloned()
             .or_else(|| {
-                // For GetTupleElement collections (e.g. (get params :layers)),
-                // resolve the key name via idx_to_key and look up its layout.
+                // For GetTupleElement collections (e.g. (get params :h)),
+                // walk idx_to_key chain to resolve the collection's key name.
                 if let CompiledExpr::GetTupleElement { param, indices } = coll {
-                    if indices.len() == 1 {
-                        self.idx_to_key.get(&(param.clone(), indices[0]))
-                            .and_then(|key| self.tuple_key_layouts.get(key))
-                            .cloned()
-                    } else {
-                        None
+                    let mut cur = param.clone();
+                    for &idx in indices {
+                        cur = self.idx_to_key.get(&(cur, idx))?.clone();
                     }
+                    // cur = collection key (e.g. "h"). Elements are its children.
+                    // For VecTuple, all elements share the same structure —
+                    // get the first child's layout.
+                    let list_layout = self.tuple_key_layouts.get(&cur)?;
+                    let first_child_key = list_layout.values().next()
+                        .and_then(|_| list_layout.keys().next())?;
+                    self.tuple_key_layouts.get(first_child_key).cloned()
                 } else {
                     None
                 }

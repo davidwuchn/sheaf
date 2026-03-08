@@ -32,6 +32,10 @@ pub struct CodeGenerator {
     /// Reverse map: (param_name, tuple_index) -> key_name.
     /// Used to resolve layouts for GetTupleElement collections in reduce/scan.
     idx_to_key: HashMap<(String, usize), String>,
+    /// Map from SSA register to layout key name.
+    /// Tracks which layout key a register corresponds to, enabling
+    /// `(get (get x :k1) :k2)` where the outer get's operand is not a Symbol.
+    layout_key_map: HashMap<Register, String>,
 }
 
 impl CodeGenerator {
@@ -43,6 +47,7 @@ impl CodeGenerator {
             function_registry: HashMap::new(),
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
+            layout_key_map: HashMap::new(),
         }
     }
 
@@ -54,6 +59,7 @@ impl CodeGenerator {
             function_registry: registry,
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
+            layout_key_map: HashMap::new(),
         }
     }
 
@@ -75,6 +81,7 @@ impl CodeGenerator {
             function_registry: registry,
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
+            layout_key_map: HashMap::new(),
         }
     }
 
@@ -183,6 +190,22 @@ impl CodeGenerator {
                     current_ty = element_ty;
                 }
 
+                // Track layout key for the result register via idx_to_key chain
+                {
+                    let mut cur = param.clone();
+                    for &idx in indices {
+                        if let Some(key) = self.idx_to_key.get(&(cur.clone(), idx)) {
+                            cur = key.clone();
+                        } else {
+                            cur = String::new();
+                            break;
+                        }
+                    }
+                    if !cur.is_empty() {
+                        self.layout_key_map.insert(current_reg, cur);
+                    }
+                }
+
                 Ok((current_reg, current_ty))
             }
 
@@ -225,7 +248,7 @@ impl CodeGenerator {
                         }
                     } else {
                         let (reg, ty) = self.generate(value_expr)?;
-                        // Propagate sub-layout for Let-bound tuples from (get sym :key)
+                        // Propagate sub-layout for Let-bound tuples
                         if matches!(&ty, StableHLOType::Tuple(_)) {
                             if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args } = value_expr {
                                 if fn_name == "get" && fn_args.len() >= 2 {
@@ -235,6 +258,12 @@ impl CodeGenerator {
                                             self.tuple_key_layouts.insert(name.clone(), sub_layout);
                                         }
                                     }
+                                }
+                            }
+                            // Symbol alias: (let [x y]) where y has a layout
+                            else if let CompiledExpr::Symbol(src) = value_expr {
+                                if let Some(layout) = self.tuple_key_layouts.get(src).cloned() {
+                                    self.tuple_key_layouts.insert(name.clone(), layout);
                                 }
                             }
                         }

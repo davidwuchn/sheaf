@@ -206,21 +206,22 @@ impl JitCompiler {
         let mut idx_to_key: HashMap<(String, usize), String> = HashMap::new();
         for (param_name, index_map) in &param_index_maps {
             for (key_path, indices) in index_map {
-                if key_path.len() == 2 && indices.len() == 2 {
+                for depth in 0..key_path.len() {
+                    let parent = if depth == 0 {
+                        param_name.clone()
+                    } else {
+                        key_path[depth - 1].clone()
+                    };
+                    let child = &key_path[depth];
+                    let idx = indices[depth];
                     tuple_key_layouts
-                        .entry(key_path[0].clone())
+                        .entry(parent.clone())
                         .or_default()
-                        .insert(key_path[1].clone(), indices[1]);
-                }
-                if key_path.len() == 3 && indices.len() == 3 {
-                    tuple_key_layouts
-                        .entry(key_path[1].clone())
-                        .or_default()
-                        .insert(key_path[2].clone(), indices[2]);
-                }
-                if key_path.len() == 1 && indices.len() == 1 {
+                        .entry(child.clone())
+                        .or_insert(idx);
                     idx_to_key
-                        .insert((param_name.clone(), indices[0]), key_path[0].clone());
+                        .entry((parent, idx))
+                        .or_insert_with(|| child.clone());
                 }
             }
         }

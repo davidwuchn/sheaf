@@ -866,7 +866,10 @@ impl CodeGenerator {
             match &operand_ty {
                 // Tuple + keyword/string — try to resolve via tuple_key_layouts
                 StableHLOType::Tuple(_) => {
-                    if let Some(ref sym) = sym_name {
+                    // Resolve layout key from symbol name or layout_key_map
+                    let layout_key = sym_name.clone()
+                        .or_else(|| self.layout_key_map.get(&operand_reg).cloned());
+                    if let Some(ref start_key) = layout_key {
                         // Collect all keyword args for multi-key get: (get x :k1 :k2 ...)
                         let keywords: Vec<String> = args[1..].iter().filter_map(|a| match a {
                             CompiledExpr::Keyword(k) | CompiledExpr::String(k) => Some(k.clone()),
@@ -875,18 +878,18 @@ impl CodeGenerator {
                         if keywords.len() == args.len() - 1 && !keywords.is_empty() {
                             let mut cur_reg = operand_reg.clone();
                             let mut cur_ty = operand_ty.clone();
-                            let mut layout_key = sym.clone();
+                            let mut cur_key = start_key.clone();
                             let mut ok = true;
                             for key in &keywords {
                                 if let StableHLOType::Tuple(sub_types) = &cur_ty {
-                                    if let Some(layout) = self.tuple_key_layouts.get(&layout_key).cloned() {
+                                    if let Some(layout) = self.tuple_key_layouts.get(&cur_key).cloned() {
                                         if let Some(&idx) = layout.get(key) {
                                             let sub_ty = sub_types[idx].clone();
                                             cur_reg = self.emitter.emit_get_tuple_element(
                                                 &cur_reg, &cur_ty, idx, &sub_ty,
                                             );
                                             cur_ty = sub_ty;
-                                            layout_key = key.clone();
+                                            cur_key = key.clone();
                                             continue;
                                         }
                                     }
@@ -895,6 +898,8 @@ impl CodeGenerator {
                                 break;
                             }
                             if ok {
+                                // Track the result's layout key for nested gets
+                                self.layout_key_map.insert(cur_reg, cur_key);
                                 return Ok((cur_reg, cur_ty));
                             }
                         }
