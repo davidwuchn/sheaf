@@ -13,6 +13,7 @@ mod tests;
 use crate::compiler::stablehlo::{Register, StableHLOEmitter, StableHLOType};
 use crate::core::compiler::CompiledExpr;
 use crate::core::error::{SheafError, SheafResult};
+pub(crate) use helpers::{TupleLeaf, collect_tuple_leaves, expand_tuple_to_symbols};
 use helpers::try_flatten_to_constant;
 use std::collections::HashMap;
 
@@ -96,6 +97,23 @@ impl CodeGenerator {
 
     pub fn set_idx_to_key(&mut self, map: HashMap<(String, usize), String>) {
         self.idx_to_key = map;
+    }
+
+    /// Bind a symbol name to an SSA register (for use by external codegen paths).
+    pub fn bind_symbol(&mut self, name: &str, reg: Register, ty: StableHLOType) {
+        self.bindings.insert(name.to_string(), (reg, ty));
+    }
+
+    /// Emit a GetTupleElement operation (delegates to emitter).
+    pub fn emit_get_tuple_element(
+        &mut self,
+        tuple_reg: &Register,
+        tuple_ty: &StableHLOType,
+        index: usize,
+        elem_ty: &StableHLOType,
+    ) -> Register {
+        self.emitter
+            .emit_get_tuple_element(tuple_reg, tuple_ty, index, elem_ty)
     }
 
     /// Generate StableHLO for a compiled expression

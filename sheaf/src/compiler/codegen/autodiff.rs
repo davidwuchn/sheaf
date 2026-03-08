@@ -17,7 +17,7 @@ impl CodeGenerator {
     /// `GetTupleElement { param, indices }` references to its leaves. We replace
     /// each leaf with a synthetic symbol, differentiate with respect to each one,
     /// and reassemble the gradients into a tuple matching the parameter structure.
-    pub(super) fn generate_inline_value_and_grad(
+    pub(crate) fn generate_inline_value_and_grad(
         &mut self,
         lambda: &CompiledExpr,
         args: &[CompiledExpr],
@@ -120,7 +120,7 @@ impl CodeGenerator {
 
     /// Build the gradient tuple for a tuple parameter by differentiating
     /// w.r.t. each leaf symbol and reassembling into the original tuple structure.
-    fn generate_tuple_gradient(
+    pub(crate) fn generate_tuple_gradient(
         &mut self,
         expanded_body: &CompiledExpr,
         leaves: &[TupleLeaf],
@@ -173,7 +173,7 @@ impl CodeGenerator {
 
     /// Reduce a gradient to match the parameter shape when broadcasting introduced
     /// extra leading dimensions. E.g. grad is [4,8] but param is [8] -> reduce_sum axis 0.
-    fn reduce_broadcast_grad(
+    pub(crate) fn reduce_broadcast_grad(
         &mut self,
         grad_reg: Register,
         grad_ty: &StableHLOType,

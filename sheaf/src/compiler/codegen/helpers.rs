@@ -8,15 +8,15 @@ use std::collections::HashSet;
 
 /// A leaf of a tuple parameter: maps indices to a synthetic symbol name.
 #[derive(Debug, Clone)]
-pub(super) struct TupleLeaf {
+pub(crate) struct TupleLeaf {
     /// Tuple access indices (e.g. [0, 1] for second field of first sub-tuple)
-    pub(super) indices: Vec<usize>,
+    pub(crate) indices: Vec<usize>,
     /// Synthetic symbol name used in the expanded body (e.g. "p__0_1")
-    pub(super) symbol: String,
+    pub(crate) symbol: String,
 }
 
 /// Collect all unique `GetTupleElement` leaves referencing `param_name` in an expression.
-pub(super) fn collect_tuple_leaves(expr: &CompiledExpr, param_name: &str) -> Vec<TupleLeaf> {
+pub(crate) fn collect_tuple_leaves(expr: &CompiledExpr, param_name: &str) -> Vec<TupleLeaf> {
     let mut leaves = Vec::new();
     let mut seen = HashSet::new();
     collect_tuple_leaves_rec(expr, param_name, &mut leaves, &mut seen);
@@ -77,7 +77,7 @@ fn collect_tuple_leaves_rec(
 
 /// Replace all `GetTupleElement { param, indices }` referencing `param_name`
 /// with `Symbol(synthetic_name)` for autodiff.
-pub(super) fn expand_tuple_to_symbols(expr: &CompiledExpr, param_name: &str) -> CompiledExpr {
+pub(crate) fn expand_tuple_to_symbols(expr: &CompiledExpr, param_name: &str) -> CompiledExpr {
     match expr {
         CompiledExpr::GetTupleElement { param, indices } if param == param_name => {
             let symbol = format!("{}_{}", param_name, indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("_"));
