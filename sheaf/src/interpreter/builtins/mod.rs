@@ -59,6 +59,21 @@ pub(self) fn to_array(val: &Value) -> Result<(ArrayD<f64>, Dtype), crate::core::
     }
 }
 
+fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
+    let max_ndim = a.len().max(b.len());
+    let mut result = Vec::with_capacity(max_ndim);
+    for i in 0..max_ndim {
+        let da = if i < a.len() { a[a.len() - 1 - i] } else { 1 };
+        let db = if i < b.len() { b[b.len() - 1 - i] } else { 1 };
+        if da == db { result.push(da); }
+        else if da == 1 { result.push(db); }
+        else if db == 1 { result.push(da); }
+        else { return None; }
+    }
+    result.reverse();
+    Some(result)
+}
+
 pub(self) fn result_dtype(a: Dtype, b: Dtype) -> Dtype {
     if a == Dtype::F32 || b == Dtype::F32 { Dtype::F32 } else if a == Dtype::Bool && b == Dtype::Bool { Dtype::Bool } else { Dtype::I32 }
 }
@@ -84,17 +99,13 @@ pub(self) fn binary_op(args: &[Value], op: fn(f64, f64) -> f64) -> R {
         } else if acc.shape() == b.shape() {
             acc = ndarray::Zip::from(&acc).and(&b).map_collect(|&a, &b| op(a, b));
         } else {
-            if let Some(a_bc) = acc.broadcast(b.shape()) {
-                let b_bc = b.broadcast(a_bc.shape()).ok_or_else(|| {
-                    runtime_error(format!("Cannot broadcast shapes {:?} and {:?}", acc.shape(), b.shape()))
-                })?.to_owned();
-                acc = ndarray::Zip::from(&a_bc.to_owned()).and(&b_bc).map_collect(|&a, &b| op(a, b));
-            } else if let Some(b_bc) = b.broadcast(acc.shape()) {
-                let a_bc = &acc;
-                acc = ndarray::Zip::from(a_bc).and(&b_bc.to_owned()).map_collect(|&a, &b| op(a, b));
-            } else {
-                return Err(runtime_error(format!("Cannot broadcast shapes {:?} and {:?}", acc.shape(), b.shape())));
-            }
+            // Compute broadcast-compatible output shape, then broadcast both operands
+            let out_shape = broadcast_shape(acc.shape(), b.shape()).ok_or_else(|| {
+                runtime_error(format!("Cannot broadcast shapes {:?} and {:?}", acc.shape(), b.shape()))
+            })?;
+            let a_bc = acc.broadcast(&out_shape[..]).unwrap().to_owned();
+            let b_bc = b.broadcast(&out_shape[..]).unwrap().to_owned();
+            acc = ndarray::Zip::from(&a_bc).and(&b_bc).map_collect(|&a, &b| op(a, b));
         }
     }
     if any_tensor {
