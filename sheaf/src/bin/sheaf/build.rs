@@ -627,12 +627,17 @@ Set IREE_COMPILE=/path/to/iree-compile to override."
         eprintln!("running iree-compile ({})...", iree_compile);
     }
 
-    let status = Command::new(&iree_compile)
+    let mut compile_cmd = Command::new(&iree_compile);
+    compile_cmd
         .arg(&mlir_path)
         .arg(format!("--iree-hal-target-backends={}", backend))
         .arg("-o")
-        .arg(&output)
-        .status()
+        .arg(&output);
+    if backend == "llvm-cpu" {
+        compile_cmd.arg("--iree-llvmcpu-target-cpu=host");
+        compile_cmd.arg("--iree-llvmcpu-enable-ukernels=all");
+    }
+    let status = compile_cmd.status()
         .unwrap_or_else(|e| {
             eprintln!("error running iree-compile '{}': {}", iree_compile, e);
             eprintln!("Install the Sheaf SDK or set IREE_COMPILE=/path/to/iree-compile");
