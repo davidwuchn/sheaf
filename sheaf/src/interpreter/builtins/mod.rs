@@ -82,35 +82,69 @@ pub(self) fn binary_op(args: &[Value], op: fn(f64, f64) -> f64) -> R {
     if args.len() < 2 {
         return Err(runtime_error("Binary operation requires at least 2 arguments"));
     }
+    // Fast path for the common 2-arg case: borrow both operands from Arc, zero clones
+    if args.len() == 2 {
+        return binary_op_two(&args[0], &args[1], op);
+    }
     let (mut acc, mut dt) = to_array(&args[0])?;
     let mut any_tensor = !matches!(&args[0], Value::Int(_) | Value::Float(_) | Value::Bool(_));
     for arg in &args[1..] {
-        let (b, bdt) = to_array(arg)?;
-        dt = result_dtype(dt, bdt);
         if !matches!(arg, Value::Int(_) | Value::Float(_) | Value::Bool(_)) {
             any_tensor = true;
         }
-        if acc.ndim() == 0 && b.ndim() != 0 {
-            let scalar = *acc.first().unwrap();
-            acc = b.mapv(|x| op(scalar, x));
-        } else if b.ndim() == 0 && acc.ndim() != 0 {
-            let scalar = *b.first().unwrap();
-            acc = acc.mapv(|x| op(x, scalar));
-        } else if acc.shape() == b.shape() {
-            acc = ndarray::Zip::from(&acc).and(&b).map_collect(|&a, &b| op(a, b));
-        } else {
-            // Compute broadcast-compatible output shape, then broadcast both operands
-            let out_shape = broadcast_shape(acc.shape(), b.shape()).ok_or_else(|| {
-                runtime_error(format!("Cannot broadcast shapes {:?} and {:?}", acc.shape(), b.shape()))
-            })?;
-            let a_bc = acc.broadcast(&out_shape[..]).unwrap().to_owned();
-            let b_bc = b.broadcast(&out_shape[..]).unwrap().to_owned();
-            acc = ndarray::Zip::from(&a_bc).and(&b_bc).map_collect(|&a, &b| op(a, b));
+        // Borrow RHS from Arc when possible, avoiding clone
+        match arg {
+            Value::Int(n) => {
+                let s = *n as f64;
+                dt = result_dtype(dt, Dtype::I32);
+                if acc.ndim() == 0 {
+                    acc = ArrayD::from_elem(IxDyn(&[]), op(*acc.first().unwrap(), s));
+                } else {
+                    acc = acc.mapv(|x| op(x, s));
+                }
+            }
+            Value::Float(f) => {
+                let s = *f;
+                dt = result_dtype(dt, Dtype::F32);
+                if acc.ndim() == 0 {
+                    acc = ArrayD::from_elem(IxDyn(&[]), op(*acc.first().unwrap(), s));
+                } else {
+                    acc = acc.mapv(|x| op(x, s));
+                }
+            }
+            Value::Bool(b) => {
+                let s = if *b { 1.0 } else { 0.0 };
+                dt = result_dtype(dt, Dtype::I32);
+                if acc.ndim() == 0 {
+                    acc = ArrayD::from_elem(IxDyn(&[]), op(*acc.first().unwrap(), s));
+                } else {
+                    acc = acc.mapv(|x| op(x, s));
+                }
+            }
+            Value::Tensor { data: b, dtype: bdt } => {
+                any_tensor = true;
+                dt = result_dtype(dt, *bdt);
+                if acc.ndim() == 0 && b.ndim() != 0 {
+                    let scalar = *acc.first().unwrap();
+                    acc = b.mapv(|x| op(scalar, x));
+                } else if b.ndim() == 0 && acc.ndim() != 0 {
+                    let scalar = *b.first().unwrap();
+                    acc = acc.mapv(|x| op(x, scalar));
+                } else if acc.shape() == b.shape() {
+                    acc = ndarray::Zip::from(&acc).and(b.as_ref()).map_collect(|&a, &b| op(a, b));
+                } else {
+                    let out_shape = broadcast_shape(acc.shape(), b.shape()).ok_or_else(|| {
+                        runtime_error(format!("Cannot broadcast shapes {:?} and {:?}", acc.shape(), b.shape()))
+                    })?;
+                    let a_bc = acc.broadcast(&out_shape[..]).unwrap();
+                    let b_bc = b.broadcast(&out_shape[..]).unwrap();
+                    acc = ndarray::Zip::from(&a_bc).and(&b_bc).map_collect(|&a, &b| op(a, b));
+                }
+            }
+            _ => return Err(runtime_error(format!("Expected numeric value, got {}", arg.type_name()))),
         }
     }
-    if any_tensor {
-        dt = Dtype::F32;
-    }
+    if any_tensor { dt = Dtype::F32; }
     if acc.ndim() == 0 {
         let x = *acc.first().unwrap();
         if dt == Dtype::I32 && x == x.floor() {
@@ -120,6 +154,93 @@ pub(self) fn binary_op(args: &[Value], op: fn(f64, f64) -> f64) -> R {
         }
     } else {
         Ok(Value::Tensor { data: Arc::new(acc), dtype: dt })
+    }
+}
+
+/// Zero-clone fast path for binary ops with exactly 2 arguments.
+/// Borrows tensor data directly from Arc instead of cloning.
+fn binary_op_two(a: &Value, b: &Value, op: fn(f64, f64) -> f64) -> R {
+    let a_scalar = scalar_of(a);
+    let b_scalar = scalar_of(b);
+    let any_tensor = matches!(a, Value::Tensor { .. }) || matches!(b, Value::Tensor { .. });
+    let adt = dtype_of(a);
+    let bdt = dtype_of(b);
+    let mut dt = result_dtype(adt, bdt);
+    if any_tensor { dt = Dtype::F32; }
+
+    // scalar op scalar
+    if let (Some(sa), Some(sb)) = (a_scalar, b_scalar) {
+        let x = op(sa, sb);
+        return if dt == Dtype::I32 && x == x.floor() {
+            Ok(Value::Int(x as i64))
+        } else {
+            Ok(Value::Float(x))
+        };
+    }
+
+    // scalar op tensor
+    if let (Some(s), Value::Tensor { data, .. }) = (a_scalar, b) {
+        let result = if data.ndim() == 0 {
+            let x = op(s, *data.first().unwrap());
+            return Ok(Value::Float(x));
+        } else {
+            data.mapv(|x| op(s, x))
+        };
+        return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
+    }
+
+    // tensor op scalar
+    if let (Value::Tensor { data, .. }, Some(s)) = (a, b_scalar) {
+        let result = if data.ndim() == 0 {
+            let x = op(*data.first().unwrap(), s);
+            return Ok(Value::Float(x));
+        } else {
+            data.mapv(|x| op(x, s))
+        };
+        return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
+    }
+
+    // tensor op tensor
+    if let (Value::Tensor { data: ad, .. }, Value::Tensor { data: bd, .. }) = (a, b) {
+        let result = if ad.ndim() == 0 {
+            let s = *ad.first().unwrap();
+            if bd.ndim() == 0 {
+                return Ok(Value::Float(op(s, *bd.first().unwrap())));
+            }
+            bd.mapv(|x| op(s, x))
+        } else if bd.ndim() == 0 {
+            let s = *bd.first().unwrap();
+            ad.mapv(|x| op(x, s))
+        } else if ad.shape() == bd.shape() {
+            ndarray::Zip::from(ad.as_ref()).and(bd.as_ref()).map_collect(|&a, &b| op(a, b))
+        } else {
+            let out_shape = broadcast_shape(ad.shape(), bd.shape()).ok_or_else(|| {
+                runtime_error(format!("Cannot broadcast shapes {:?} and {:?}", ad.shape(), bd.shape()))
+            })?;
+            let a_bc = ad.broadcast(&out_shape[..]).unwrap();
+            let b_bc = bd.broadcast(&out_shape[..]).unwrap();
+            ndarray::Zip::from(&a_bc).and(&b_bc).map_collect(|&a, &b| op(a, b))
+        };
+        return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
+    }
+
+    Err(runtime_error(format!("Expected numeric values, got {} and {}", a.type_name(), b.type_name())))
+}
+
+fn scalar_of(v: &Value) -> Option<f64> {
+    match v {
+        Value::Int(n) => Some(*n as f64),
+        Value::Float(f) => Some(*f),
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        _ => None,
+    }
+}
+
+fn dtype_of(v: &Value) -> Dtype {
+    match v {
+        Value::Tensor { dtype, .. } => *dtype,
+        Value::Float(_) => Dtype::F32,
+        _ => Dtype::I32,
     }
 }
 
