@@ -171,6 +171,61 @@ impl CodeGenerator {
         }
     }
 
+    /// Build a gradient tuple using pre-computed gradient expressions (from reverse-mode AD).
+    ///
+    /// `grad_map`: maps leaf symbol name -> gradient CompiledExpr
+    pub(crate) fn build_grad_tuple_from_map(
+        &mut self,
+        leaves: &[TupleLeaf],
+        param_ty: &StableHLOType,
+        grad_map: &std::collections::HashMap<String, CompiledExpr>,
+    ) -> SheafResult<(Register, StableHLOType)> {
+        self.build_grad_tuple_from_map_rec(leaves, param_ty, grad_map, &[])
+    }
+
+    fn build_grad_tuple_from_map_rec(
+        &mut self,
+        leaves: &[TupleLeaf],
+        ty: &StableHLOType,
+        grad_map: &std::collections::HashMap<String, CompiledExpr>,
+        prefix: &[usize],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        match ty {
+            StableHLOType::Tuple(elems) => {
+                let mut sub_regs = Vec::new();
+                let mut sub_tys = Vec::new();
+                for (i, elem_ty) in elems.iter().enumerate() {
+                    let mut child_prefix = prefix.to_vec();
+                    child_prefix.push(i);
+                    let (r, t) = self.build_grad_tuple_from_map_rec(
+                        leaves, elem_ty, grad_map, &child_prefix,
+                    )?;
+                    sub_regs.push(r);
+                    sub_tys.push(t);
+                }
+                Ok(self.emitter.emit_tuple(&sub_regs, &sub_tys))
+            }
+            _leaf_ty => {
+                let leaf = leaves
+                    .iter()
+                    .find(|l| l.indices == prefix)
+                    .ok_or_else(|| SheafError::Compile {
+                        message: format!(
+                            "build_grad_tuple_from_map: no leaf for {:?}",
+                            prefix
+                        ),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })?;
+                let grad_expr = grad_map
+                    .get(&leaf.symbol)
+                    .cloned()
+                    .unwrap_or(CompiledExpr::Float(0.0));
+                let (grad_reg, grad_ty) = self.generate(&grad_expr)?;
+                self.reduce_broadcast_grad(grad_reg, &grad_ty, ty)
+            }
+        }
+    }
+
     /// Reduce a gradient to match the parameter shape when broadcasting introduced
     /// extra leading dimensions. E.g. grad is [4,8] but param is [8] -> reduce_sum axis 0.
     pub(crate) fn reduce_broadcast_grad(

@@ -104,6 +104,61 @@ impl CodeGenerator {
         self.bindings.insert(name.to_string(), (reg, ty));
     }
 
+    /// Return a map of symbol name → shape for all current bindings.
+    /// Used by reverse-mode AD to generate shape-aware gradient expressions.
+    pub fn binding_shapes(&self) -> std::collections::HashMap<String, Vec<i64>> {
+        self.bindings
+            .iter()
+            .map(|(name, (_, ty))| (name.clone(), ty.shape().to_vec()))
+            .collect()
+    }
+
+    /// Generate and bind a single Let binding in the current scope.
+    /// Handles Lambda storage, destructuring, and layout propagation —
+    /// same logic as the Let codegen but without scope save/restore.
+    pub fn generate_binding(&mut self, name: &str, value_expr: &CompiledExpr) -> SheafResult<()> {
+        if matches!(value_expr, CompiledExpr::Lambda { .. }) {
+            self.lambda_bindings.insert(name.to_string(), value_expr.clone());
+        } else if name.starts_with('[') && name.ends_with(']') {
+            let names: Vec<&str> = name[1..name.len() - 1].split_whitespace().collect();
+            let (tuple_reg, tuple_ty) = self.generate(value_expr)?;
+            let element_types = match &tuple_ty {
+                StableHLOType::Tuple(tys) => tys.clone(),
+                other => {
+                    return Err(SheafError::Compile {
+                        message: format!("Let destructuring requires a tuple, got: {}", other.to_mlir()),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })
+                }
+            };
+            for (i, n) in names.iter().enumerate() {
+                let elem_reg = self.emitter.emit_get_tuple_element(
+                    &tuple_reg, &tuple_ty, i, &element_types[i],
+                );
+                self.bindings.insert(n.to_string(), (elem_reg, element_types[i].clone()));
+            }
+        } else {
+            let (reg, ty) = self.generate(value_expr)?;
+            if matches!(&ty, StableHLOType::Tuple(_)) {
+                if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args } = value_expr {
+                    if fn_name == "get" && fn_args.len() >= 2 {
+                        if let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last() {
+                            if let Some(sub_layout) = self.tuple_key_layouts.get(k).cloned() {
+                                self.tuple_key_layouts.insert(name.to_string(), sub_layout);
+                            }
+                        }
+                    }
+                } else if let CompiledExpr::Symbol(src) = value_expr {
+                    if let Some(layout) = self.tuple_key_layouts.get(src).cloned() {
+                        self.tuple_key_layouts.insert(name.to_string(), layout);
+                    }
+                }
+            }
+            self.bindings.insert(name.to_string(), (reg, ty));
+        }
+        Ok(())
+    }
+
     /// Emit a GetTupleElement operation (delegates to emitter).
     pub fn emit_get_tuple_element(
         &mut self,
