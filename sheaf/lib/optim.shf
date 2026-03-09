@@ -23,7 +23,7 @@
 
   (let [new-t (+ t 1)
         new-m (tree-map (fn [md gd] (+ (* b1 md) (* (- 1 b1) gd))) m grads)
-        new-v (tree-map (fn [vd gd] (+ (* b2 vd) (* (- 1 b2) (** gd 2)))) v grads)
+        new-v (tree-map (fn [vd gd] (+ (* b2 vd) (* (- 1 b2) (* gd gd)))) v grads)
         bias-correction-m (/ 1.0 (- 1 (** b1 new-t)))
         bias-correction-v (/ 1.0 (- 1 (** b2 new-t)))
         new-p (tree-map (fn [p mh vh]
