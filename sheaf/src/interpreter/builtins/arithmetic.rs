@@ -63,6 +63,26 @@ fn builtin_mod(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_pow(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    // Strength reduction: detect small integer exponents and use multiplication
+    if args.len() == 2 {
+        let exp_int = match &args[1] {
+            Value::Int(n) => Some(*n),
+            Value::Float(f) if *f == f.floor() && *f >= 0.0 && *f <= 8.0 => Some(*f as i64),
+            _ => None,
+        };
+        if let Some(n) = exp_int {
+            match n {
+                0 => return unary_op(&args[..1], |_| 1.0),
+                1 => return Ok(args[0].clone()),
+                2 => return binary_op(&[args[0].clone(), args[0].clone()], |a, b| a * b),
+                3 => return unary_op(&args[..1], |a| a * a * a),
+                _ => {
+                    let exp = n as f64;
+                    return binary_op(&[args[0].clone(), Value::Float(exp)], |a, b| a.powf(b));
+                }
+            }
+        }
+    }
     binary_op(args, |a, b| a.powf(b))
 }
 
