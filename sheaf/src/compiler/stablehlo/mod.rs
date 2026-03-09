@@ -414,11 +414,37 @@ impl StableHLOEmitter {
 
         let dims = if from_shape.is_empty() {
             vec![]
-        } else if from_shape.len() == 1 && to_shape.len() == 2 {
-            vec![1]
         } else {
+            // Try numpy-style right-alignment first:
+            // [4] → [4, 4] maps to dims=[1], [1, 256] → [4, 256, 384] maps to dims=[1, 2]
             let offset = to_shape.len() - from_shape.len();
-            (offset..to_shape.len()).collect()
+            let right_aligned: Vec<usize> = (offset..to_shape.len()).collect();
+            let valid = from_shape.iter().enumerate().all(|(i, &src)| {
+                src == to_shape[right_aligned[i]] || src == 1
+            });
+            if valid {
+                right_aligned
+            } else {
+                // Fallback: greedy left-to-right size matching
+                // [1024] → [1024, 65] maps to dims=[0]
+                let mut mapping = Vec::with_capacity(from_shape.len());
+                let mut search_start = 0;
+                for &src_dim in from_shape {
+                    for j in search_start..to_shape.len() {
+                        if to_shape[j] == src_dim || src_dim == 1 {
+                            mapping.push(j);
+                            search_start = j + 1;
+                            break;
+                        }
+                    }
+                }
+                if mapping.len() != from_shape.len() {
+                    // Last resort: right-align anyway (let StableHLO report the error)
+                    right_aligned
+                } else {
+                    mapping
+                }
+            }
         };
 
         let reg = self.fresh_register();
@@ -464,8 +490,23 @@ impl StableHLOEmitter {
             return lhs.clone();
         }
 
-        // Otherwise, prefer lhs shape (TODO: proper numpy-style broadcasting)
-        lhs.clone()
+        // Numpy-style broadcasting: align from trailing dims, take max of each
+        let max_ndim = lhs_shape.len().max(rhs_shape.len());
+        let mut result_shape = Vec::with_capacity(max_ndim);
+        for i in 0..max_ndim {
+            let l = if i < max_ndim - lhs_shape.len() {
+                1
+            } else {
+                lhs_shape[i - (max_ndim - lhs_shape.len())]
+            };
+            let r = if i < max_ndim - rhs_shape.len() {
+                1
+            } else {
+                rhs_shape[i - (max_ndim - rhs_shape.len())]
+            };
+            result_shape.push(l.max(r));
+        }
+        StableHLOType::f32_tensor(result_shape)
     }
 
     /// Emit unary operation (relu, sigmoid, tanh, etc.)
