@@ -5,6 +5,24 @@
 
 use super::{Register, StableHLOEmitter, StableHLOType};
 
+/// Compute the broadcast result shape from up to 3 input shapes.
+/// Follows numpy broadcasting rules: align from the right, each dim is max.
+fn broadcast_result_shape(a: &[i64], b: &[i64], c: &[i64]) -> Vec<i64> {
+    let ab = broadcast_two(a, b);
+    broadcast_two(&ab, c)
+}
+
+fn broadcast_two(a: &[i64], b: &[i64]) -> Vec<i64> {
+    let len = a.len().max(b.len());
+    let mut result = vec![1i64; len];
+    for i in 0..len {
+        let da = if i < len - a.len() { 1 } else { a[i - (len - a.len())] };
+        let db = if i < len - b.len() { 1 } else { b[i - (len - b.len())] };
+        result[i] = da.max(db);
+    }
+    result
+}
+
 impl StableHLOEmitter {
     /// Emit zeros tensor: (zeros [M N]) -> tensor<MxNxf32>
     pub fn emit_zeros(&mut self, shape: &[i64]) -> (Register, StableHLOType) {
@@ -190,11 +208,14 @@ impl StableHLOEmitter {
         x_ty: &StableHLOType,
         y_ty: &StableHLOType,
     ) -> (Register, StableHLOType) {
-        let result_shape = x_ty.shape().to_vec();
+        // Result shape = broadcast of x, y, and condition shapes
+        let x_shape = x_ty.shape();
+        let y_shape = y_ty.shape();
+        let cond_shape = condition_ty.shape();
+        let result_shape = broadcast_result_shape(x_shape, y_shape, cond_shape);
 
         // Broadcast condition to i1 tensor matching result shape if needed
-        let pred_shape = condition_ty.shape();
-        let (actual_cond, actual_cond_ty) = if pred_shape != result_shape.as_slice() {
+        let (actual_cond, actual_cond_ty) = if cond_shape != result_shape.as_slice() {
             let target = StableHLOType::i1_tensor(result_shape.clone());
             let r = self.emit_broadcast(condition, condition_ty, &target);
             (r, target)
@@ -202,8 +223,16 @@ impl StableHLOEmitter {
             (condition.clone(), condition_ty.clone())
         };
 
+        // Broadcast x (on_true) to result shape if needed
+        let (actual_x, actual_x_ty) = if x_shape != result_shape.as_slice() {
+            let target = StableHLOType::f32_tensor(result_shape.clone());
+            let r = self.emit_broadcast(x, x_ty, &target);
+            (r, target)
+        } else {
+            (x.clone(), x_ty.clone())
+        };
+
         // Broadcast y (on_false) to result shape if needed
-        let y_shape = y_ty.shape();
         let (actual_y, actual_y_ty) = if y_shape != result_shape.as_slice() {
             let target = StableHLOType::f32_tensor(result_shape);
             let r = self.emit_broadcast(y, y_ty, &target);
@@ -212,7 +241,7 @@ impl StableHLOEmitter {
             (y.clone(), y_ty.clone())
         };
 
-        self.emit_select(&actual_cond, x, &actual_y, &actual_cond_ty, x_ty, &actual_y_ty)
+        self.emit_select(&actual_cond, &actual_x, &actual_y, &actual_cond_ty, &actual_x_ty, &actual_y_ty)
     }
 
     /// Emit swapaxes: (swapaxes x axis1 axis2)

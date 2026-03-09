@@ -72,6 +72,43 @@ fn resolve_constants_rec(
             }
             CompiledExpr::FunctionCall { name: name.clone(), args: vec![recv, idx] }
         }
+        CompiledExpr::FunctionCall { name, args } if name == "cons" && args.len() == 2 => {
+            let head = resolve_constants_rec(&args[0], constants, locals, shapes);
+            let tail = resolve_constants_rec(&args[1], constants, locals, shapes);
+            let tail_elems = match &tail {
+                CompiledExpr::Vector(v) => Some(v.clone()),
+                CompiledExpr::Quoted(inner) => {
+                    use crate::ast::SheafValue;
+                    match inner.as_ref() {
+                        SheafValue::Vector(v, _loc) => {
+                            // Convert SheafValue elements to CompiledExpr
+                            let elems: Vec<CompiledExpr> = v.iter().filter_map(|sv| match sv {
+                                SheafValue::Integer(n, _) => Some(CompiledExpr::Integer(*n)),
+                                SheafValue::Float(f, _) => Some(CompiledExpr::Float(*f)),
+                                _ => None,
+                            }).collect();
+                            if elems.len() == v.len() { Some(elems) } else { None }
+                        }
+                        _ => None,
+                    }
+                },
+                _ => None,
+            };
+            if let Some(mut elems) = tail_elems {
+                elems.insert(0, head);
+                CompiledExpr::Vector(elems)
+            } else {
+                CompiledExpr::FunctionCall { name: name.clone(), args: vec![head, tail] }
+            }
+        }
+        CompiledExpr::FunctionCall { name, args } if name == "int" && args.len() == 1 => {
+            let inner = resolve_constants_rec(&args[0], constants, locals, shapes);
+            match &inner {
+                CompiledExpr::Integer(_) => inner,
+                CompiledExpr::Float(f) => CompiledExpr::Integer(*f as i64),
+                _ => CompiledExpr::FunctionCall { name: name.clone(), args: vec![inner] },
+            }
+        }
         CompiledExpr::FunctionCall { name, args }
             if (name == "first" || name == "last") && args.len() == 1 =>
         {
@@ -268,11 +305,24 @@ fn lower_inlined_gets_rec(
         CompiledExpr::Let { bindings, body } => {
             let new_bindings: Vec<_> = bindings.iter().map(|(k, v)| {
                 let resolved = lower_inlined_gets_rec(v, index_maps, aliases, reverse);
-                if let CompiledExpr::GetTupleElement { param, indices } = &resolved {
-                    let key = (param.clone(), indices.clone());
-                    if let Some(path) = reverse.get(&key) {
-                        aliases.insert(k.clone(), (param.clone(), path.clone()));
+                match &resolved {
+                    CompiledExpr::GetTupleElement { param, indices } => {
+                        let key = (param.clone(), indices.clone());
+                        if let Some(path) = reverse.get(&key) {
+                            aliases.insert(k.clone(), (param.clone(), path.clone()));
+                        }
                     }
+                    CompiledExpr::Symbol(s) => {
+                        // Propagate alias: if `s` is itself an alias, copy it
+                        if let Some(existing) = aliases.get(s).cloned() {
+                            aliases.insert(k.clone(), existing);
+                        }
+                        // If `s` is a known param root, create root alias (empty path)
+                        else if index_maps.iter().any(|(p, _)| p == s) {
+                            aliases.insert(k.clone(), (s.clone(), vec![]));
+                        }
+                    }
+                    _ => {}
                 }
                 (k.clone(), resolved)
             }).collect();
@@ -449,8 +499,19 @@ fn try_infer_shape(
             | "maximum" | "minimum" | "clamp"
             | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not"
             | "where" => args.iter().find_map(|a| try_infer_shape(a, shapes)),
-            "layer-norm" | "softmax" | "normalize"
+            "layer-norm" | "softmax" | "normalize" | "log-softmax"
                 => args.first().and_then(|a| try_infer_shape(a, shapes)),
+            "transpose" if args.len() == 1 || args.len() == 2 => {
+                let sh = try_infer_shape(&args[0], shapes)?;
+                if sh.len() >= 2 {
+                    let mut out = sh;
+                    let n = out.len();
+                    out.swap(n - 2, n - 1);
+                    Some(out)
+                } else {
+                    None
+                }
+            }
             "first" => args.first().and_then(|a| try_infer_shape(a, shapes)),
             "reshape" if args.len() == 2 => {
                 if let CompiledExpr::Vector(elems) = &args[1] {
@@ -492,6 +553,11 @@ fn try_infer_shape(
             }
             _ => None,
         },
+        CompiledExpr::GetTupleElement { param, indices } => {
+            // Try to find the shape in the shapes map using a synthetic key
+            let key = format!("{}@{:?}", param, indices);
+            shapes.get(&key).cloned()
+        }
         _ => None,
     }
 }
@@ -525,4 +591,203 @@ fn extract_numeric(expr: &CompiledExpr) -> Option<f64> {
         CompiledExpr::Float(f) => Some(*f),
         _ => None,
     }
+}
+
+// ── Reduce unrolling ──
+
+use crate::compiler::stablehlo::StableHLOType;
+use crate::autodiff::replace_symbol;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static UNROLL_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// Navigate a `StableHLOType` tree following tuple indices.
+///
+/// E.g. for `Tuple([Tuple([T0, T1]), Tuple([T2, T3])])` with indices `[1, 0]`
+/// → returns `T2`.
+fn resolve_type_at_indices(
+    param: &str,
+    indices: &[usize],
+    param_types: &[(String, StableHLOType)],
+) -> Option<StableHLOType> {
+    let base = param_types.iter().find(|(n, _)| n == param).map(|(_, t)| t)?;
+    let mut current = base;
+    for &idx in indices {
+        match current {
+            StableHLOType::Tuple(elems) if idx < elems.len() => {
+                current = &elems[idx];
+            }
+            _ => return None,
+        }
+    }
+    Some(current.clone())
+}
+
+/// Unroll `reduce` calls into Let chains for symbolic AD.
+///
+/// Transforms:
+/// ```text
+/// reduce(fn [carry elem] body, init, coll)
+/// ```
+/// into:
+/// ```text
+/// let __r_0 = body[carry→init, elem→coll[0]]
+/// let __r_1 = body[carry→__r_0, elem→coll[1]]
+/// ...
+/// result = __r_{n-1}
+/// ```
+///
+/// The collection length `n` is determined from the StableHLO type of `coll`:
+/// - `GetTupleElement { param, indices }` → resolve type → `Tuple(elems)` → n = len
+/// - `Vector(elems)` → n = len
+pub fn unroll_reduces(
+    expr: &CompiledExpr,
+    param_types: &[(String, StableHLOType)],
+) -> CompiledExpr {
+    match expr {
+        CompiledExpr::FunctionCall { name, args }
+            if name == "reduce" && args.len() == 3 =>
+        {
+            // Extract lambda, init, coll
+            let (carry_p, elem_p, body) = match &args[0] {
+                CompiledExpr::Lambda { params, body } if params.len() == 2 => {
+                    (&params[0], &params[1], body.as_ref())
+                }
+                _ => {
+                    // Not a lambda — can't unroll, recurse into args
+                    return CompiledExpr::FunctionCall {
+                        name: name.clone(),
+                        args: args.iter().map(|a| unroll_reduces(a, param_types)).collect(),
+                    };
+                }
+            };
+
+            let init = unroll_reduces(&args[1], param_types);
+            let coll = unroll_reduces(&args[2], param_types);
+
+            // Determine n and element accessor
+            let unroll_info = match &coll {
+                CompiledExpr::GetTupleElement { param, indices } => {
+                    resolve_type_at_indices(param, indices, param_types)
+                        .and_then(|ty| match ty {
+                            StableHLOType::Tuple(elems) => Some((
+                                elems.len(),
+                                UnrollColl::TupleElement {
+                                    param: param.clone(),
+                                    base_indices: indices.clone(),
+                                },
+                            )),
+                            _ => None,
+                        })
+                }
+                CompiledExpr::Vector(elems) => {
+                    Some((elems.len(), UnrollColl::Vector(elems.clone())))
+                }
+                _ => None,
+            };
+
+            let (n, coll_info) = match unroll_info {
+                Some(info) => info,
+                None => {
+                    // Can't determine length — leave as-is
+                    return CompiledExpr::FunctionCall {
+                        name: name.clone(),
+                        args: vec![args[0].clone(), init, coll],
+                    };
+                }
+            };
+
+            if n == 0 {
+                return init;
+            }
+
+            let id = UNROLL_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let mut bindings = Vec::with_capacity(n);
+
+            for i in 0..n {
+                let var_name = format!("__reduce_{}_{}", id, i);
+
+                // Element expression for iteration i
+                let elem_expr = match &coll_info {
+                    UnrollColl::TupleElement { param, base_indices } => {
+                        let mut indices = base_indices.clone();
+                        indices.push(i);
+                        CompiledExpr::GetTupleElement {
+                            param: param.clone(),
+                            indices,
+                        }
+                    }
+                    UnrollColl::Vector(elems) => elems[i].clone(),
+                };
+
+                // Carry expression: init for i=0, previous var for i>0
+                let carry_expr = if i == 0 {
+                    init.clone()
+                } else {
+                    CompiledExpr::Symbol(format!("__reduce_{}_{}", id, i - 1))
+                };
+
+                // Substitute carry and elem params in body
+                let mut iteration_body = body.clone();
+                iteration_body = replace_symbol(&iteration_body, carry_p, &carry_expr);
+                iteration_body = replace_symbol(&iteration_body, elem_p, &elem_expr);
+
+                // Recursively unroll any nested reduces in the substituted body
+                iteration_body = unroll_reduces(&iteration_body, param_types);
+
+                bindings.push((var_name, iteration_body));
+            }
+
+            let last_var = format!("__reduce_{}_{}", id, n - 1);
+            CompiledExpr::Let {
+                bindings,
+                body: Box::new(CompiledExpr::Symbol(last_var)),
+            }
+        }
+
+        // Recurse into all other expression types
+        CompiledExpr::FunctionCall { name, args } => CompiledExpr::FunctionCall {
+            name: name.clone(),
+            args: args.iter().map(|a| unroll_reduces(a, param_types)).collect(),
+        },
+        CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
+            bindings: bindings
+                .iter()
+                .map(|(k, v)| (k.clone(), unroll_reduces(v, param_types)))
+                .collect(),
+            body: Box::new(unroll_reduces(body, param_types)),
+        },
+        CompiledExpr::Do(exprs) => CompiledExpr::Do(
+            exprs.iter().map(|e| unroll_reduces(e, param_types)).collect(),
+        ),
+        CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
+            condition: Box::new(unroll_reduces(condition, param_types)),
+            then_branch: Box::new(unroll_reduces(then_branch, param_types)),
+            else_branch: else_branch.as_ref().map(|e| Box::new(unroll_reduces(e, param_types))),
+        },
+        CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
+            params: params.clone(),
+            body: Box::new(unroll_reduces(body, param_types)),
+        },
+        CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
+            callee: Box::new(unroll_reduces(callee, param_types)),
+            args: args.iter().map(|a| unroll_reduces(a, param_types)).collect(),
+        },
+        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => CompiledExpr::Repeat {
+            index_var: index_var.clone(),
+            count: Box::new(unroll_reduces(count, param_types)),
+            acc_var: acc_var.clone(),
+            acc_init: Box::new(unroll_reduces(acc_init, param_types)),
+            body: Box::new(unroll_reduces(body, param_types)),
+        },
+        CompiledExpr::Vector(elems) => CompiledExpr::Vector(
+            elems.iter().map(|e| unroll_reduces(e, param_types)).collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+enum UnrollColl {
+    TupleElement { param: String, base_indices: Vec<usize> },
+    Vector(Vec<CompiledExpr>),
 }
