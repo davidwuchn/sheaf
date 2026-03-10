@@ -248,5 +248,6 @@ fn parse_manifest_signature(
         param_types,
         return_type,
         return_dict_keys: None,
+        arg_type_layouts: vec![],
     })
 }

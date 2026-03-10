@@ -1557,12 +1557,17 @@ fn try_iree_dispatch(
         }
     };
 
-    let result = match (&sig.return_dict_keys, result) {
-        (Some(keys), Value::Tuple(elems)) if elems.len() == keys.len() => {
-            let map = keys.iter().cloned().zip(elems).collect();
-            Value::Dict(map)
+    // Reconstruct nested dicts/lists from flat tuples using arg type layouts
+    let result = if !sig.arg_type_layouts.is_empty() {
+        crate::core::inference::reconstruct_jit_result(result, &sig.return_type, &sig.arg_type_layouts)
+    } else {
+        match (&sig.return_dict_keys, result) {
+            (Some(keys), Value::Tuple(elems)) if elems.len() == keys.len() => {
+                let map = keys.iter().cloned().zip(elems).collect();
+                Value::Dict(map)
+            }
+            (_, other) => other,
         }
-        (_, other) => other,
     };
 
     Some(Ok(result))

@@ -104,6 +104,7 @@ pub fn trace_function_signature(
         param_types,
         return_type,
         return_dict_keys,
+        arg_type_layouts: vec![],
     })
 }
 

@@ -7,6 +7,17 @@ use crate::compiler::stablehlo::StableHLOType;
 use crate::core::compiler::{CompiledExpr, CompilerContext};
 use crate::core::error::SheafResult;
 
+/// Recursive value structure layout for reconstructing dicts/lists from flat tuples.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValueLayout {
+    /// Dict with ordered (key, sub-layout) pairs
+    Dict(Vec<(String, ValueLayout)>),
+    /// List with sub-layouts per element
+    List(Vec<ValueLayout>),
+    /// Leaf (tensor or scalar) — no reconstruction needed
+    Leaf,
+}
+
 /// Function signature (parameter types + return type)
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionSignature {
@@ -14,6 +25,82 @@ pub struct FunctionSignature {
     pub return_type: StableHLOType,
     /// If the function returns a Dict, the sorted key names for reconstruction
     pub return_dict_keys: Option<Vec<String>>,
+    /// Layouts of dict/tuple arguments, keyed by their StableHLO type.
+    /// Used to reconstruct nested dicts from flat tuples in JIT return values.
+    pub arg_type_layouts: Vec<(StableHLOType, ValueLayout)>,
+}
+
+impl ValueLayout {
+    /// Build a ValueLayout from an interpreter Value (captures dict/list structure).
+    pub fn from_value(val: &crate::interpreter::value::Value) -> Self {
+        use crate::interpreter::value::Value;
+        match val {
+            Value::Dict(map) => {
+                let mut entries: Vec<(String, ValueLayout)> = map
+                    .iter()
+                    .map(|(k, v)| (k.clone(), ValueLayout::from_value(v)))
+                    .collect();
+                entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+                ValueLayout::Dict(entries)
+            }
+            Value::List(items) => {
+                ValueLayout::List(items.iter().map(ValueLayout::from_value).collect())
+            }
+            _ => ValueLayout::Leaf,
+        }
+    }
+
+    /// Reconstruct a Value from a flat tuple using this layout.
+    /// Converts Value::Tuple → Value::Dict/List based on the stored structure.
+    pub fn reconstruct(&self, val: crate::interpreter::value::Value) -> crate::interpreter::value::Value {
+        use crate::interpreter::value::Value;
+        match (self, val) {
+            (ValueLayout::Dict(entries), Value::Tuple(elems)) if entries.len() == elems.len() => {
+                let map = entries
+                    .iter()
+                    .zip(elems)
+                    .map(|((key, sub_layout), elem)| (key.clone(), sub_layout.reconstruct(elem)))
+                    .collect();
+                Value::Dict(map)
+            }
+            (ValueLayout::List(items), Value::Tuple(elems)) if items.len() == elems.len() => {
+                let list = items
+                    .iter()
+                    .zip(elems)
+                    .map(|(sub_layout, elem)| sub_layout.reconstruct(elem))
+                    .collect();
+                Value::List(list)
+            }
+            (_, v) => v,
+        }
+    }
+}
+
+/// Reconstruct a JIT return value by matching sub-tuple types against known layouts.
+/// Walks the return type tree; at each Tuple level, checks if its type matches
+/// a known layout from the argument types.
+pub fn reconstruct_jit_result(
+    val: crate::interpreter::value::Value,
+    ty: &StableHLOType,
+    layouts: &[(StableHLOType, ValueLayout)],
+) -> crate::interpreter::value::Value {
+    use crate::interpreter::value::Value;
+    // Check if the whole type matches a known layout
+    if let Some((_, layout)) = layouts.iter().find(|(t, _)| t == ty) {
+        return layout.reconstruct(val);
+    }
+    // Recurse into sub-elements of a Tuple
+    match (ty, val) {
+        (StableHLOType::Tuple(elem_tys), Value::Tuple(elems)) if elem_tys.len() == elems.len() => {
+            let reconstructed: Vec<Value> = elem_tys
+                .iter()
+                .zip(elems)
+                .map(|(et, ev)| reconstruct_jit_result(ev, et, layouts))
+                .collect();
+            Value::Tuple(reconstructed)
+        }
+        (_, v) => v,
+    }
 }
 
 /// Infer the signature of a function from its parameters and body
@@ -72,6 +159,7 @@ pub fn infer_function_signature_with_known(
         param_types,
         return_type,
         return_dict_keys: None,
+        arg_type_layouts: vec![],
     })
 }
 

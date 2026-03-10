@@ -142,13 +142,17 @@ impl JitCompiler {
         let mut constants: HashMap<(String, Vec<usize>), f64> = HashMap::new();
 
         for (param_name, arg_val) in func_def.params.iter().zip(args) {
-            let ty = match value_to_stablehlo_type(arg_val) {
+            let mut ty = match value_to_stablehlo_type(arg_val) {
                 Ok(ty) => ty,
                 Err(e) => {
                     self.jit_fail(name, &format!("type inference: {}", e));
                     return None;
                 }
             };
+            // Promote scalar integers to f32 — the codegen emits all literals as f32
+            if matches!(ty, StableHLOType::ScalarI64) {
+                ty = StableHLOType::scalar_f32();
+            }
 
             if let Some(layout) = value_to_param_layout(param_name, arg_val) {
                 let imap = layout_to_index_map(&layout);
@@ -179,6 +183,21 @@ impl JitCompiler {
         for (param_name, ty) in &known_types {
             if let Some(idx) = func_def.params.iter().position(|p| p == param_name) {
                 sig.param_types[idx] = ty.clone();
+            }
+        }
+
+        // Capture value layouts for dict/tuple args (for return value reconstruction)
+        {
+            use crate::core::inference::ValueLayout;
+            let mut seen_types = std::collections::HashSet::new();
+            for (arg_val, ty) in args.iter().zip(sig.param_types.iter()) {
+                let layout = ValueLayout::from_value(arg_val);
+                if !matches!(layout, ValueLayout::Leaf) {
+                    let type_key = format!("{:?}", ty);
+                    if seen_types.insert(type_key) {
+                        sig.arg_type_layouts.push((ty.clone(), layout));
+                    }
+                }
             }
         }
 
