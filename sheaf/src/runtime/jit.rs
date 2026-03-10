@@ -38,6 +38,8 @@ pub struct JitCompiler {
     iree_compile_path: Option<String>,
     target_backend: String,
     failed_fns: HashSet<String>,
+    /// Cache compiled VAG sessions: vag_key → (session_idx, signature, param_names)
+    vag_cache: HashMap<String, (usize, FunctionSignature, Vec<String>)>,
     verbose: bool,
 }
 
@@ -60,6 +62,7 @@ impl JitCompiler {
             iree_compile_path,
             target_backend,
             failed_fns: HashSet::new(),
+            vag_cache: HashMap::new(),
             verbose,
         }
     }
@@ -113,7 +116,7 @@ impl JitCompiler {
 
         // Skip scalar-only functions (no benefit from IREE)
         let has_tensor = args.iter().any(|a| {
-            matches!(a, Value::Tensor { .. } | Value::Dict(_) | Value::Tuple(_))
+            matches!(a, Value::Tensor { .. } | Value::DeviceBuffer(_) | Value::Dict(_) | Value::Tuple(_))
         });
         if !has_tensor {
             self.jit_fail(name, "scalar-only args");
@@ -434,10 +437,15 @@ impl JitCompiler {
         // Derive a human-readable name from the outermost function call
         let vag_fn_name = outermost_call_name(body).unwrap_or("anonymous".to_string());
 
-        // Build a stable key for the blocklist
+        // Build a stable key for the blocklist and cache
         let vag_key = format!("__vag_{:?}", body);
         if self.failed_fns.contains(&vag_key) {
             return None;
+        }
+
+        // Return cached session if already compiled
+        if let Some(cached) = self.vag_cache.get(&vag_key) {
+            return Some(cached.clone());
         }
 
         // Skip impure or HOF-containing bodies
@@ -963,7 +971,9 @@ impl JitCompiler {
         let session_idx = vmfb_sessions.len();
         vmfb_sessions.push(Arc::new(session));
 
-        Some((session_idx, sig, all_param_names))
+        let result = (session_idx, sig, all_param_names);
+        self.vag_cache.insert(vag_key, result.clone());
+        Some(result)
     }
 
     fn jit_fail(&mut self, name: &str, reason: &str) {
