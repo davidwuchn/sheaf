@@ -138,6 +138,78 @@ impl CodeGenerator {
         }
     }
 
+    /// Static tree-reduce: fold a function over all leaves of a pytree.
+    ///
+    /// When the type is `Tuple(...)`, recursively descend into each element,
+    /// threading the accumulator through. When the type is a leaf (tensor/scalar),
+    /// inline the lambda with `(acc, leaf)` arguments.
+    pub(super) fn generate_tree_reduce(
+        &mut self,
+        lambda: &CompiledExpr,
+        tree_reg: Register,
+        tree_ty: &StableHLOType,
+        acc_reg: Register,
+        acc_ty: &StableHLOType,
+    ) -> SheafResult<(Register, StableHLOType)> {
+        match tree_ty {
+            StableHLOType::Tuple(elem_tys) => {
+                let mut cur_acc = acc_reg;
+                let mut cur_ty = acc_ty.clone();
+                for (idx, elem_ty) in elem_tys.iter().enumerate() {
+                    let elem_reg = self.emitter.emit_get_tuple_element(
+                        &tree_reg, tree_ty, idx, elem_ty,
+                    );
+                    (cur_acc, cur_ty) = self.generate_tree_reduce(
+                        lambda, elem_reg, elem_ty, cur_acc, &cur_ty,
+                    )?;
+                }
+                Ok((cur_acc, cur_ty))
+            }
+            _ => {
+                // Leaf: apply f(acc, leaf)
+                match lambda {
+                    CompiledExpr::Lambda { params, body } => {
+                        if params.len() != 2 {
+                            return Err(SheafError::Compile {
+                                message: format!(
+                                    "tree-reduce: lambda must have 2 params (acc, leaf), got {}",
+                                    params.len()
+                                ),
+                                location: crate::core::error::SourceLocation::unknown(),
+                            });
+                        }
+                        let saved = self.bindings.clone();
+                        self.bindings.insert(params[0].clone(), (acc_reg, acc_ty.clone()));
+                        self.bindings.insert(params[1].clone(), (tree_reg, tree_ty.clone()));
+                        let result = self.generate(body);
+                        self.bindings = saved;
+                        result
+                    }
+                    // Builtin symbol like +, *, etc.: emit as (f acc leaf)
+                    CompiledExpr::Symbol(name) => {
+                        let call = CompiledExpr::FunctionCall {
+                            name: name.clone(),
+                            args: vec![
+                                CompiledExpr::Symbol("__tree_reduce_acc".to_string()),
+                                CompiledExpr::Symbol("__tree_reduce_leaf".to_string()),
+                            ],
+                        };
+                        let saved = self.bindings.clone();
+                        self.bindings.insert("__tree_reduce_acc".to_string(), (acc_reg, acc_ty.clone()));
+                        self.bindings.insert("__tree_reduce_leaf".to_string(), (tree_reg, tree_ty.clone()));
+                        let result = self.generate(&call);
+                        self.bindings = saved;
+                        result
+                    }
+                    _ => Err(SheafError::Compile {
+                        message: "tree-reduce: first argument must be a lambda or builtin symbol".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    }),
+                }
+            }
+        }
+    }
+
     /// Static unrolling of `reduce` / `scan` over a collection with known type.
     ///
     /// Supports three collection shapes:

@@ -70,19 +70,21 @@ impl CodeGenerator {
             return Ok((result_reg, sig.return_type.clone()));
         }
 
-        // Binary arithmetic operations
-        if matches!(name, "+" | "-" | "*" | "/") && args.len() == 2 {
-            let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
-            let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
-            let (result_reg, result_ty) = math_ops::emit_arithmetic_binop(
-                &mut self.emitter,
-                name,
-                &lhs_reg,
-                &rhs_reg,
-                &lhs_ty,
-                &rhs_ty,
-            );
-            Ok((result_reg, result_ty))
+        // Arithmetic operations (binary or n-ary fold-left)
+        if matches!(name, "+" | "-" | "*" | "/") && args.len() >= 2 {
+            let (mut acc_reg, mut acc_ty) = self.generate(&args[0])?;
+            for arg in &args[1..] {
+                let (rhs_reg, rhs_ty) = self.generate(arg)?;
+                (acc_reg, acc_ty) = math_ops::emit_arithmetic_binop(
+                    &mut self.emitter,
+                    name,
+                    &acc_reg,
+                    &rhs_reg,
+                    &acc_ty,
+                    &rhs_ty,
+                );
+            }
+            Ok((acc_reg, acc_ty))
         }
         // Extended arithmetic: **, //, mod
         else if matches!(name, "**" | "//" | "%" | "mod") && args.len() == 2 {
@@ -987,6 +989,14 @@ impl CodeGenerator {
 
             self.generate_tree_map(lambda, &tree_regs, &tree_tys)
         }
+        // tree-reduce: (tree-reduce f tree init)
+        // Fold a binary function over all leaves of a pytree.
+        else if name == "tree-reduce" && args.len() == 3 {
+            let lambda = &args[0];
+            let (tree_reg, tree_ty) = self.generate(&args[1])?;
+            let (acc_reg, acc_ty) = self.generate(&args[2])?;
+            self.generate_tree_reduce(lambda, tree_reg, &tree_ty, acc_reg, &acc_ty)
+        }
         // get: (get tensor idx) or (get tuple :key)
         else if name == "get" && args.len() >= 2 {
             // Peek at the symbol name before generating to look up key layout
@@ -1379,7 +1389,7 @@ impl CodeGenerator {
         }
         else {
             Err(SheafError::Compile {
-                message: format!("Function call not yet supported: {}", name),
+                message: format!("Function call not yet supported: {} (arity {})", name, args.len()),
                 location: crate::core::error::SourceLocation::unknown(),
             })
         }

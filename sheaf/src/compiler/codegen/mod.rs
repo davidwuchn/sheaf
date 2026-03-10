@@ -191,12 +191,17 @@ impl CodeGenerator {
                         let (reg, ty) = self.emitter.emit_nd_tensor_constant(&data, &shape);
                         Ok((reg, ty))
                     }
-                    None => Err(SheafError::Compile {
-                        message: "Vector contains non-constant expressions; \
-                                  cannot emit as tensor constant"
-                            .to_string(),
-                        location: crate::core::error::SourceLocation::unknown(),
-                    }),
+                    None => {
+                        // Non-constant vector: emit as tuple (e.g. [new-p new-m new-v new-t])
+                        let mut regs = Vec::new();
+                        let mut tys = Vec::new();
+                        for elem in elements {
+                            let (reg, ty) = self.generate(elem)?;
+                            regs.push(reg);
+                            tys.push(ty);
+                        }
+                        Ok(self.emitter.emit_tuple(&regs, &tys))
+                    }
                 }
             }
 
