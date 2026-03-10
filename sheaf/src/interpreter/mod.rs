@@ -1543,7 +1543,7 @@ fn try_iree_dispatch(
     }
 
     let full_name = format!("module.{}", func_def.name.replace('-', "_"));
-    let result = match iree_session.call_typed(&full_name, args, &sig.return_type) {
+    let result = match iree_session.call_typed_device(&full_name, args, &sig.return_type) {
         Ok(v) => v,
         Err(_e) => {
             // Unexpected IREE error → fall back to interpreter with warning.
@@ -1621,7 +1621,7 @@ fn try_jit_vag(
     let session = env.vmfb_sessions.get(session_idx)?;
     let iree_session = session.downcast_ref::<crate::runtime::iree_session::IreeSession>()?;
 
-    let result = match iree_session.call_typed("module.value_and_grad", &args, &sig.return_type) {
+    let result = match iree_session.call_typed_device("module.value_and_grad", &args, &sig.return_type) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("warning: value-and-grad JIT dispatch failed: {}", e);
