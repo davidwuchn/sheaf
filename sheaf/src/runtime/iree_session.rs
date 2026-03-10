@@ -10,6 +10,74 @@ use crate::interpreter::value::{Dtype, Value};
 use crate::runtime::iree_ffi::*;
 use ndarray::ArrayD;
 
+/// Shared handle to the IREE device, allowing DeviceBuffers to outlive
+/// the IreeSession safely. Released when the last reference drops.
+pub struct IreeDeviceHandle {
+    pub(crate) device: *mut iree_hal_device_t,
+}
+
+unsafe impl Send for IreeDeviceHandle {}
+unsafe impl Sync for IreeDeviceHandle {}
+
+impl Drop for IreeDeviceHandle {
+    fn drop(&mut self) {
+        unsafe { iree_hal_device_release(self.device); }
+    }
+}
+
+/// An IREE buffer view living on device. Wraps raw FFI pointers behind Arc
+/// to make it Clone + Send + Sync, matching Value's requirements.
+pub struct DeviceBufferInner {
+    bv: *mut iree_hal_buffer_view_t,
+    device: Arc<IreeDeviceHandle>,
+    pub shape: Vec<usize>,
+    pub dtype: Dtype,
+}
+
+unsafe impl Send for DeviceBufferInner {}
+unsafe impl Sync for DeviceBufferInner {}
+
+impl Drop for DeviceBufferInner {
+    fn drop(&mut self) {
+        unsafe { iree_hal_buffer_view_release(self.bv); }
+    }
+}
+
+impl DeviceBufferInner {
+    /// Transfer data to host, returning an ndarray.
+    pub fn to_host(&self) -> Result<ArrayD<f64>, SheafError> {
+        unsafe {
+            let n_elems: usize = self.shape.iter().product::<usize>().max(1);
+            let byte_len = n_elems * 4; // f32 = 4 bytes
+            let mut f32_buf: Vec<f32> = vec![0.0; n_elems];
+
+            let buf = iree_hal_buffer_view_buffer(self.bv);
+            let status = iree_hal_device_transfer_d2h(
+                self.device.device,
+                buf,
+                0,
+                f32_buf.as_mut_ptr() as *mut c_void,
+                byte_len as u64,
+                0,
+                iree_timeout_t::infinite(),
+            );
+            if !iree_status_is_ok(status) {
+                iree_status_fprint(libc_stderr(), status);
+                return Err(iree_err("d2h transfer failed"));
+            }
+
+            let f64_data: Vec<f64> = f32_buf.iter().map(|&x| x as f64).collect();
+            ArrayD::from_shape_vec(self.shape.clone(), f64_data)
+                .map_err(|e| iree_err(&format!("shape mismatch: {}", e)))
+        }
+    }
+
+    /// Get the raw buffer view pointer (for passing back to IREE).
+    pub fn buffer_view(&self) -> *mut iree_hal_buffer_view_t {
+        self.bv
+    }
+}
+
 unsafe fn libc_stderr() -> *mut c_void {
     unsafe {
         #[cfg(target_os = "macos")]
@@ -36,6 +104,7 @@ unsafe fn libc_stderr() -> *mut c_void {
 #[derive(Clone)]
 enum TensorFingerprint {
     Tensor(Arc<ndarray::ArrayD<f64>>),
+    DeviceBuffer(Arc<DeviceBufferInner>),
     Scalar(u64),
 }
 
@@ -43,6 +112,7 @@ impl TensorFingerprint {
     fn from_value(val: &Value) -> Option<Self> {
         match val {
             Value::Tensor { data, .. } => Some(Self::Tensor(Arc::clone(data))),
+            Value::DeviceBuffer(db) => Some(Self::DeviceBuffer(Arc::clone(db))),
             Value::Float(f) => Some(Self::Scalar(f.to_bits())),
             Value::Int(n) => Some(Self::Scalar(*n as u64)),
             Value::Bool(b) => Some(Self::Scalar(*b as u64)),
@@ -53,6 +123,7 @@ impl TensorFingerprint {
     fn matches(&self, val: &Value) -> bool {
         match (self, val) {
             (Self::Tensor(cached), Value::Tensor { data, .. }) => Arc::ptr_eq(cached, data),
+            (Self::DeviceBuffer(cached), Value::DeviceBuffer(db)) => Arc::ptr_eq(cached, db),
             (Self::Scalar(s), Value::Float(f)) => *s == f.to_bits(),
             (Self::Scalar(s), Value::Int(n)) => *s == (*n as u64),
             (Self::Scalar(s), Value::Bool(b)) => *s == (*b as u64),
@@ -68,7 +139,7 @@ struct CachedBufferView {
 
 pub struct IreeSession {
     instance: *mut iree_runtime_instance_t,
-    device: *mut iree_hal_device_t,
+    device_handle: Arc<IreeDeviceHandle>,
     session: *mut iree_runtime_session_t,
     _vmfb_data: Option<Vec<u8>>,
     /// HAL driver name: "metal", "local-task", etc.
@@ -150,6 +221,10 @@ impl IreeSession {
                 }
             }
 
+            // Retain the device for our Arc handle (session also holds its own ref)
+            iree_hal_device_retain(device);
+            let device_handle = Arc::new(IreeDeviceHandle { device });
+
             let mut session_opts: iree_runtime_session_options_t = std::mem::zeroed();
             iree_runtime_session_options_initialize(&mut session_opts);
 
@@ -162,14 +237,15 @@ impl IreeSession {
                 &mut session,
             );
             if !iree_status_is_ok(status) {
-                iree_hal_device_release(device);
+                drop(device_handle); // releases our retained ref
+                iree_hal_device_release(device); // release the original ref
                 iree_runtime_instance_release(instance);
                 return Err(iree_err("failed to create IREE session"));
             }
 
             Ok(IreeSession {
                 instance,
-                device,
+                device_handle,
                 session,
                 _vmfb_data: None,
                 driver_name: chosen_driver.to_string(),
@@ -199,6 +275,11 @@ impl IreeSession {
     /// Returns the HAL driver name ("metal", "local-task", etc.)
     pub fn driver_name(&self) -> &str {
         &self.driver_name
+    }
+
+    /// Returns a clone of the device handle for DeviceBuffer lifetime management.
+    pub fn device_handle(&self) -> &Arc<IreeDeviceHandle> {
+        &self.device_handle
     }
 
     pub fn load_vmfb(&mut self, data: Vec<u8>) -> Result<(), SheafError> {
@@ -368,6 +449,166 @@ impl IreeSession {
         let structured = unflatten_value(return_type, &flat_values, &mut cursor)?;
         Ok(structured)
     }
+
+    /// Like call(), but returns DeviceBuffer values instead of host tensors.
+    /// DeviceBuffer inputs are passed through without h2d copy.
+    pub fn call_device(&self, fn_name: &str, inputs: &[Value]) -> Result<Value, SheafError> {
+        unsafe {
+            let alloc = system_allocator();
+            let device = iree_runtime_session_device(self.session);
+            let device_alloc = iree_runtime_session_device_allocator(self.session);
+
+            let t0 = if self.profile { Some(std::time::Instant::now()) } else { None };
+
+            let flat_inputs = flatten_values(inputs)?;
+
+            let t1 = t0.map(|_| std::time::Instant::now());
+
+            let mut input_list: *mut iree_vm_list_t = std::ptr::null_mut();
+            let variant_type = iree_vm_type_def_t { value: 0 };
+            let status =
+                iree_vm_list_create(variant_type, flat_inputs.len(), alloc, &mut input_list);
+            if !iree_status_is_ok(status) {
+                return Err(iree_err("failed to create input list"));
+            }
+
+            // Build input buffer views: DeviceBuffers pass through, others use cache.
+            const MAX_CACHE_ENTRIES: usize = 8;
+            let mut cache = self.buffer_cache.lock().unwrap();
+            let cached_fn = cache.entry(fn_name.to_string()).or_default();
+            if cached_fn.len() < flat_inputs.len() {
+                cached_fn.resize_with(flat_inputs.len(), Vec::new);
+            }
+
+            for (i, val) in flat_inputs.iter().enumerate() {
+                let bv = match val {
+                    Value::DeviceBuffer(db) => {
+                        if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
+                        db.buffer_view()
+                    }
+                    _ => {
+                        let hit_idx = cached_fn[i].iter().position(|entry| entry.fingerprint.matches(val));
+                        if let Some(idx) = hit_idx {
+                            if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
+                            if idx > 0 { cached_fn[i].swap(0, idx); }
+                            cached_fn[i][0].bv
+                        } else {
+                            if self.profile { self.n_cache_misses.fetch_add(1, Ordering::Relaxed); }
+                            let new_bv = value_to_buffer_view(device, device_alloc, val)?;
+                            if let Some(fp) = TensorFingerprint::from_value(val) {
+                                if cached_fn[i].len() >= MAX_CACHE_ENTRIES {
+                                    let evicted = cached_fn[i].pop().unwrap();
+                                    iree_hal_buffer_view_release(evicted.bv);
+                                }
+                                cached_fn[i].insert(0, CachedBufferView { fingerprint: fp, bv: new_bv });
+                            }
+                            new_bv
+                        }
+                    }
+                };
+
+                let mut ref_ = iree_hal_buffer_view_retain_ref(bv);
+                let status = iree_vm_list_push_ref_retain(input_list, &ref_);
+                iree_vm_ref_release(&mut ref_);
+                if !iree_status_is_ok(status) {
+                    iree_vm_list_release(input_list);
+                    return Err(iree_err("failed to push input to list"));
+                }
+            }
+
+            drop(cache);
+
+            let t2 = t0.map(|_| std::time::Instant::now());
+
+            let mut output_list: *mut iree_vm_list_t = std::ptr::null_mut();
+            let status =
+                iree_vm_list_create(variant_type, 16, alloc, &mut output_list);
+            if !iree_status_is_ok(status) {
+                iree_vm_list_release(input_list);
+                return Err(iree_err("failed to create output list"));
+            }
+
+            let name = iree_string_view_t::from_str(fn_name);
+            let status = iree_runtime_session_call_by_name(
+                self.session,
+                name,
+                input_list,
+                output_list,
+            );
+            iree_vm_list_release(input_list);
+            if !iree_status_is_ok(status) {
+                iree_status_fprint(libc_stderr(), status);
+                iree_vm_list_release(output_list);
+                return Err(iree_err(&format!("IREE call '{}' failed", fn_name)));
+            }
+
+            let t3 = t0.map(|_| std::time::Instant::now());
+
+            // Wrap outputs as DeviceBuffers instead of d2h transfer
+            let n_outputs = iree_vm_list_size(output_list);
+            let mut results = Vec::with_capacity(n_outputs);
+            for i in 0..n_outputs {
+                let mut ref_: iree_vm_ref_t = std::mem::zeroed();
+                let status = iree_vm_list_get_ref_retain(output_list, i, &mut ref_);
+                if !iree_status_is_ok(status) {
+                    iree_vm_list_release(output_list);
+                    return Err(iree_err("failed to get output from list"));
+                }
+                let bv = ref_.ptr as *mut iree_hal_buffer_view_t;
+
+                // Read shape metadata (no data transfer)
+                let rank = iree_hal_buffer_view_shape_rank(bv);
+                let shape: Vec<usize> = (0..rank)
+                    .map(|j| iree_hal_buffer_view_shape_dim(bv, j) as usize)
+                    .collect();
+
+                let db = Arc::new(DeviceBufferInner {
+                    bv,
+                    device: Arc::clone(&self.device_handle),
+                    shape,
+                    dtype: Dtype::F32,
+                });
+                // Transfer ownership: nullify ptr to prevent double-free on ref release
+                ref_.ptr = std::ptr::null_mut();
+                iree_vm_ref_release(&mut ref_);
+
+                results.push(Value::DeviceBuffer(db));
+            }
+            iree_vm_list_release(output_list);
+
+            if let (Some(t0), Some(t1), Some(t2), Some(t3)) = (t0, t1, t2, t3) {
+                let t4 = std::time::Instant::now();
+                self.t_flatten_ns.fetch_add((t1 - t0).as_nanos() as u64, Ordering::Relaxed);
+                self.t_buffers_ns.fetch_add((t2 - t1).as_nanos() as u64, Ordering::Relaxed);
+                self.t_call_ns.fetch_add((t3 - t2).as_nanos() as u64, Ordering::Relaxed);
+                self.t_output_ns.fetch_add((t4 - t3).as_nanos() as u64, Ordering::Relaxed);
+                self.n_calls.fetch_add(1, Ordering::Relaxed);
+            }
+
+            match results.len() {
+                0 => Ok(Value::Nil),
+                1 => Ok(results.into_iter().next().unwrap()),
+                _ => Ok(Value::Tuple(results)),
+            }
+        }
+    }
+
+    /// Like call_typed(), but returns DeviceBuffers instead of host tensors.
+    pub fn call_typed_device(
+        &self,
+        fn_name: &str,
+        inputs: &[Value],
+        return_type: &crate::compiler::stablehlo::StableHLOType,
+    ) -> Result<Value, SheafError> {
+        let flat_result = self.call_device(fn_name, inputs)?;
+        let flat_values = match flat_result {
+            Value::Tuple(vals) => vals,
+            other => vec![other],
+        };
+        let mut cursor = 0;
+        let structured = unflatten_value(return_type, &flat_values, &mut cursor)?;
+        Ok(structured)
+    }
 }
 
 impl Drop for IreeSession {
@@ -404,9 +645,8 @@ impl Drop for IreeSession {
             if !self.session.is_null() {
                 iree_runtime_session_release(self.session);
             }
-            if !self.device.is_null() {
-                iree_hal_device_release(self.device);
-            }
+            // device_handle (Arc<IreeDeviceHandle>) releases the device when
+            // the last DeviceBuffer is dropped. No explicit release here.
             if !self.instance.is_null() {
                 iree_runtime_instance_release(self.instance);
             }
@@ -493,6 +733,11 @@ unsafe fn value_to_buffer_view(
                 };
                 value_to_buffer_view(device, allocator, &tensor)
             }
+            Value::DeviceBuffer(db) => {
+                // Already an IREE buffer view — pass through directly.
+                // Caller must not cache/release this pointer (not owned by cache).
+                Ok(db.buffer_view())
+            }
             _ => Err(iree_err(&format!(
                 "cannot convert {} to IREE buffer",
                 val.type_name()
@@ -575,7 +820,8 @@ fn count_one_value(val: &Value) -> usize {
     match val {
         Value::Dict(map) => map.values().map(count_one_value).sum(),
         Value::Tuple(elems) | Value::List(elems) => elems.iter().map(count_one_value).sum(),
-        Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::Bool(_) => 1,
+        Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::Bool(_)
+        | Value::DeviceBuffer(_) => 1,
         _ => 0,
     }
 }
@@ -652,6 +898,9 @@ fn collect_value_shapes(val: &Value, out: &mut Vec<Vec<i64>>) {
         Value::Tensor { data, .. } => {
             out.push(data.shape().iter().map(|&d| d as i64).collect());
         }
+        Value::DeviceBuffer(db) => {
+            out.push(db.shape.iter().map(|&d| d as i64).collect());
+        }
         Value::Float(_) | Value::Int(_) | Value::Bool(_) => {
             out.push(vec![]);
         }
@@ -686,7 +935,8 @@ fn flatten_value<'a>(val: &'a Value, out: &mut Vec<&'a Value>) -> Result<(), She
             }
             Ok(())
         }
-        Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::Bool(_) => {
+        Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::Bool(_)
+        | Value::DeviceBuffer(_) => {
             out.push(val);
             Ok(())
         }

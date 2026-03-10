@@ -156,6 +156,7 @@ unsafe extern "C" {
     ) -> iree_status_t;
 
     // Device
+    pub fn iree_hal_device_retain(device: *mut iree_hal_device_t);
     pub fn iree_hal_device_release(device: *mut iree_hal_device_t);
 
     // Session
