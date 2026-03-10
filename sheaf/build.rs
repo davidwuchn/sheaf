@@ -6,6 +6,7 @@ fn main() {
     // 1. IREE_BUILD_DIR env var (CMake build tree)
     // 2. IREE_DIST_DIR env var (nightly dist flat layout)
     // 3. IREE_RUNTIME_LIB_DIR env var (explicit lib directory)
+    // 4. iree-runtime/ directory next to Cargo.toml (convention)
 
     // Expose [package.metadata] iree-version as compile-time env var
     let cargo_toml = std::fs::read_to_string("Cargo.toml").expect("cannot read Cargo.toml");
@@ -18,14 +19,14 @@ fn main() {
 
     let found = try_cmake_layout()
         || try_dist_layout()
-        || try_explicit_lib_dir();
+        || try_explicit_lib_dir()
+        || try_conventional_dir();
 
     if !found {
-        println!("cargo:warning=IREE runtime not found");
-        println!("cargo:warning=Set IREE_BUILD_DIR (CMake build) or IREE_DIST_DIR (nightly dist)");
-        println!("cargo:warning=Building without IREE runtime support");
-        println!("cargo:rustc-check-cfg=cfg(iree_runtime)");
-        return;
+        panic!(
+            "\n\nIREE runtime not found. Place libraries in sheaf/iree-runtime/ or set IREE_RUNTIME_LIB_DIR.\n\
+             Required files: libiree_runtime_unified.a, libflatcc_parsing.a\n"
+        );
     }
 
     // macOS system frameworks
@@ -51,6 +52,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=IREE_DIST_DIR");
     println!("cargo:rerun-if-env-changed=IREE_RUNTIME_LIB_DIR");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=iree-runtime");
 }
 
 /// CMake build tree layout: IREE_BUILD_DIR/runtime/src/iree/runtime/libiree_runtime_unified.a
@@ -109,6 +111,16 @@ fn try_explicit_lib_dir() -> bool {
     }
 
     link_from_dir(&lib_dir)
+}
+
+/// Convention: iree-runtime/ next to Cargo.toml
+fn try_conventional_dir() -> bool {
+    let lib_dir = PathBuf::from("iree-runtime");
+    if lib_dir.join("libiree_runtime_unified.a").exists() {
+        link_from_dir(&lib_dir)
+    } else {
+        false
+    }
 }
 
 /// Link iree_runtime_unified + flatcc_parsing from a single directory.
