@@ -17,7 +17,7 @@ use std::sync::Arc;
 /// IREE compiler version — single source of truth in Cargo.toml [package.metadata]
 const IREE_COMPILER_VERSION: &str = env!("IREE_VERSION");
 
-use crate::autodiff::grad_simplified;
+use crate::autodiff::reverse::{to_anf, reverse_grad};
 use crate::compiler::codegen::{
     collect_tuple_leaves, expand_tuple_to_symbols, CodeGenerator,
 };
@@ -26,7 +26,7 @@ use crate::compiler::effects::{collect_effects, collect_hof_calls};
 use crate::compiler::stablehlo::{Register, StableHLOEmitter};
 use crate::compiler::transforms::{
     extract_scalar_constants, lower_inlined_gets, propagate_let_layouts,
-    resolve_static_constants,
+    resolve_static_constants, unroll_reduces,
 };
 use crate::core::compiler::{CompiledExpr, FunctionDef, VmfbSession};
 use crate::core::inference::{infer_function_signature_with_known, FunctionSignature};
@@ -320,8 +320,16 @@ impl JitCompiler {
             if target_backend == "metal-spirv" {
                 cmd.arg("--iree-metal-compile-to-metallib=false");
             }
+            if target_backend == "llvm-cpu" {
+                cmd.arg("--iree-llvmcpu-target-cpu=host");
+                cmd.arg("--iree-llvmcpu-enable-ukernels=all");
+            }
             let status = cmd.status();
-            let _ = std::fs::remove_file(&mlir_path);
+            if self.verbose {
+                let _ = std::fs::rename(&mlir_path, format!("__sheaf__/{}-debug.mlir", name));
+            } else {
+                let _ = std::fs::remove_file(&mlir_path);
+            }
 
             let status = match status {
                 Ok(s) => s,
@@ -507,21 +515,38 @@ impl JitCompiler {
         // Inline user-defined function calls
         body = crate::autodiff::inline_function_calls(&body, registry);
 
-        // After inlining, check if the expanded body contains ops that
-        // cannot be symbolically differentiated (reduce, map, etc.)
-        if crate::autodiff::contains_undiffable_ops(&body) {
-            self.jit_fail(&vag_key, "inlined body contains undiffable ops (reduce, map, etc.)");
-            return None;
-        }
-
         // Post-inline: re-lower dict access from inlined bodies
         for (param_name, index_map) in &param_index_maps {
             body = lower_get_calls(&body, param_name, index_map);
         }
         body = lower_inlined_gets(&body, &param_index_maps);
 
+        // Unroll reduces so grad_simplified can differentiate through them
+        let known_types_vec: Vec<(String, StableHLOType)> = sig
+            .param_types
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| (all_param_names[i].clone(), ty.clone()))
+            .collect();
+        // Debug: log remaining reduces before unrolling
+        if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
+            eprintln!("jit: [vag] param_index_maps keys: {:?}",
+                param_index_maps.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>());
+            log_remaining_reduces(&body, "before unroll");
+        }
+        body = unroll_reduces(&body, &known_types_vec);
+        if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
+            log_remaining_reduces(&body, "after unroll");
+        }
+
+        // Re-lower dict access introduced by unrolling (get on GetTupleElement elements)
+        for (param_name, index_map) in &param_index_maps {
+            body = lower_get_calls(&body, param_name, index_map);
+        }
+        body = lower_inlined_gets(&body, &param_index_maps);
+
         // Resolve static constants
-        let param_shapes: HashMap<String, Vec<i64>> = all_param_names
+        let mut param_shapes: HashMap<String, Vec<i64>> = all_param_names
             .iter()
             .zip(sig.param_types.iter())
             .filter_map(|(p, ty)| {
@@ -533,6 +558,10 @@ impl JitCompiler {
                 }
             })
             .collect();
+        // Inject shapes of GetTupleElement leaves for shape inference
+        for (param_name, param_ty) in all_param_names.iter().zip(sig.param_types.iter()) {
+            inject_tuple_shapes(param_name, param_ty, &[], &mut param_shapes);
+        }
         body = resolve_static_constants(&body, &constants, &param_shapes);
 
         // Build key layouts for codegen
@@ -561,6 +590,11 @@ impl JitCompiler {
         }
         propagate_let_layouts(&body, &idx_to_key, &mut tuple_key_layouts);
 
+        // Debug: log unresolved shapes
+        if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
+            log_unresolved_shapes(&body, "before codegen");
+        }
+
         // Value-and-grad codegen (catch panics gracefully)
         let backend = self.target_backend.clone();
         let codegen_result = {
@@ -578,62 +612,171 @@ impl JitCompiler {
                 codegen.set_tuple_key_layouts(tuple_key_layouts);
                 codegen.set_idx_to_key(idx_to_key);
 
-                // Inline user-defined functions for AD (already done above, but codegen
-                // may need it for the function_registry too)
                 let inlined_body = body_clone;
 
-                // Forward pass
-                let (loss_reg, loss_ty) = codegen.generate(&inlined_body)?;
+                // 1. Expand tuple params to synthetic leaf symbols
+                let mut expanded_body = inlined_body.clone();
+                let mut all_leaves: Vec<(usize, Vec<crate::compiler::codegen::TupleLeaf>)> = Vec::new();
+                let mut all_wrt_symbols: Vec<String> = Vec::new();
 
-                // Backward passes
-                let mut grad_regs: Vec<Register> = Vec::new();
-                let mut grad_tys: Vec<StableHLOType> = Vec::new();
                 for &idx in &wrt_idx {
                     let param_name = &param_names[idx];
                     let param_ty = &param_types[idx];
                     match param_ty {
                         StableHLOType::Tuple(_) => {
-                            // Tuple parameter (dict lowered): collect leaves,
-                            // expand to synthetic symbols, differentiate each
-                            let leaves = collect_tuple_leaves(&inlined_body, param_name);
-                            let expanded = expand_tuple_to_symbols(&inlined_body, param_name);
-
-                            // Bind each leaf symbol to its GetTupleElement register
-                            for leaf in &leaves {
-                                let mut current_reg = Register::arg(idx);
-                                let mut current_ty = param_ty.clone();
-                                for &i in &leaf.indices {
-                                    let elem_ty = match &current_ty {
-                                        StableHLOType::Tuple(elems) => elems[i].clone(),
-                                        _ => {
-                                            return Err(crate::core::error::SheafError::Compile {
-                                                message: format!(
-                                                    "expected tuple at index {} for param {}",
-                                                    i, param_name
-                                                ),
-                                                location:
-                                                    crate::core::error::SourceLocation::unknown(),
-                                            })
-                                        }
-                                    };
-                                    current_reg = codegen.emit_get_tuple_element(
-                                        &current_reg,
-                                        &current_ty,
-                                        i,
-                                        &elem_ty,
-                                    );
-                                    current_ty = elem_ty;
-                                }
-                                codegen.bind_symbol(&leaf.symbol, current_reg, current_ty);
+                            let leaves = collect_tuple_leaves(&expanded_body, param_name);
+                            if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
+                                eprintln!("jit: [vag] param '{}': {} tuple leaves", param_name, leaves.len());
                             }
+                            expanded_body = expand_tuple_to_symbols(&expanded_body, param_name);
+                            for leaf in &leaves {
+                                all_wrt_symbols.push(leaf.symbol.clone());
+                            }
+                            all_leaves.push((idx, leaves));
+                        }
+                        _ => {
+                            all_wrt_symbols.push(param_name.clone());
+                        }
+                    }
+                }
+
+                // 2. Convert to ANF
+                let anf_expr = to_anf(&expanded_body);
+                let (anf_bindings, anf_body) = match &anf_expr {
+                    CompiledExpr::Let { bindings, body } => {
+                        (bindings.clone(), body.as_ref().clone())
+                    }
+                    other => (vec![], other.clone()),
+                };
+
+                // 3. Bind tuple leaves for codegen
+                for &(idx, ref leaves) in &all_leaves {
+                    let param_ty = &param_types[idx];
+                    for leaf in leaves {
+                        let mut current_reg = Register::arg(idx);
+                        let mut current_ty = param_ty.clone();
+                        for &i in &leaf.indices {
+                            let elem_ty = match &current_ty {
+                                StableHLOType::Tuple(elems) => elems[i].clone(),
+                                _ => {
+                                    return Err(crate::core::error::SheafError::Compile {
+                                        message: format!(
+                                            "expected tuple at index {} for param {}",
+                                            i, &param_names[idx]
+                                        ),
+                                        location:
+                                            crate::core::error::SourceLocation::unknown(),
+                                    })
+                                }
+                            };
+                            current_reg = codegen.emit_get_tuple_element(
+                                &current_reg,
+                                &current_ty,
+                                i,
+                                &elem_ty,
+                            );
+                            current_ty = elem_ty;
+                        }
+                        codegen.bind_symbol(&leaf.symbol, current_reg, current_ty);
+                    }
+                }
+
+                // 4. Generate forward bindings (flat scope, no Let scoping).
+                //    Use generate_binding to handle Lambda, destructuring, layouts.
+                for (name, value_expr) in &anf_bindings {
+                    codegen.generate_binding(name, value_expr)?;
+                }
+
+                // Generate the ANF body (loss value)
+                let (loss_reg, loss_ty) = codegen.generate(&anf_body)?;
+
+                // 5. Build shape map from forward codegen for reverse-mode AD
+                let shape_map: HashMap<String, Vec<i64>> = codegen.binding_shapes();
+
+                // 6. Run reverse-mode AD on ANF with shape info
+                let (backward_bindings, grad_sym_map) =
+                    reverse_grad(&anf_bindings, &anf_body, &all_wrt_symbols, &shape_map);
+
+                if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
+                    eprintln!("jit: [vag] ANF: {} fwd bindings, {} bwd bindings, {} wrt symbols",
+                        anf_bindings.len(), backward_bindings.len(), all_wrt_symbols.len());
+                }
+
+                if std::env::var("SHEAF_DEBUG_GRAD").is_ok() {
+                    eprintln!("--- Forward ANF bindings ---");
+                    for (name, val) in &anf_bindings {
+                        eprintln!("  {} = {:?}  [shape: {:?}]", name, val, shape_map.get(name));
+                    }
+                    eprintln!("  body = {:?}", anf_body);
+                    eprintln!("--- Backward bindings ---");
+                    for (name, val) in &backward_bindings {
+                        eprintln!("  {} = {:?}", name, val);
+                    }
+                    eprintln!("--- Grad map ---");
+                    for (sym, grad_name) in &grad_sym_map {
+                        eprintln!("  {} → {}", sym, grad_name);
+                    }
+                    eprintln!("--- wrt symbols ---");
+                    for s in &all_wrt_symbols {
+                        eprintln!("  {}", s);
+                    }
+                }
+
+                // 7. Generate backward bindings (adjoint computations).
+                //    Backward bindings are always simple name=expr (no Lambda/destructuring).
+                for (name, value_expr) in &backward_bindings {
+                    let (reg, ty) = codegen.generate(value_expr)?;
+                    codegen.bind_symbol(name, reg, ty);
+                }
+
+                // 6. Collect gradient registers for each wrt param.
+                let mut grad_regs: Vec<Register> = Vec::new();
+                let mut grad_tys: Vec<StableHLOType> = Vec::new();
+
+                for &idx in &wrt_idx {
+                    let param_name = &param_names[idx];
+                    let param_ty = &param_types[idx];
+                    match param_ty {
+                        StableHLOType::Tuple(_) => {
+                            let leaves = all_leaves.iter()
+                                .find(|(i, _)| *i == idx)
+                                .map(|(_, l)| l)
+                                .unwrap();
+
+                            // Each leaf gradient is a Symbol name from grad_sym_map
+                            let leaf_grad_map: std::collections::HashMap<String, CompiledExpr> =
+                                leaves.iter().map(|leaf| {
+                                    let grad_expr = grad_sym_map
+                                        .get(&leaf.symbol)
+                                        .map(|sym_name| CompiledExpr::Symbol(sym_name.clone()))
+                                        .unwrap_or_else(|| {
+                                            // Generate zeros of the correct shape for missing grads
+                                            let leaf_ty = resolve_leaf_type(param_ty, &leaf.indices);
+                                            let shape = leaf_ty.shape();
+                                            if shape.is_empty() {
+                                                CompiledExpr::Float(0.0)
+                                            } else {
+                                                CompiledExpr::FunctionCall {
+                                                    name: "zeros".to_string(),
+                                                    args: vec![CompiledExpr::Vector(
+                                                        shape.iter().map(|&d| CompiledExpr::Integer(d)).collect()
+                                                    )],
+                                                }
+                                            }
+                                        });
+                                    (leaf.symbol.clone(), grad_expr)
+                                }).collect();
 
                             let (grad_reg, grad_ty) =
-                                codegen.generate_tuple_gradient(&expanded, &leaves, param_ty)?;
+                                codegen.build_grad_tuple_from_map(leaves, param_ty, &leaf_grad_map)?;
                             grad_regs.push(grad_reg);
                             grad_tys.push(grad_ty);
                         }
                         _ => {
-                            let grad_expr = grad_simplified(&inlined_body, param_name);
+                            let grad_expr = grad_sym_map
+                                .get(param_name)
+                                .map(|sym_name| CompiledExpr::Symbol(sym_name.clone()))
+                                .unwrap_or(CompiledExpr::Float(0.0));
                             let (grad_reg, grad_ty) = codegen.generate(&grad_expr)?;
                             let (grad_reg, grad_ty) =
                                 codegen.reduce_broadcast_grad(grad_reg, &grad_ty, param_ty)?;
@@ -708,6 +851,12 @@ impl JitCompiler {
             let tmp_dir = std::env::temp_dir();
             let stamp = std::process::id();
             let mlir_path = tmp_dir.join(format!("sheaf-jit-vag-{}.mlir", stamp));
+
+            // Debug: save a copy for inspection
+            if self.verbose {
+                let debug_path = std::path::PathBuf::from("__sheaf__/vag-debug.mlir");
+                let _ = std::fs::write(&debug_path, &mlir);
+            }
             let vmfb_path = tmp_dir.join(format!("sheaf-jit-vag-{}.vmfb", stamp));
 
             if std::fs::write(&mlir_path, &mlir).is_err() {
@@ -729,6 +878,10 @@ impl JitCompiler {
                 .stderr(stderr_cfg);
             if backend == "metal-spirv" {
                 cmd.arg("--iree-metal-compile-to-metallib=false");
+            }
+            if backend == "llvm-cpu" {
+                cmd.arg("--iree-llvmcpu-target-cpu=host");
+                cmd.arg("--iree-llvmcpu-enable-ukernels=all");
             }
             let status = cmd.status();
             let _ = std::fs::remove_file(&mlir_path);
@@ -787,6 +940,23 @@ impl JitCompiler {
             eprintln!("jit: {} skipped ({})", name, reason);
         }
     }
+}
+
+/// Navigate a tuple type tree using indices to find the leaf type.
+fn resolve_leaf_type(ty: &StableHLOType, indices: &[usize]) -> StableHLOType {
+    let mut current = ty.clone();
+    for &idx in indices {
+        if let StableHLOType::Tuple(elems) = &current {
+            if idx < elems.len() {
+                current = elems[idx].clone();
+            } else {
+                return StableHLOType::scalar_f32();
+            }
+        } else {
+            return current;
+        }
+    }
+    current
 }
 
 /// Substitute all occurrences of `Symbol(name)` with `Float(val)` in a compiled expression.
@@ -1001,3 +1171,85 @@ fn which(name: &str) -> Option<String> {
         })
     })
 }
+
+#[cfg(iree_runtime)]
+fn inject_tuple_shapes(
+    param_name: &str,
+    ty: &StableHLOType,
+    indices: &[usize],
+    shapes: &mut HashMap<String, Vec<i64>>,
+) {
+    match ty {
+        StableHLOType::Tuple(elems) => {
+            for (i, elem_ty) in elems.iter().enumerate() {
+                let mut child_indices = indices.to_vec();
+                child_indices.push(i);
+                inject_tuple_shapes(param_name, elem_ty, &child_indices, shapes);
+            }
+        }
+        _ => {
+            let shape = ty.shape();
+            if !shape.is_empty() && !indices.is_empty() {
+                let key = format!("{}@{:?}", param_name, indices);
+                shapes.insert(key, shape.to_vec());
+            }
+        }
+    }
+}
+
+#[cfg(iree_runtime)]
+fn log_remaining_reduces(expr: &CompiledExpr, label: &str) {
+    match expr {
+        CompiledExpr::FunctionCall { name, args } if name == "reduce" => {
+            let coll_desc = if let Some(coll) = args.get(2) {
+                format!("{:?}", coll)
+            } else {
+                "missing".to_string()
+            };
+            eprintln!("jit: [{}] reduce with coll={}", label, coll_desc);
+        }
+        CompiledExpr::FunctionCall { args, .. } => {
+            for a in args { log_remaining_reduces(a, label); }
+        }
+        CompiledExpr::Let { bindings, body } => {
+            for (_, v) in bindings { log_remaining_reduces(v, label); }
+            log_remaining_reduces(body, label);
+        }
+        CompiledExpr::Lambda { body, .. } => log_remaining_reduces(body, label),
+        CompiledExpr::Do(exprs) => { for e in exprs { log_remaining_reduces(e, label); } }
+        _ => {}
+    }
+}
+
+#[cfg(iree_runtime)]
+fn log_unresolved_shapes(expr: &CompiledExpr, label: &str) {
+    match expr {
+        CompiledExpr::FunctionCall { name, args } if name == "reshape" && args.len() == 2 => {
+            match &args[1] {
+                CompiledExpr::Vector(elems) => {
+                    let unresolved: Vec<_> = elems.iter()
+                        .filter(|e| !matches!(e, CompiledExpr::Integer(_)))
+                        .map(|e| format!("{:?}", e))
+                        .collect();
+                    if !unresolved.is_empty() {
+                        eprintln!("jit: [{}] reshape with unresolved shape elements: {:?}", label, unresolved);
+                    }
+                }
+                other => {
+                    eprintln!("jit: [{}] reshape with non-vector shape: {:?}", label, other);
+                }
+            }
+        }
+        CompiledExpr::FunctionCall { args, .. } => {
+            for a in args { log_unresolved_shapes(a, label); }
+        }
+        CompiledExpr::Let { bindings, body } => {
+            for (_, v) in bindings { log_unresolved_shapes(v, label); }
+            log_unresolved_shapes(body, label);
+        }
+        CompiledExpr::Lambda { body, .. } => log_unresolved_shapes(body, label),
+        CompiledExpr::Do(exprs) => { for e in exprs { log_unresolved_shapes(e, label); } }
+        _ => {}
+    }
+}
+

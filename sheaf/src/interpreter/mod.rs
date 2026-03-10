@@ -1626,10 +1626,30 @@ fn try_jit_vag(
 
     // Unpack: IREE returns Tuple([loss_tensor, grad_elements...])
     // We need to return List([Float(loss), grad_value])
-    let unpacked = match unpack_vag_result(&result, params) {
-        Some(v) => v,
-        None => {
+    if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
+        let desc = match &result {
+            Value::Tuple(elems) => format!("Tuple(len={})", elems.len()),
+            other => format!("{}", other.type_name()),
+        };
+        eprintln!("jit: [vag] result structure: {}", desc);
+        if let Value::Tuple(elems) = &result {
+            for (i, e) in elems.iter().enumerate() {
+                eprintln!("jit: [vag]   elem[{}]: {}", i, e.type_name());
+            }
+        }
+    }
+    let unpacked = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unpack_vag_result(&result, params)
+    })) {
+        Ok(Some(v)) => v,
+        Ok(None) => {
             eprintln!("warning: value-and-grad result unpacking failed");
+            return None;
+        }
+        Err(e) => {
+            eprintln!("warning: value-and-grad result unpacking panicked: {:?}",
+                e.downcast_ref::<String>().map(|s| s.as_str())
+                    .or_else(|| e.downcast_ref::<&str>().copied()));
             return None;
         }
     };
@@ -1646,17 +1666,21 @@ fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
         _ => return None,
     };
 
-    let mut free = std::collections::HashSet::new();
-    collect_free_vars_compiled(body, &mut free);
+    let mut free_set = std::collections::HashSet::new();
+    collect_free_vars_compiled(body, &mut free_set);
 
     // Remove the lambda's own params
     for p in fn_params {
-        free.remove(p.as_str());
+        free_set.remove(p.as_str());
     }
     // Remove vars already in the closure
     for (k, _) in closure {
-        free.remove(k.as_str());
+        free_set.remove(k.as_str());
     }
+
+    // Sort for deterministic parameter ordering (avoids MLIR hash changes → cache misses)
+    let mut free: Vec<&str> = free_set.iter().map(|s| s.as_str()).collect();
+    free.sort();
 
     let mut augmented_closure = closure.clone();
     for name in &free {
@@ -1746,7 +1770,9 @@ fn unpack_vag_result(result: &Value, original_params: &Value) -> Option<Value> {
 
     // First element: loss (scalar tensor → Float)
     let loss = match &elems[0] {
-        Value::Tensor { data, .. } if data.len() == 1 => Value::Float(data[0]),
+        Value::Tensor { data, .. } if data.len() == 1 => {
+            Value::Float(*data.iter().next().unwrap())
+        }
         Value::Float(f) => Value::Float(*f),
         _ => return None,
     };
@@ -1778,6 +1804,10 @@ fn tuple_to_dict(tuple_val: &Value, original: &BTreeMap<String, Value>) -> Optio
     };
 
     if elems.len() != original.len() {
+        if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
+            eprintln!("jit: [vag] tuple_to_dict: tuple len {} != dict keys {} ({:?})",
+                elems.len(), original.len(), original.keys().collect::<Vec<_>>());
+        }
         return None;
     }
 
@@ -1785,9 +1815,40 @@ fn tuple_to_dict(tuple_val: &Value, original: &BTreeMap<String, Value>) -> Optio
     for ((key, orig_val), elem) in original.iter().zip(elems.iter()) {
         let val = match orig_val {
             Value::Dict(sub_map) => tuple_to_dict(elem, sub_map)?,
+            Value::List(orig_list) => tuple_to_list(elem, orig_list)?,
             _ => elem.clone(),
         };
         result.insert(key.clone(), val);
     }
     Some(Value::Dict(result))
+}
+
+/// Reconstruct a List from a Tuple, using the original List's element structure.
+#[cfg(iree_runtime)]
+fn tuple_to_list(tuple_val: &Value, original: &[Value]) -> Option<Value> {
+    let elems = match tuple_val {
+        Value::Tuple(elems) => elems,
+        _ => {
+            return None;
+        }
+    };
+
+    if elems.len() != original.len() {
+        if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
+            eprintln!("jit: [vag] tuple_to_list: tuple len {} != list len {}",
+                elems.len(), original.len());
+        }
+        return None;
+    }
+
+    let mut result = Vec::with_capacity(original.len());
+    for (orig_val, elem) in original.iter().zip(elems.iter()) {
+        let val = match orig_val {
+            Value::Dict(sub_map) => tuple_to_dict(elem, sub_map)?,
+            Value::List(sub_list) => tuple_to_list(elem, sub_list)?,
+            _ => elem.clone(),
+        };
+        result.push(val);
+    }
+    Some(Value::List(result))
 }
