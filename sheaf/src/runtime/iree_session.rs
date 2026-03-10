@@ -138,10 +138,15 @@ impl IreeSession {
             {
                 use std::sync::atomic::AtomicBool;
                 static PRINTED: AtomicBool = AtomicBool::new(false);
-                if chosen_driver != "local-task"
-                    && !PRINTED.swap(true, Ordering::Relaxed)
-                {
-                    eprintln!("sheaf: using {} device", chosen_driver);
+                if !PRINTED.swap(true, Ordering::Relaxed) {
+                    let display = match chosen_driver {
+                        "local-task" => "CPU",
+                        "metal" => "Metal GPU",
+                        "cuda" => "CUDA GPU",
+                        "vulkan" => "Vulkan GPU",
+                        other => other,
+                    };
+                    eprintln!("sheaf: running on {}", display);
                 }
             }
 

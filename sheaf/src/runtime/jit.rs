@@ -103,9 +103,11 @@ impl JitCompiler {
 
         // Skip impure functions and functions using higher-order calls
         if !collect_effects(body_compiled).is_empty() {
+            self.jit_fail(name, "has effects");
             return None;
         }
         if !collect_hof_calls(body_compiled).is_empty() {
+            self.jit_fail(name, "has HOF calls");
             return None;
         }
 
@@ -114,6 +116,7 @@ impl JitCompiler {
             matches!(a, Value::Tensor { .. } | Value::Dict(_) | Value::Tuple(_))
         });
         if !has_tensor {
+            self.jit_fail(name, "scalar-only args");
             return None;
         }
 
@@ -267,19 +270,19 @@ impl JitCompiler {
         // Emit MLIR module
         let mlir = StableHLOEmitter::emit_module(&[mlir_decl]);
 
-        // Content hash for VMFB cache: hash(MLIR + backend + compiler version)
+        // Content hash for staleness check
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         mlir.hash(&mut hasher);
         target_backend.hash(&mut hasher);
         IREE_COMPILER_VERSION.hash(&mut hasher);
-        let cache_hash = hasher.finish();
+        let content_hash = format!("{:016x}", hasher.finish());
 
         let cache_dir = PathBuf::from("__sheaf__");
-        let cached_vmfb = cache_dir.join(format!("{:016x}.vmfb", cache_hash));
+        let cached_vmfb = cache_dir.join(format!("{}.vmfb", name));
 
-        // Try loading from cache
-        let vmfb_data = if cached_vmfb.exists() {
+        // Check manifest for staleness
+        let vmfb_data = if cached_vmfb.exists() && manifest_hash_matches(&cache_dir, name, &content_hash) {
             match std::fs::read(&cached_vmfb) {
                 Ok(d) => {
                     if self.verbose {
@@ -293,7 +296,9 @@ impl JitCompiler {
                 }
             }
         } else {
-            eprintln!("jit: compiling {}...", name);
+            if self.verbose {
+                eprintln!("jit: compiling {}...", name);
+            }
 
             let tmp_dir = std::env::temp_dir();
             let stamp = std::process::id();
@@ -354,9 +359,10 @@ impl JitCompiler {
             };
             let _ = std::fs::remove_file(&vmfb_path);
 
-            // Cache for next run
+            // Cache: named VMFB + manifest entry
             let _ = std::fs::create_dir_all(&cache_dir);
             let _ = std::fs::write(&cached_vmfb, &data);
+            update_manifest(&cache_dir, name, &content_hash);
 
             data
         };
@@ -405,6 +411,9 @@ impl JitCompiler {
             } => (params, body, closure),
             _ => return None,
         };
+
+        // Derive a human-readable name from the outermost function call
+        let vag_fn_name = outermost_call_name(body).unwrap_or("anonymous".to_string());
 
         // Build a stable key for the blocklist
         let vag_key = format!("__vag_{:?}", body);
@@ -821,18 +830,19 @@ impl JitCompiler {
         // Emit MLIR module
         let mlir = StableHLOEmitter::emit_module(&[mlir_decl]);
 
-        // Content hash for VMFB cache
+        // Content hash for staleness check
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         mlir.hash(&mut hasher);
         backend.hash(&mut hasher);
         IREE_COMPILER_VERSION.hash(&mut hasher);
-        let cache_hash = hasher.finish();
+        let content_hash = format!("{:016x}", hasher.finish());
 
         let cache_dir = PathBuf::from("__sheaf__");
-        let cached_vmfb = cache_dir.join(format!("{:016x}.vmfb", cache_hash));
+        let vag_cache_name = format!("{}-vag", vag_fn_name);
+        let cached_vmfb = cache_dir.join(format!("{}.vmfb", vag_cache_name));
 
-        let vmfb_data = if cached_vmfb.exists() {
+        let vmfb_data = if cached_vmfb.exists() && manifest_hash_matches(&cache_dir, &vag_cache_name, &content_hash) {
             match std::fs::read(&cached_vmfb) {
                 Ok(d) => {
                     if self.verbose {
@@ -846,7 +856,9 @@ impl JitCompiler {
                 }
             }
         } else {
-            eprintln!("jit: compiling value_and_grad...");
+            if self.verbose {
+                eprintln!("jit: compiling value_and_grad...");
+            }
 
             let tmp_dir = std::env::temp_dir();
             let stamp = std::process::id();
@@ -854,7 +866,7 @@ impl JitCompiler {
 
             // Debug: save a copy for inspection
             if self.verbose {
-                let debug_path = std::path::PathBuf::from("__sheaf__/vag-debug.mlir");
+                let debug_path = cache_dir.join(format!("{}-vag-debug.mlir", vag_fn_name));
                 let _ = std::fs::write(&debug_path, &mlir);
             }
             let vmfb_path = tmp_dir.join(format!("sheaf-jit-vag-{}.vmfb", stamp));
@@ -911,6 +923,7 @@ impl JitCompiler {
 
             let _ = std::fs::create_dir_all(&cache_dir);
             let _ = std::fs::write(&cached_vmfb, &data);
+            update_manifest(&cache_dir, &vag_cache_name, &content_hash);
 
             data
         };
@@ -1251,5 +1264,41 @@ fn log_unresolved_shapes(expr: &CompiledExpr, label: &str) {
         CompiledExpr::Do(exprs) => { for e in exprs { log_unresolved_shapes(e, label); } }
         _ => {}
     }
+}
+
+/// Extract the outermost function call name from an expression (for cache naming).
+fn outermost_call_name(expr: &CompiledExpr) -> Option<String> {
+    match expr {
+        CompiledExpr::FunctionCall { name, .. } => Some(name.clone()),
+        CompiledExpr::Let { body, .. } => outermost_call_name(body),
+        CompiledExpr::Do(exprs) => exprs.last().and_then(outermost_call_name),
+        _ => None,
+    }
+}
+
+/// Read the manifest and check if the stored hash matches.
+fn manifest_hash_matches(cache_dir: &std::path::Path, name: &str, expected_hash: &str) -> bool {
+    let manifest_path = cache_dir.join("manifest.json");
+    let data = match std::fs::read_to_string(&manifest_path) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    let manifest: serde_json::Value = match serde_json::from_str(&data) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    manifest.get(name).and_then(|v| v.as_str()) == Some(expected_hash)
+}
+
+/// Update the manifest with a new hash entry.
+fn update_manifest(cache_dir: &std::path::Path, name: &str, hash: &str) {
+    let manifest_path = cache_dir.join("manifest.json");
+    let mut manifest: serde_json::Map<String, serde_json::Value> =
+        std::fs::read_to_string(&manifest_path)
+            .ok()
+            .and_then(|d| serde_json::from_str(&d).ok())
+            .unwrap_or_default();
+    manifest.insert(name.to_string(), serde_json::Value::String(hash.to_string()));
+    let _ = std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap());
 }
 

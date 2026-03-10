@@ -7,16 +7,8 @@
 //!   sheaf                               Launch interactive REPL
 //!   sheaf file.shf                      Interpret a Sheaf file
 //!   sheaf -c '(+ 1 2)'                 Evaluate an expression
-//!   sheaf build                         Compile all pure functions in current directory
-//!   sheaf build dir/                    Compile all pure functions in directory
-//!   sheaf build file.shf               Compile pure functions from a single file
-//!   sheaf build -r                      Recursive directory scan
-//!   sheaf build -o out.vmfb            Override output filename
 
-mod build;
 mod repl;
-mod trace;
-mod transforms;
 
 use std::process::exit;
 
@@ -24,7 +16,6 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     match args.get(1).map(|s| s.as_str()) {
-        Some("build") => build::run_build(&args[2..]),
         Some("init-ai") => run_init_ai(),
 
         Some("-c") => {
@@ -58,36 +49,23 @@ fn print_help() {
 
 Usage:
     sheaf                              Launch interactive REPL
-    sheaf FILE [OPTIONS]               Interpret a Sheaf file
+    sheaf FILE [OPTIONS]               Run a Sheaf file
     sheaf -c EXPR [OPTIONS]            Evaluate an expression
-    sheaf build [DIR|FILE] [OPTIONS]   Compile pure functions to VMFB
-    sheaf init-ai                      Generate sheaf-context.md for AI assistants
+    sheaf init-ai                      Generate context file for AI assistants
 
-Interpreter options:
+Options:
     --trace [FUNCTIONS]    Trace execution (optionally scoped to functions)
-    --blame                Profile execution and print timing report
+    --trace-level LEVEL    Trace verbosity: fast, normal (default), verbose
+    --trace-out FORMAT     Trace output: console (default), json
     --guard SPEC           Runtime guard: [scope:]variable:check (repeatable)
-
-Build options:
-    -o OUTPUT              Output file (default: compiled-functions.vmfb)
-    -r                     Scan directories recursively
-    -S                     Emit MLIR only, do not invoke iree-compile
-    --backend BACKEND      IREE target backend (default: llvm-cpu)
-    -v, --verbose          Verbose output
+    --blame                Profile execution and print timing report
 
 Examples:
     sheaf script.shf
     sheaf -c '(+ 1 2)'
-    sheaf build                             Compile all .shf in current dir
-    sheaf build examples/hydra/             Compile all .shf in directory
-    sheaf build model.shf                   Compile a single file
-    sheaf build -r                          Recursive scan
-    sheaf build -o model.vmfb              Override output name
-    sheaf build model.shf -o model.mlir -S  Emit MLIR only
+    sheaf train.shf --blame
 
-SDK:
-    'sheaf build' without -S requires iree-compile from the Sheaf SDK.
-    Set IREE_COMPILE=/path/to/iree-compile to override the default location.",
+Set SHEAF_JIT_VERBOSE=1 for compilation details.",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -270,10 +248,6 @@ fn parse_guard_spec(spec: &str) -> Result<sheaf_compiler::interpreter::tracer::C
 
 fn run_repl() {
     repl::run();
-}
-
-fn compact_type(mlir: &str) -> &str {
-    if mlir.len() <= 80 { mlir } else { &mlir[..80] }
 }
 
 fn run_init_ai() {
