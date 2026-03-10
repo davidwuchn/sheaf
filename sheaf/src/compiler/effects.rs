@@ -32,7 +32,7 @@ const EFFECTFUL_BUILTINS: &[&str] = &[
 /// Names of higher-order functions that cannot be compiled to StableHLO.
 /// Detected before codegen so the build output shows a clear reason.
 pub const HOF_BUILTINS: &[&str] = &[
-    "map", "filter", "sort", "tree-map",
+    "map", "filter", "sort",
     "value-and-grad", "grad", "jit",
 ];
 
