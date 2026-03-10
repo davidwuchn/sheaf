@@ -217,6 +217,12 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                 .map(|c| Value::String(c.to_string()))
                 .ok_or_else(|| runtime_error("get: string index out of bounds"))
         }
+        Value::DeviceBuffer(_) => {
+            // Materialize and retry as host tensor
+            let mut host_args = args.to_vec();
+            host_args[0] = args[0].ensure_host()?;
+            builtin_get(&host_args, kw)
+        }
         _ => Err(runtime_error(format!("get: expected dict/tensor/list, got {} (key: {})", args[0].type_name(), args.get(1).map(|v| format!("{}", v)).unwrap_or_default()))),
     }
 }

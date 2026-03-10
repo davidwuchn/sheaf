@@ -1778,6 +1778,12 @@ fn unpack_vag_result(result: &Value, original_params: &Value) -> Option<Value> {
         Value::Tensor { data, .. } if data.len() == 1 => {
             Value::Float(*data.iter().next().unwrap())
         }
+        Value::DeviceBuffer(db) if db.shape.is_empty() || db.shape.iter().product::<usize>() == 1 => {
+            match db.to_host() {
+                Ok(data) => Value::Float(*data.iter().next().unwrap_or(&0.0)),
+                Err(_) => return None,
+            }
+        }
         Value::Float(f) => Value::Float(*f),
         _ => return None,
     };

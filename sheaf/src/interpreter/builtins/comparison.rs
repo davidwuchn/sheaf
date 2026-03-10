@@ -117,6 +117,15 @@ fn builtin_shape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 Ok(Value::tensor_f32(ArrayD::from_shape_vec(IxDyn(&[shape.len()]), shape).unwrap()))
             }
         }
+        Value::DeviceBuffer(db) => {
+            if args.len() >= 2 {
+                let axis = resolve_idx(args[1].to_f64().unwrap(), db.shape.len());
+                Ok(Value::Int(db.shape[axis] as i64))
+            } else {
+                let shape: Vec<f64> = db.shape.iter().map(|&s| s as f64).collect();
+                Ok(Value::tensor_f32(ArrayD::from_shape_vec(IxDyn(&[shape.len()]), shape).unwrap()))
+            }
+        }
         Value::List(items) => Ok(Value::Int(items.len() as i64)),
         _ => Err(runtime_error(format!("shape: expected tensor, got {}", args[0].type_name()))),
     }
@@ -126,6 +135,7 @@ fn builtin_ndim(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 1 { return Err(runtime_error("ndim requires 1 argument")); }
     match &args[0] {
         Value::Tensor { data, .. } => Ok(Value::Int(data.ndim() as i64)),
+        Value::DeviceBuffer(db) => Ok(Value::Int(db.shape.len() as i64)),
         _ => Err(runtime_error(format!("ndim: expected tensor, got {}", args[0].type_name()))),
     }
 }
@@ -134,6 +144,7 @@ fn builtin_len(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 1 { return Err(runtime_error("len requires 1 argument")); }
     match &args[0] {
         Value::Tensor { data, .. } => Ok(Value::Int(data.shape()[0] as i64)),
+        Value::DeviceBuffer(db) => Ok(Value::Int(db.shape.first().copied().unwrap_or(1) as i64)),
         Value::List(items) => Ok(Value::Int(items.len() as i64)),
         Value::Dict(map) => Ok(Value::Int(map.len() as i64)),
         Value::String(s) => Ok(Value::Int(s.len() as i64)),

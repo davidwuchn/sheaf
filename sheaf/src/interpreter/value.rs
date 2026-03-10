@@ -4,6 +4,8 @@
 //! Runtime values for the Sheaf interpreter.
 
 use crate::core::compiler::CompiledExpr;
+use crate::core::error::SheafError;
+use crate::runtime::iree_session::DeviceBufferInner;
 use ndarray::{ArrayD, IxDyn};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -41,6 +43,8 @@ pub enum Value {
         name: String,
         func: BuiltinFnPtr,
     },
+    /// Tensor data living on IREE device. Materializes to host lazily.
+    DeviceBuffer(Arc<DeviceBufferInner>),
 }
 
 impl Value {
@@ -59,6 +63,9 @@ impl Value {
             Value::Int(n) => Some(*n as f64),
             Value::Float(f) => Some(*f),
             Value::Tensor { data, .. } if data.ndim() == 0 => data.first().copied(),
+            Value::DeviceBuffer(db) if db.shape.is_empty() => {
+                db.to_host().ok().and_then(|a| a.first().copied())
+            }
             _ => None,
         }
     }
@@ -68,6 +75,27 @@ impl Value {
             Value::Int(n) => Some(ArrayD::from_elem(vec![], *n as f64)),
             Value::Float(f) => Some(ArrayD::from_elem(vec![], *f)),
             Value::Tensor { data, .. } => Some((**data).clone()),
+            Value::DeviceBuffer(db) => db.to_host().ok(),
+            _ => None,
+        }
+    }
+
+    /// Materialize a DeviceBuffer to a host Tensor, or return self if already host.
+    pub fn ensure_host(&self) -> Result<Value, SheafError> {
+        match self {
+            Value::DeviceBuffer(db) => {
+                let data = db.to_host()?;
+                Ok(Value::Tensor { data: Arc::new(data), dtype: db.dtype })
+            }
+            other => Ok(other.clone()),
+        }
+    }
+
+    /// Shape accessor that works for both Tensor and DeviceBuffer.
+    pub fn tensor_shape(&self) -> Option<&[usize]> {
+        match self {
+            Value::Tensor { data, .. } => Some(data.shape()),
+            Value::DeviceBuffer(db) => Some(&db.shape),
             _ => None,
         }
     }
@@ -94,6 +122,7 @@ impl Value {
             Value::Dict(_) => "dict",
             Value::Function { .. } => "function",
             Value::BuiltinFn { .. } => "builtin",
+            Value::DeviceBuffer(_) => "tensor",
         }
     }
 }
@@ -113,6 +142,9 @@ impl fmt::Debug for Value {
             Value::Dict(map) => write!(f, "Dict({:?})", map),
             Value::Function { params, .. } => write!(f, "Function({:?})", params),
             Value::BuiltinFn { name, .. } => write!(f, "BuiltinFn({})", name),
+            Value::DeviceBuffer(db) => {
+                write!(f, "DeviceBuffer({:?}, {:?})", db.shape, db.dtype)
+            }
         }
     }
 }
@@ -227,6 +259,17 @@ impl fmt::Display for Value {
             }
             Value::Function { .. } => write!(f, "<function>"),
             Value::BuiltinFn { name, .. } => write!(f, "<builtin:{}>", name),
+            Value::DeviceBuffer(db) => {
+                match db.to_host() {
+                    Ok(data) => {
+                        write!(f, "{}", format_tensor_nd(&data, db.dtype))
+                    }
+                    Err(_) => {
+                        let dims: Vec<String> = db.shape.iter().map(|d| d.to_string()).collect();
+                        write!(f, "<tensor {:?} [{}] on device>", db.dtype, dims.join("x"))
+                    }
+                }
+            }
         }
     }
 }

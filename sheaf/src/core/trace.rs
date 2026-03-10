@@ -226,6 +226,14 @@ pub fn value_to_stablehlo_type(val: &Value) -> SheafResult<StableHLOType> {
                 Ok(StableHLOType::Tuple(tys?))
             }
         }
+        Value::DeviceBuffer(db) => {
+            let shape: Vec<i64> = db.shape.iter().map(|&d| d as i64).collect();
+            if shape.is_empty() {
+                Ok(StableHLOType::scalar_f32())
+            } else {
+                Ok(StableHLOType::f32_tensor(shape))
+            }
+        }
         Value::Nil => Ok(StableHLOType::scalar_f32()),
         _ => Err(SheafError::Runtime {
             message: format!(
@@ -353,6 +361,7 @@ fn collect_layout_fields(
 fn extract_shape(val: &Value) -> Option<Vec<i64>> {
     match val {
         Value::Tensor { data, .. } => Some(data.shape().iter().map(|&d| d as i64).collect()),
+        Value::DeviceBuffer(db) => Some(db.shape.iter().map(|&d| d as i64).collect()),
         Value::Float(_) | Value::Int(_) | Value::Bool(_) => Some(vec![]),
         _ => None,
     }

@@ -55,6 +55,10 @@ pub(self) fn to_array(val: &Value) -> Result<(ArrayD<f64>, Dtype), crate::core::
         Value::Float(f) => Ok((ArrayD::from_elem(IxDyn(&[]), *f), Dtype::F32)),
         Value::Bool(b) => Ok((ArrayD::from_elem(IxDyn(&[]), if *b { 1.0 } else { 0.0 }), Dtype::I32)),
         Value::Tensor { data, dtype } => Ok(((**data).clone(), *dtype)),
+        Value::DeviceBuffer(db) => {
+            let data = db.to_host().map_err(|e| runtime_error(format!("materialize: {}", e)))?;
+            Ok((data, db.dtype))
+        }
         _ => Err(runtime_error(format!("Expected numeric value, got {} ({})", val.type_name(), val))),
     }
 }
@@ -160,6 +164,12 @@ pub(self) fn binary_op(args: &[Value], op: fn(f64, f64) -> f64) -> R {
 /// Zero-clone fast path for binary ops with exactly 2 arguments.
 /// Borrows tensor data directly from Arc instead of cloning.
 fn binary_op_two(a: &Value, b: &Value, op: fn(f64, f64) -> f64) -> R {
+    // Materialize DeviceBuffers to host for arithmetic
+    let a_host;
+    let b_host;
+    let a = if matches!(a, Value::DeviceBuffer(_)) { a_host = a.ensure_host()?; &a_host } else { a };
+    let b = if matches!(b, Value::DeviceBuffer(_)) { b_host = b.ensure_host()?; &b_host } else { b };
+
     let a_scalar = scalar_of(a);
     let b_scalar = scalar_of(b);
     let any_tensor = matches!(a, Value::Tensor { .. }) || matches!(b, Value::Tensor { .. });

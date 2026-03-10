@@ -249,5 +249,18 @@ fn format_value(val: &Value, level: TraceLevel) -> String {
         Value::Function { params, .. } => format!("fn/{}", params.len()),
         Value::BuiltinFn { name, .. } => format!("<builtin:{}>", name),
         Value::Keyword(k) => format!(":{}", k),
+        Value::DeviceBuffer(db) => {
+            let shape_str = db.shape.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("x");
+            let n_elems: usize = db.shape.iter().product::<usize>().max(1);
+            let bytes = n_elems * 4; // f32
+            let mem = if bytes < 1024 {
+                format!("{}B", bytes)
+            } else if bytes < 1024 * 1024 {
+                format!("{:.1}KB", bytes as f64 / 1024.0)
+            } else {
+                format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+            };
+            format!("f32[{}] ({}, device)", shape_str, mem)
+        }
     }
 }
