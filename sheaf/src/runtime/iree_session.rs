@@ -819,7 +819,16 @@ pub fn count_arg_tensors(values: &[Value]) -> usize {
 fn count_one_value(val: &Value) -> usize {
     match val {
         Value::Dict(map) => map.values().map(count_one_value).sum(),
-        Value::Tuple(elems) | Value::List(elems) => elems.iter().map(count_one_value).sum(),
+        Value::Tuple(elems) => elems.iter().map(count_one_value).sum(),
+        // List of all scalars → single tensor f32[N] (matches value_to_stablehlo_type)
+        Value::List(elems)
+            if elems
+                .iter()
+                .all(|v| matches!(v, Value::Float(_) | Value::Int(_))) =>
+        {
+            1
+        }
+        Value::List(elems) => elems.iter().map(count_one_value).sum(),
         Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::Bool(_)
         | Value::DeviceBuffer(_) => 1,
         _ => 0,
