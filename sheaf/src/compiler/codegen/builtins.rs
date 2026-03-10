@@ -388,6 +388,127 @@ impl CodeGenerator {
                 })
             }
         }
+        // sum_to_shape: (sum_to_shape x [M N]) — reduce x by summing over
+        // broadcast dimensions until its shape matches [M N].
+        // Used by autodiff to undo implicit broadcasting in +, -, *, /.
+        else if name == "sum_to_shape" && args.len() == 2 {
+            let (mut reg, mut ty) = self.generate(&args[0])?;
+            if let CompiledExpr::Vector(shape_elems) = &args[1] {
+                let target_shape = Self::parse_shape_vec(shape_elems)?;
+                let from_shape = ty.shape().to_vec();
+
+                if from_shape == target_shape {
+                    // Already matching — no-op
+                    return Ok((reg, ty));
+                }
+
+                // 1. Sum over leading extra dimensions
+                // e.g. from [4,256,384] target [256,384] → sum axis 0
+                let extra = from_shape.len().saturating_sub(target_shape.len());
+                for _ in 0..extra {
+                    let (r, t) = self.emitter.emit_reduce_sum(&reg, &ty, 0, false);
+                    reg = r;
+                    ty = t;
+                }
+
+                // 2. Sum over dims where target is 1 but current is > 1
+                // e.g. from [4,256,384] target [1,256,384] → sum axis 0 keepdims
+                let cur_shape = ty.shape().to_vec();
+                for (i, (&cur_d, &tgt_d)) in
+                    cur_shape.iter().zip(target_shape.iter()).enumerate().rev()
+                {
+                    if tgt_d == 1 && cur_d > 1 {
+                        let (r, t) =
+                            self.emitter.emit_reduce_sum(&reg, &ty, i as i64, true);
+                        reg = r;
+                        ty = t;
+                    }
+                }
+
+                Ok((reg, ty))
+            } else {
+                Err(SheafError::Compile {
+                    message: "sum_to_shape expects a vector shape argument".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })
+            }
+        }
+        // slice_grad: (slice_grad adj [target_shape] start) — pad adj with zeros
+        // to restore the original tensor shape before slicing.
+        // The slice operates on axis 0 by default.
+        else if name == "slice_grad" && args.len() == 3 {
+            let (adj_reg, adj_ty) = self.generate(&args[0])?;
+            if let (CompiledExpr::Vector(shape_elems), CompiledExpr::Integer(start)) =
+                (&args[1], &args[2])
+            {
+                let target_shape = Self::parse_shape_vec(shape_elems)?;
+                let adj_shape = adj_ty.shape().to_vec();
+
+                // Determine which axis was sliced: find the first axis where
+                // target_shape[i] != adj_shape[i]
+                let axis = adj_shape
+                    .iter()
+                    .zip(target_shape.iter())
+                    .position(|(a, t)| a != t)
+                    .unwrap_or(0);
+
+                let start_val = *start;
+                let end_val = start_val + adj_shape[axis];
+                let total = target_shape[axis];
+                let pad_low = start_val;
+                let pad_high = total - end_val;
+
+                // Use stablehlo.pad
+                let zero_reg = self.emitter.emit_constant_f32(0.0);
+                let result_ty = StableHLOType::f32_tensor(target_shape);
+                let result_reg = self.emitter.fresh_register();
+
+                // Build pad config: edge_padding_low, edge_padding_high, interior_padding
+                let ndim = adj_shape.len();
+                let low: Vec<String> = (0..ndim)
+                    .map(|i| if i == axis { pad_low.to_string() } else { "0".to_string() })
+                    .collect();
+                let high: Vec<String> = (0..ndim)
+                    .map(|i| if i == axis { pad_high.to_string() } else { "0".to_string() })
+                    .collect();
+                let interior: Vec<String> = vec!["0".to_string(); ndim];
+
+                self.emitter.body.push(format!(
+                    "    {} = stablehlo.pad {}, {}, low = [{}], high = [{}], interior = [{}] : ({}, {}) -> {}",
+                    result_reg.to_mlir(),
+                    adj_reg.to_mlir(),
+                    zero_reg.to_mlir(),
+                    low.join(", "),
+                    high.join(", "),
+                    interior.join(", "),
+                    adj_ty.to_mlir(),
+                    StableHLOType::scalar_f32().to_mlir(),
+                    result_ty.to_mlir(),
+                ));
+
+                Ok((result_reg, result_ty))
+            } else {
+                Err(SheafError::Compile {
+                    message: "slice_grad expects (adj, [shape], start)".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })
+            }
+        }
+        // broadcast: (broadcast x [M N]) — broadcast x to target shape
+        else if name == "broadcast" && args.len() == 2 {
+            let (operand_reg, operand_ty) = self.generate(&args[0])?;
+            if let CompiledExpr::Vector(shape_elems) = &args[1] {
+                let target_shape = Self::parse_shape_vec(shape_elems)?;
+                let target_ty = StableHLOType::f32_tensor(target_shape);
+                let reg = self.emitter.emit_broadcast(&operand_reg, &operand_ty, &target_ty);
+                Ok((reg, target_ty))
+            } else {
+                Err(SheafError::Compile {
+                    message: "broadcast expects a vector shape argument".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })
+            }
+        }
         // random-normal: (random-normal key [M N])
         else if name == "random-normal" && args.len() == 2 {
             if let CompiledExpr::Vector(shape_elems) = &args[1] {
@@ -451,7 +572,15 @@ impl CodeGenerator {
         else if name == "reshape" && args.len() == 2 {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             if let CompiledExpr::Vector(shape_elems) = &args[1] {
-                let new_shape = Self::parse_shape_vec(shape_elems)?;
+                let mut new_shape = Self::parse_shape_vec(shape_elems)?;
+                // Resolve -1 dimensions: infer from input total size
+                if let Some(neg_idx) = new_shape.iter().position(|&d| d < 0) {
+                    let input_size: i64 = operand_ty.shape().iter().product();
+                    let known_size: i64 = new_shape.iter().filter(|&&d| d > 0).product();
+                    if known_size > 0 {
+                        new_shape[neg_idx] = input_size / known_size;
+                    }
+                }
                 let (reg, ty) = tensor_ops::emit_reshape(
                     &mut self.emitter,
                     &operand_reg,
