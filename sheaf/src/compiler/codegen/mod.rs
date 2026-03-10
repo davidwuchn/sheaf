@@ -37,6 +37,12 @@ pub struct CodeGenerator {
     /// Tracks which layout key a register corresponds to, enabling
     /// `(get (get x :k1) :k2)` where the outer get's operand is not a Symbol.
     layout_key_map: HashMap<Register, String>,
+    /// Scalar constants extracted from runtime values (e.g. config.n_embd = 384).
+    /// Used by `generate_inline_value_and_grad` to resolve `(static (get config :key))`
+    /// in inlined function bodies.
+    scalar_constants: HashMap<(String, Vec<usize>), f64>,
+    /// Full param index maps for dict-to-tuple lowering of inlined function bodies.
+    param_index_maps: Vec<(String, std::collections::BTreeMap<Vec<String>, Vec<usize>>)>,
 }
 
 impl CodeGenerator {
@@ -49,6 +55,8 @@ impl CodeGenerator {
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
+            scalar_constants: HashMap::new(),
+            param_index_maps: Vec::new(),
         }
     }
 
@@ -61,6 +69,8 @@ impl CodeGenerator {
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
+            scalar_constants: HashMap::new(),
+            param_index_maps: Vec::new(),
         }
     }
 
@@ -83,6 +93,8 @@ impl CodeGenerator {
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
+            scalar_constants: HashMap::new(),
+            param_index_maps: Vec::new(),
         }
     }
 
@@ -97,6 +109,14 @@ impl CodeGenerator {
 
     pub fn set_idx_to_key(&mut self, map: HashMap<(String, usize), String>) {
         self.idx_to_key = map;
+    }
+
+    pub fn set_scalar_constants(&mut self, constants: HashMap<(String, Vec<usize>), f64>) {
+        self.scalar_constants = constants;
+    }
+
+    pub fn set_param_index_maps(&mut self, maps: Vec<(String, std::collections::BTreeMap<Vec<String>, Vec<usize>>)>) {
+        self.param_index_maps = maps;
     }
 
     /// Bind a symbol name to an SSA register (for use by external codegen paths).

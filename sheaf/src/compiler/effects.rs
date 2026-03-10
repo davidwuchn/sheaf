@@ -33,7 +33,7 @@ const EFFECTFUL_BUILTINS: &[&str] = &[
 /// Detected before codegen so the build output shows a clear reason.
 pub const HOF_BUILTINS: &[&str] = &[
     "map", "filter", "sort",
-    "value-and-grad", "grad", "jit",
+    "grad", "jit",
 ];
 
 /// A single side-effect site found in a function body.
@@ -98,8 +98,8 @@ fn collect_hof_rec(expr: &CompiledExpr, out: &mut Vec<String>) {
             collect_hof_rec(acc_init, out);
             collect_hof_rec(body, out);
         }
-        // value-and-grad and inline forms are always higher-order
-        CompiledExpr::ValueAndGrad { .. } | CompiledExpr::InlineValueAndGrad { .. } => {
+        // ValueAndGrad (deferred form) is higher-order; InlineValueAndGrad is compilable
+        CompiledExpr::ValueAndGrad { .. } => {
             out.push("value-and-grad".to_string());
         }
         _ => {}

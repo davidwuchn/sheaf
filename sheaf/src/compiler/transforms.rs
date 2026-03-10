@@ -551,6 +551,34 @@ fn try_infer_shape(
                     None
                 }
             }
+            // get: tensor indexing — (get tensor idx)
+            // tensor[idx] -> idx.shape + tensor.shape[1:]
+            "get" if args.len() == 2 => {
+                let tensor_shape = try_infer_shape(&args[0], shapes)?;
+                if tensor_shape.is_empty() { return None; }
+                let trailing = &tensor_shape[1..];
+                match try_infer_shape(&args[1], shapes) {
+                    Some(idx_shape) => {
+                        let mut out = idx_shape;
+                        out.extend_from_slice(trailing);
+                        Some(out)
+                    }
+                    None => Some(trailing.to_vec()), // scalar index
+                }
+            }
+            // slice: (slice tensor start end) — axis 0
+            "slice" if args.len() == 3 => {
+                let tensor_shape = try_infer_shape(&args[0], shapes)?;
+                if tensor_shape.is_empty() { return None; }
+                if let (CompiledExpr::Integer(start), CompiledExpr::Integer(end)) = (&args[1], &args[2]) {
+                    let dim0 = end - start;
+                    let mut out = vec![dim0];
+                    out.extend_from_slice(&tensor_shape[1..]);
+                    Some(out)
+                } else {
+                    None
+                }
+            }
             _ => None,
         },
         CompiledExpr::GetTupleElement { param, indices } => {

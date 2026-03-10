@@ -1387,6 +1387,76 @@ impl CodeGenerator {
         else if name == "static" && args.len() == 1 {
             self.generate(&args[0])
         }
+        // assoc: (assoc tuple :k1 v1 :k2 v2 ...) — create new tuple with replaced elements
+        else if name == "assoc" && args.len() >= 3 && args.len() % 2 == 1 {
+            let sym_name = if let CompiledExpr::Symbol(s) = &args[0] { Some(s.clone()) } else { None };
+            let (base_reg, base_ty) = self.generate(&args[0])?;
+            let elems = match &base_ty {
+                StableHLOType::Tuple(e) => e.clone(),
+                _ => {
+                    return Err(SheafError::Compile {
+                        message: "assoc: base must be a tuple".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })
+                }
+            };
+            let layout_key = sym_name.or_else(|| self.layout_key_map.get(&base_reg).cloned());
+            let layout = layout_key
+                .as_ref()
+                .and_then(|k| self.tuple_key_layouts.get(k).cloned());
+            let layout = match layout {
+                Some(l) => l,
+                None => {
+                    return Err(SheafError::Compile {
+                        message: "assoc: no layout for tuple".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })
+                }
+            };
+            // Collect replacement values by tuple index
+            let mut replacements: std::collections::HashMap<usize, (Register, StableHLOType)> =
+                std::collections::HashMap::new();
+            let mut i = 1;
+            while i + 1 < args.len() {
+                let key_name = match &args[i] {
+                    CompiledExpr::Keyword(k) | CompiledExpr::String(k) => k.clone(),
+                    _ => {
+                        return Err(SheafError::Compile {
+                            message: format!("assoc: expected keyword key, got {:?}", args[i]),
+                            location: crate::core::error::SourceLocation::unknown(),
+                        })
+                    }
+                };
+                let idx = match layout.get(&key_name) {
+                    Some(&idx) => idx,
+                    None => {
+                        return Err(SheafError::Compile {
+                            message: format!("assoc: unknown key {:?}", key_name),
+                            location: crate::core::error::SourceLocation::unknown(),
+                        })
+                    }
+                };
+                let (val_reg, val_ty) = self.generate(&args[i + 1])?;
+                replacements.insert(idx, (val_reg, val_ty));
+                i += 2;
+            }
+            // Build new tuple: use replacement or extract from original
+            let mut new_regs = Vec::new();
+            let mut new_tys = Vec::new();
+            for (j, elem_ty) in elems.iter().enumerate() {
+                if let Some((r, t)) = replacements.get(&j) {
+                    new_regs.push(*r);
+                    new_tys.push(t.clone());
+                } else {
+                    let r = self.emitter.emit_get_tuple_element(
+                        &base_reg, &base_ty, j, elem_ty,
+                    );
+                    new_regs.push(r);
+                    new_tys.push(elem_ty.clone());
+                }
+            }
+            Ok(self.emitter.emit_tuple(&new_regs, &new_tys))
+        }
         else {
             Err(SheafError::Compile {
                 message: format!("Function call not yet supported: {} (arity {})", name, args.len()),

@@ -263,6 +263,8 @@ impl JitCompiler {
             let return_type = sig.return_type.clone();
             let body_clone = body.clone();
             let name_clone = name.clone();
+            let constants_clone = constants.clone();
+            let param_index_maps_clone = param_index_maps.clone();
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 let mut codegen = CodeGenerator::with_function_params(
                     registry_clone,
@@ -271,6 +273,8 @@ impl JitCompiler {
                 );
                 codegen.set_tuple_key_layouts(tuple_key_layouts);
                 codegen.set_idx_to_key(idx_to_key);
+                codegen.set_scalar_constants(constants_clone);
+                codegen.set_param_index_maps(param_index_maps_clone);
                 codegen.emit_func_declaration(&name_clone, &body_clone, &param_types, &return_type)
             }))
         };
@@ -288,6 +292,21 @@ impl JitCompiler {
         };
 
         sig.return_type = actual_return_ty;
+
+        // Register layout for return type (may differ from param type due to
+        // scalar promotion, e.g. ScalarI64→scalar_f32 after adam-step)
+        if let StableHLOType::Tuple(ret_elems) = &sig.return_type {
+            if !sig.arg_type_layouts.iter().any(|(t, _)| t == &sig.return_type) {
+                for (t, layout) in sig.arg_type_layouts.clone() {
+                    if let StableHLOType::Tuple(param_elems) = &t {
+                        if param_elems.len() == ret_elems.len() {
+                            sig.arg_type_layouts.push((sig.return_type.clone(), layout));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
 
         // Emit MLIR module
         let mlir = StableHLOEmitter::emit_module(&[mlir_decl]);
