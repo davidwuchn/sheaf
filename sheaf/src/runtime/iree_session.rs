@@ -150,7 +150,7 @@ pub struct IreeSession {
     /// Each position holds up to MAX_CACHE_ENTRIES entries to avoid thrashing when
     /// the same function is called with different weight sets (e.g. transformer layers).
     buffer_cache: Mutex<HashMap<String, Vec<Vec<CachedBufferView>>>>,
-    /// Dispatch timing (nanoseconds, accumulated). Enabled by SHEAF_PROFILE_IREE=1.
+    /// Dispatch timing (nanoseconds, accumulated). Enabled by SHEAF_JIT_PROFILE=1.
     profile: bool,
     t_flatten_ns: AtomicU64,
     t_buffers_ns: AtomicU64,
@@ -220,7 +220,9 @@ impl IreeSession {
             {
                 use std::sync::atomic::AtomicBool;
                 static PRINTED: AtomicBool = AtomicBool::new(false);
-                if !PRINTED.swap(true, Ordering::Relaxed) {
+                if std::env::var("SHEAF_JIT_VERBOSE").is_ok()
+                    && !PRINTED.swap(true, Ordering::Relaxed)
+                {
                     let display = match chosen_driver {
                         "local-task" => "CPU",
                         "metal" => "Metal GPU",
@@ -261,7 +263,7 @@ impl IreeSession {
                 _vmfb_data: None,
                 driver_name: chosen_driver.to_string(),
                 buffer_cache: Mutex::new(HashMap::new()),
-                profile: std::env::var("SHEAF_PROFILE_IREE").is_ok(),
+                profile: std::env::var("SHEAF_JIT_PROFILE").is_ok(),
                 t_flatten_ns: AtomicU64::new(0),
                 t_buffers_ns: AtomicU64::new(0),
                 t_call_ns: AtomicU64::new(0),
