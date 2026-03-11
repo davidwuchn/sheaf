@@ -665,22 +665,14 @@ unsafe fn value_to_buffer_view(
                 let shape: Vec<iree_hal_dim_t> =
                     data.shape().iter().map(|&d| d as iree_hal_dim_t).collect();
 
-                let (element_type, byte_data) = match dtype {
-                    Dtype::F32 => {
-                        let f32_data: Vec<f32> = data.iter().map(|&x| x as f32).collect();
-                        let bytes: Vec<u8> = f32_data
-                            .iter()
-                            .flat_map(|f| f.to_ne_bytes())
-                            .collect();
-                        (IREE_HAL_ELEMENT_TYPE_FLOAT_32, bytes)
-                    }
-                    _ => {
-                        return Err(iree_err(&format!(
-                            "unsupported dtype {:?} for IREE buffer",
-                            dtype
-                        )));
-                    }
-                };
+                // All StableHLO codegen emits f32 — cast I32 tensors (indices, tokens)
+                // to f32 at the IREE boundary.
+                let f32_data: Vec<f32> = data.iter().map(|&x| x as f32).collect();
+                let byte_data: Vec<u8> = f32_data
+                    .iter()
+                    .flat_map(|f| f.to_ne_bytes())
+                    .collect();
+                let element_type = IREE_HAL_ELEMENT_TYPE_FLOAT_32;
 
                 let params = iree_hal_buffer_params_t {
                     usage: 3 | 3072,   // TRANSFER | DISPATCH_STORAGE
@@ -756,43 +748,50 @@ unsafe fn buffer_view_to_value(
             .map(|i| iree_hal_buffer_view_shape_dim(bv, i) as usize)
             .collect();
         let elem_type = iree_hal_buffer_view_element_type(bv);
+        let n_elems: usize = shape.iter().product::<usize>().max(1);
+        let byte_len = n_elems * 4; // both f32 and i32 are 4 bytes
 
-        if elem_type != IREE_HAL_ELEMENT_TYPE_FLOAT_32 {
+        let buf = iree_hal_buffer_view_buffer(bv);
+
+        let (f64_data, dtype) = if elem_type == IREE_HAL_ELEMENT_TYPE_FLOAT_32 {
+            let mut f32_buf: Vec<f32> = vec![0.0; n_elems];
+            let status = iree_hal_device_transfer_d2h(
+                device, buf, 0,
+                f32_buf.as_mut_ptr() as *mut c_void,
+                byte_len as u64, 0, iree_timeout_t::infinite(),
+            );
+            if !iree_status_is_ok(status) {
+                unsafe extern "C" { static __stderrp: *mut std::ffi::c_void; }
+                unsafe { iree_status_fprint(__stderrp, status); }
+                return Err(iree_err("failed to read IREE buffer data"));
+            }
+            (f32_buf.iter().map(|&x| x as f64).collect::<Vec<f64>>(), Dtype::F32)
+        } else if elem_type == IREE_HAL_ELEMENT_TYPE_INT_32 {
+            let mut i32_buf: Vec<i32> = vec![0; n_elems];
+            let status = iree_hal_device_transfer_d2h(
+                device, buf, 0,
+                i32_buf.as_mut_ptr() as *mut c_void,
+                byte_len as u64, 0, iree_timeout_t::infinite(),
+            );
+            if !iree_status_is_ok(status) {
+                unsafe extern "C" { static __stderrp: *mut std::ffi::c_void; }
+                unsafe { iree_status_fprint(__stderrp, status); }
+                return Err(iree_err("failed to read IREE buffer data"));
+            }
+            (i32_buf.iter().map(|&x| x as f64).collect::<Vec<f64>>(), Dtype::I32)
+        } else {
             return Err(iree_err(&format!(
                 "unsupported IREE element type: 0x{:08x}",
                 elem_type
             )));
-        }
+        };
 
-        let n_elems: usize = shape.iter().product::<usize>().max(1);
-        let byte_len = n_elems * 4;
-        let mut f32_buf: Vec<f32> = vec![0.0; n_elems];
-
-        let buf = iree_hal_buffer_view_buffer(bv);
-        // Use device_transfer_d2h which works for both CPU and GPU buffers.
-        // iree_hal_buffer_map_read only works for HOST_VISIBLE buffers.
-        let status = iree_hal_device_transfer_d2h(
-            device,
-            buf,
-            0,
-            f32_buf.as_mut_ptr() as *mut c_void,
-            byte_len as u64,
-            0, // flags
-            iree_timeout_t::infinite(),
-        );
-        if !iree_status_is_ok(status) {
-            unsafe extern "C" { static __stderrp: *mut std::ffi::c_void; }
-            unsafe { iree_status_fprint(__stderrp, status); }
-            return Err(iree_err("failed to read IREE buffer data"));
-        }
-
-        let f64_data: Vec<f64> = f32_buf.iter().map(|&x| x as f64).collect();
         let data = ArrayD::from_shape_vec(shape, f64_data)
             .map_err(|e| iree_err(&format!("shape mismatch: {}", e)))?;
 
         Ok(Value::Tensor {
             data: Arc::new(data),
-            dtype: Dtype::F32,
+            dtype,
         })
     }
 }

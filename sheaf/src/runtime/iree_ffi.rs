@@ -30,6 +30,7 @@ impl iree_timeout_t {
 }
 
 pub const IREE_HAL_ELEMENT_TYPE_FLOAT_32: u32 = (0x21 << 24) | 32;
+pub const IREE_HAL_ELEMENT_TYPE_INT_32: u32 = (0x11 << 24) | 32;
 pub const IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR: u32 = 1;
 pub const IREE_HAL_QUEUE_AFFINITY_ANY: u64 = u64::MAX;
 
