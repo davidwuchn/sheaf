@@ -1276,7 +1276,8 @@ fn perturb_leaf_inner(val: &Value, leaf_idx: usize, delta: f64, counter: &mut us
 }
 
 fn scalar_from_value(val: &Value) -> Result<f64, SheafError> {
-    match val {
+    let val = val.ensure_host()?;
+    match &val {
         Value::Float(x) => Ok(*x),
         Value::Int(n) => Ok(*n as f64),
         Value::Tensor { data, .. } => data.first().copied()
