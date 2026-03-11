@@ -61,13 +61,16 @@ pub fn emit_boolean_binop(
     emitter.emit_bool_binop(op, lhs, rhs, lhs_ty, rhs_ty)
 }
 
-/// Emit boolean unary operation: not
+/// Emit boolean NOT: 1.0 - x (operand is f32 0.0/1.0)
 pub fn emit_not(
     emitter: &mut StableHLOEmitter,
     operand: &Register,
     ty: &StableHLOType,
 ) -> Register {
-    emitter.emit_unary("not", operand, ty)
+    let one = emitter.emit_constant_f32(1.0);
+    let one_ty = StableHLOType::ScalarF32;
+    let (reg, _) = emitter.emit_binop("-", &one, operand, &one_ty, ty);
+    reg
 }
 
 /// Emit math unary operations: sqrt, exp, log, abs

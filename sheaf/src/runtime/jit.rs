@@ -80,8 +80,11 @@ impl JitCompiler {
             }
             Err(_) => {}
         }
-        // Try creating a Metal/CUDA session to see what's available.
-        // If IreeSession::new() succeeds, use its detected backend.
+        // Use cached backend from the first IreeSession::new() call
+        if let Some(backend) = crate::runtime::iree_session::IreeSession::cached_target_backend() {
+            return backend.to_string();
+        }
+        // Fallback: create a session to probe available drivers
         if let Ok(session) = crate::runtime::iree_session::IreeSession::new() {
             return session.target_backend().to_string();
         }
@@ -152,11 +155,6 @@ impl JitCompiler {
                     return None;
                 }
             };
-            // Promote scalar integers to f32 — the codegen emits all literals as f32
-            if matches!(ty, StableHLOType::ScalarI64) {
-                ty = StableHLOType::scalar_f32();
-            }
-
             if let Some(layout) = value_to_param_layout(param_name, arg_val) {
                 let imap = layout_to_index_map(&layout);
                 extract_scalar_constants(arg_val, param_name, &imap, &mut constants);
