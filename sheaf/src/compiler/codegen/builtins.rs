@@ -1400,7 +1400,7 @@ impl CodeGenerator {
                     })
                 }
             };
-            let layout_key = sym_name.or_else(|| self.layout_key_map.get(&base_reg).cloned());
+            let layout_key = sym_name.clone().or_else(|| self.layout_key_map.get(&base_reg).cloned());
             let layout = layout_key
                 .as_ref()
                 .and_then(|k| self.tuple_key_layouts.get(k).cloned());

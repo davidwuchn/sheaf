@@ -17,6 +17,26 @@ pub(crate) use helpers::{TupleLeaf, collect_tuple_leaves, expand_tuple_to_symbol
 use helpers::try_flatten_to_constant;
 use std::collections::HashMap;
 
+/// Recursively flatten tuple types into leaf tensor types.
+pub fn flatten_param_types(param_types: &[StableHLOType]) -> Vec<StableHLOType> {
+    let mut flat = Vec::new();
+    for ty in param_types {
+        flatten_type(ty, &mut flat);
+    }
+    flat
+}
+
+fn flatten_type(ty: &StableHLOType, out: &mut Vec<StableHLOType>) {
+    match ty {
+        StableHLOType::Tuple(elems) => {
+            for elem in elems {
+                flatten_type(elem, out);
+            }
+        }
+        other => out.push(other.clone()),
+    }
+}
+
 /// Code generator - converts CompiledExpr to StableHLO
 pub struct CodeGenerator {
     emitter: StableHLOEmitter,
@@ -75,18 +95,24 @@ impl CodeGenerator {
     }
 
     /// Create a CodeGenerator with function parameters bound to %arg0, %arg1, etc.
+    /// Tuple parameters become virtual tuples in the emitter — each leaf maps to
+    /// a separate MLIR %arg, but the CodeGenerator sees normal tuple registers.
     pub fn with_function_params(
         registry: HashMap<String, crate::core::compiler::FunctionDef>,
         param_names: &[String],
         param_types: &[StableHLOType],
     ) -> Self {
+        let mut emitter = StableHLOEmitter::new();
         let mut bindings = HashMap::new();
-        for (i, (name, ty)) in param_names.iter().zip(param_types.iter()).enumerate() {
-            bindings.insert(name.clone(), (Register::arg(i), ty.clone()));
+        let mut flat_idx: usize = 0;
+
+        for (name, ty) in param_names.iter().zip(param_types.iter()) {
+            let reg = emitter.register_virtual_param(ty, &mut flat_idx);
+            bindings.insert(name.clone(), (reg, ty.clone()));
         }
 
         Self {
-            emitter: StableHLOEmitter::new(),
+            emitter,
             bindings,
             lambda_bindings: HashMap::new(),
             function_registry: registry,
@@ -226,7 +252,6 @@ impl CodeGenerator {
             }
 
             CompiledExpr::Symbol(name) => {
-                // Look up symbol in bindings
                 if let Some(&(reg, ref ty)) = self.bindings.get(name) {
                     Ok((reg, ty.clone()))
                 } else {
@@ -238,8 +263,6 @@ impl CodeGenerator {
             }
 
             CompiledExpr::GetTupleElement { param, indices } => {
-                // Resolve a field extracted by with-params via get_tuple_element
-                // The param must be in bindings with a Tuple type
                 let (param_reg, param_ty) =
                     self.bindings
                         .get(param)
@@ -252,7 +275,6 @@ impl CodeGenerator {
                             location: crate::core::error::SourceLocation::unknown(),
                         })?;
 
-                // Walk nested tuple type and emit get_tuple_element for each index
                 let mut current_reg = param_reg;
                 let mut current_ty = param_ty;
 
@@ -288,21 +310,7 @@ impl CodeGenerator {
                     current_ty = element_ty;
                 }
 
-                // Track layout key for the result register via idx_to_key chain
-                {
-                    let mut cur = param.clone();
-                    for &idx in indices {
-                        if let Some(key) = self.idx_to_key.get(&(cur.clone(), idx)) {
-                            cur = key.clone();
-                        } else {
-                            cur = String::new();
-                            break;
-                        }
-                    }
-                    if !cur.is_empty() {
-                        self.layout_key_map.insert(current_reg, cur);
-                    }
-                }
+                self.track_layout_key(param, indices, current_reg);
 
                 Ok((current_reg, current_ty))
             }
@@ -493,6 +501,22 @@ impl CodeGenerator {
         }).collect()
     }
 
+    /// Track layout key for a register via the idx_to_key chain.
+    fn track_layout_key(&mut self, param: &str, indices: &[usize], reg: Register) {
+        let mut cur = param.to_string();
+        for &idx in indices {
+            if let Some(key) = self.idx_to_key.get(&(cur.clone(), idx)) {
+                cur = key.clone();
+            } else {
+                cur = String::new();
+                break;
+            }
+        }
+        if !cur.is_empty() {
+            self.layout_key_map.insert(reg, cur);
+        }
+    }
+
     /// Emit a complete function module
     pub fn emit_function(mut self, name: &str, expr: &CompiledExpr) -> SheafResult<String> {
         let (result_reg, result_ty) = self.generate(expr)?;
@@ -501,11 +525,12 @@ impl CodeGenerator {
         Ok(self.emitter.emit_function_body(name, &result_ty))
     }
 
-    /// Emit a function declaration from a compiled expression
+    /// Emit a function declaration from a compiled expression.
     ///
-    /// Generates the body instructions and wraps them in a func.func declaration
-    /// with the given parameter types and return type
-    /// Returns (mlir_declaration, actual_return_type).
+    /// Parameters are flattened (no tuple types at MLIR boundary).
+    /// If the result is a tuple, it is decomposed via virtual leaves into a multi-value return.
+    /// Returns (mlir_declaration, actual_return_type) where the return type
+    /// preserves the original tuple structure for runtime reconstruction.
     pub fn emit_func_declaration(
         mut self,
         name: &str,
@@ -514,23 +539,31 @@ impl CodeGenerator {
         _return_type: &StableHLOType,
     ) -> SheafResult<(String, StableHLOType)> {
         let (result_reg, result_ty) = self.generate(expr)?;
-        self.emitter.emit_return(&result_reg, &result_ty);
+        let flat_params = flatten_param_types(param_types);
+        let leaves = self.emitter.collect_virtual_leaves(result_reg, &result_ty);
+        let (leaf_regs, leaf_tys): (Vec<_>, Vec<_>) = leaves.into_iter().unzip();
 
-        // Use the actual generated type (not inferred) as the return type
-        let body = self.emitter.body.clone();
-        let decl = self
-            .emitter
-            .emit_func_declaration(name, param_types, &result_ty, &body);
-        Ok((decl, result_ty))
+        if leaf_regs.len() == 1 {
+            self.emitter.emit_return(&leaf_regs[0], &leaf_tys[0]);
+            let body = self.emitter.body.clone();
+            let decl = self.emitter
+                .emit_func_declaration(name, &flat_params, &leaf_tys[0], &body);
+            Ok((decl, result_ty))
+        } else {
+            self.emitter.emit_return_multi(&leaf_regs, &leaf_tys);
+            let body = self.emitter.body.clone();
+            let decl = self.emitter
+                .emit_func_declaration_multi(name, &flat_params, &leaf_tys, &body);
+            Ok((decl, result_ty))
+        }
     }
 
     /// Finalize a multi-output function declaration.
     ///
     /// Emits a `return %r0, %r1, ...` then wraps everything in a `func.func`
     /// with a multi-value return type `-> (t0, t1, ...)`.
-    ///
-    /// The caller has already called `generate()` for each output and collected
-    /// the resulting (Register, StableHLOType) pairs.
+    /// Parameters are flattened (no tuple types at MLIR boundary).
+    /// Result registers are resolved through virtual tuples to collect all leaves.
     pub fn finish_multi(
         mut self,
         name: &str,
@@ -538,10 +571,19 @@ impl CodeGenerator {
         result_regs: &[crate::compiler::stablehlo::Register],
         result_types: &[StableHLOType],
     ) -> String {
-        self.emitter.emit_return_multi(result_regs, result_types);
+        let flat_params = flatten_param_types(param_types);
+        let mut all_regs = Vec::new();
+        let mut all_tys = Vec::new();
+        for (r, t) in result_regs.iter().zip(result_types.iter()) {
+            for (leaf_r, leaf_t) in self.emitter.collect_virtual_leaves(*r, t) {
+                all_regs.push(leaf_r);
+                all_tys.push(leaf_t);
+            }
+        }
+        self.emitter.emit_return_multi(&all_regs, &all_tys);
         let body = self.emitter.body.clone();
         self.emitter
-            .emit_func_declaration_multi(name, param_types, result_types, &body)
+            .emit_func_declaration_multi(name, &flat_params, &all_tys, &body)
     }
 }
 
@@ -550,3 +592,4 @@ impl Default for CodeGenerator {
         Self::new()
     }
 }
+

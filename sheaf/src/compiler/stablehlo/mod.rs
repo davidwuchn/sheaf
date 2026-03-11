@@ -212,6 +212,9 @@ pub struct StableHLOEmitter {
     /// Cache for reduce_mean results: (input_register, normalized_axis, keepdims) → (result_reg, result_type).
     /// Avoids recomputing mean(x, axis) when var(x, axis) also needs it internally.
     reduce_mean_cache: HashMap<(Register, usize, bool), (Register, StableHLOType)>,
+    /// Virtual tuple registers: maps a register to its constituent (register, type) pairs.
+    /// Tuples are never materialized as MLIR ops — they exist only as register groupings.
+    virtual_tuples: HashMap<Register, Vec<(Register, StableHLOType)>>,
 }
 
 impl StableHLOEmitter {
@@ -220,6 +223,7 @@ impl StableHLOEmitter {
             counter: 0,
             body: Vec::new(),
             reduce_mean_cache: HashMap::new(),
+            virtual_tuples: HashMap::new(),
         }
     }
 
@@ -233,6 +237,40 @@ impl StableHLOEmitter {
     /// Add an instruction to the body
     pub fn emit_instruction(&mut self, instruction: String) {
         self.body.push(instruction);
+    }
+
+    /// Register a tuple-typed function parameter as a virtual tuple.
+    /// Leaf types map to Register::arg(flat_idx); sub-tuples map to fresh virtual registers.
+    pub fn register_virtual_param(&mut self, ty: &StableHLOType, flat_idx: &mut usize) -> Register {
+        match ty {
+            StableHLOType::Tuple(elems) => {
+                let vreg = self.fresh_register();
+                let constituents: Vec<_> = elems.iter()
+                    .map(|elem_ty| {
+                        let sub_reg = self.register_virtual_param(elem_ty, flat_idx);
+                        (sub_reg, elem_ty.clone())
+                    })
+                    .collect();
+                self.virtual_tuples.insert(vreg, constituents);
+                vreg
+            }
+            _ => {
+                let reg = Register::arg(*flat_idx);
+                *flat_idx += 1;
+                reg
+            }
+        }
+    }
+
+    /// Recursively collect leaf registers from a (possibly virtual) tuple.
+    pub fn collect_virtual_leaves(&self, reg: Register, ty: &StableHLOType) -> Vec<(Register, StableHLOType)> {
+        if let Some(constituents) = self.virtual_tuples.get(&reg) {
+            constituents.iter()
+                .flat_map(|(r, t)| self.collect_virtual_leaves(*r, t))
+                .collect()
+        } else {
+            vec![(reg, ty.clone())]
+        }
     }
 
     /// Emit a constant scalar
@@ -628,7 +666,8 @@ impl StableHLOEmitter {
         reg
     }
 
-    /// Emit get_tuple_element: extract field from a tuple at a given index
+    /// Extract field from a tuple at a given index.
+    /// Virtual tuples resolve without emitting MLIR.
     pub fn emit_get_tuple_element(
         &mut self,
         tuple_reg: &Register,
@@ -636,6 +675,10 @@ impl StableHLOEmitter {
         index: usize,
         result_ty: &StableHLOType,
     ) -> Register {
+        if let Some(constituents) = self.virtual_tuples.get(tuple_reg) {
+            return constituents[index].0;
+        }
+        // Fallback: real tuple (shouldn't happen with virtual-only approach)
         let reg = self.fresh_register();
         self.body.push(format!(
             "    {} = stablehlo.get_tuple_element {} [{index}] : ({}) -> {}",
@@ -647,26 +690,18 @@ impl StableHLOEmitter {
         reg
     }
 
-    /// Pack registers into a stablehlo.tuple.
+    /// Pack registers into a virtual tuple (no MLIR emitted).
     pub fn emit_tuple(
         &mut self,
         regs: &[Register],
         types: &[StableHLOType],
     ) -> (Register, StableHLOType) {
-        let reg = self.fresh_register();
-        let operands = regs
-            .iter()
-            .map(|r| r.to_mlir())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let tuple_ty = StableHLOType::Tuple(types.to_vec());
-        self.body.push(format!(
-            "    {} = stablehlo.tuple {} : {}",
-            reg.to_mlir(),
-            operands,
-            tuple_ty.to_mlir()
-        ));
-        (reg, tuple_ty)
+        let vreg = self.fresh_register();
+        let constituents: Vec<_> = regs.iter().zip(types.iter())
+            .map(|(r, t)| (*r, t.clone()))
+            .collect();
+        self.virtual_tuples.insert(vreg, constituents);
+        (vreg, StableHLOType::Tuple(types.to_vec()))
     }
 
     /// Emit a return statement

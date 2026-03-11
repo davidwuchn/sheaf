@@ -704,35 +704,17 @@ impl JitCompiler {
                     other => (vec![], other.clone()),
                 };
 
-                // 3. Bind tuple leaves for codegen
+                // 3. Bind tuple leaves for codegen (use generate to handle both
+                //    leaf lookups and sub-tuple reconstruction from flat args)
                 for &(idx, ref leaves) in &all_leaves {
-                    let param_ty = &param_types[idx];
+                    let param_name = &param_names[idx];
                     for leaf in leaves {
-                        let mut current_reg = Register::arg(idx);
-                        let mut current_ty = param_ty.clone();
-                        for &i in &leaf.indices {
-                            let elem_ty = match &current_ty {
-                                StableHLOType::Tuple(elems) => elems[i].clone(),
-                                _ => {
-                                    return Err(crate::core::error::SheafError::Compile {
-                                        message: format!(
-                                            "expected tuple at index {} for param {}",
-                                            i, &param_names[idx]
-                                        ),
-                                        location:
-                                            crate::core::error::SourceLocation::unknown(),
-                                    })
-                                }
-                            };
-                            current_reg = codegen.emit_get_tuple_element(
-                                &current_reg,
-                                &current_ty,
-                                i,
-                                &elem_ty,
-                            );
-                            current_ty = elem_ty;
-                        }
-                        codegen.bind_symbol(&leaf.symbol, current_reg, current_ty);
+                        let gte = CompiledExpr::GetTupleElement {
+                            param: param_name.clone(),
+                            indices: leaf.indices.clone(),
+                        };
+                        let (reg, ty) = codegen.generate(&gte)?;
+                        codegen.bind_symbol(&leaf.symbol, reg, ty);
                     }
                 }
 
