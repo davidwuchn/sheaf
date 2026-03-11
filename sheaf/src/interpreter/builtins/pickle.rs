@@ -513,7 +513,7 @@ impl<'a> PickleVM<'a> {
                 Ok(PV::Placeholder)
             }
 
-            // _codecs.encode — used to embed raw bytes as latin1 string
+            // _codecs.encode, used to embed raw bytes as latin1 string
             ("_codecs", "encode") => {
                 let args_vec = match args {
                     PV::Tuple(v) => v,
@@ -578,7 +578,7 @@ impl<'a> PickleVM<'a> {
                 Ok(PV::Tuple(state_vec))
             }
 
-            // OrderedDict BUILD — state is list of key-value pairs
+            // OrderedDict BUILD, state is list of key-value pairs
             PV::Dict(mut pairs) => {
                 match state {
                     PV::Dict(more) => {
@@ -650,36 +650,36 @@ fn extract_numpy_from_state(state: &[PV]) -> Option<PV> {
     }
 }
 
-fn numpy_bytes_to_f64(data: &[u8], dtype: NpDtype) -> Vec<f64> {
+fn numpy_bytes_to_f32(data: &[u8], dtype: NpDtype) -> Vec<f32> {
     match dtype {
         NpDtype::F32 => {
             data.chunks_exact(4)
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect()
         }
         NpDtype::F64 => {
             data.chunks_exact(8)
-                .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+                .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32)
                 .collect()
         }
         NpDtype::I32 => {
             data.chunks_exact(4)
-                .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64)
+                .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32)
                 .collect()
         }
         NpDtype::I64 => {
             data.chunks_exact(8)
-                .map(|c| i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f64)
+                .map(|c| i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32)
                 .collect()
         }
         NpDtype::U8 => {
-            data.iter().map(|&b| b as f64).collect()
+            data.iter().map(|&b| b as f32).collect()
         }
         NpDtype::F16 => {
             data.chunks_exact(2)
                 .map(|c| {
                     let bits = u16::from_le_bytes([c[0], c[1]]);
-                    f16_to_f32(bits) as f64
+                    f16_to_f32(bits)
                 })
                 .collect()
         }
@@ -687,7 +687,7 @@ fn numpy_bytes_to_f64(data: &[u8], dtype: NpDtype) -> Vec<f64> {
             data.chunks_exact(2)
                 .map(|c| {
                     let bits = u16::from_le_bytes([c[0], c[1]]);
-                    bf16_to_f32(bits) as f64
+                    bf16_to_f32(bits)
                 })
                 .collect()
         }
@@ -730,7 +730,7 @@ fn pickle_to_value(pv: PV) -> Result<Value, SheafError> {
         PV::None => Ok(Value::Nil),
         PV::Bool(b) => Ok(Value::Bool(b)),
         PV::Int(n) => Ok(Value::Int(n)),
-        PV::Float(f) => Ok(Value::Float(f)),
+        PV::Float(f) => Ok(Value::Float(f as f32)),
         PV::Str(s) => Ok(Value::String(s)),
         PV::Bytes(b) => {
             // Expose raw bytes as a list of ints
@@ -757,7 +757,7 @@ fn pickle_to_value(pv: PV) -> Result<Value, SheafError> {
             Ok(Value::Dict(map))
         }
         PV::NumpyArray { dtype, shape, data } => {
-            let values = numpy_bytes_to_f64(&data, dtype);
+            let values = numpy_bytes_to_f32(&data, dtype);
             let expected: usize = shape.iter().product();
             if values.len() != expected {
                 return Err(runtime_error(format!(

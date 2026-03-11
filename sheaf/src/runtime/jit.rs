@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// IREE compiler version — single source of truth in Cargo.toml [package.metadata]
+/// IREE compiler version, single source of truth in Cargo.toml [package.metadata]
 const IREE_COMPILER_VERSION: &str = env!("IREE_VERSION");
 
 use crate::autodiff::reverse::{to_anf, reverse_grad};
@@ -495,7 +495,7 @@ impl JitCompiler {
             }
             match cap_val {
                 Value::Float(f) => {
-                    scalar_substitutions.push((cap_name.clone(), *f));
+                    scalar_substitutions.push((cap_name.clone(), *f as f64));
                 }
                 Value::Int(n) => {
                     scalar_substitutions.push((cap_name.clone(), *n as f64));

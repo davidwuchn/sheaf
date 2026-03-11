@@ -32,16 +32,16 @@ fn builtin_mse_loss(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (pred, _) = to_array(&args[0])?;
     let (target, _) = to_array(&args[1])?;
     let diff = &pred - &target;
-    let mse_f64 = diff.iter().map(|&x| x * x).sum::<f64>() / pred.len() as f64;
-    Ok(Value::Float((mse_f64 as f32) as f64))
+    let mse = diff.iter().map(|&x| x * x).sum::<f32>() / pred.len() as f32;
+    Ok(Value::Float(mse))
 }
 
 fn builtin_mae_loss(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (pred, _) = to_array(&args[0])?;
     let (target, _) = to_array(&args[1])?;
     let diff = &pred - &target;
-    let mae_f64 = diff.iter().map(|&x| x.abs()).sum::<f64>() / pred.len() as f64;
-    Ok(Value::Float((mae_f64 as f32) as f64))
+    let mae = diff.iter().map(|&x| x.abs()).sum::<f32>() / pred.len() as f32;
+    Ok(Value::Float(mae))
 }
 
 fn builtin_sparse_cross_entropy(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
@@ -52,7 +52,7 @@ fn builtin_sparse_cross_entropy(args: &[Value], _kw: &BTreeMap<String, Value>) -
     }
     let batch = logits.shape()[0];
     let num_classes = logits.shape()[1];
-    let mut total_loss = 0.0f64;
+    let mut total_loss = 0.0f32;
     for i in 0..batch {
         let class_idx = labels[IxDyn(&[i])] as usize;
         if class_idx >= num_classes {
@@ -60,13 +60,13 @@ fn builtin_sparse_cross_entropy(args: &[Value], _kw: &BTreeMap<String, Value>) -
                 "sparse-cross-entropy: label {} out of range [0, {})", class_idx, num_classes
             )));
         }
-        let row: Vec<f64> = (0..num_classes).map(|j| logits[IxDyn(&[i, j])]).collect();
-        let max_val = row.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        let shifted: Vec<f64> = row.iter().map(|&x| x - max_val).collect();
-        let log_sum = shifted.iter().map(|&x| x.exp()).sum::<f64>().ln();
+        let row: Vec<f32> = (0..num_classes).map(|j| logits[IxDyn(&[i, j])]).collect();
+        let max_val = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let shifted: Vec<f32> = row.iter().map(|&x| x - max_val).collect();
+        let log_sum = shifted.iter().map(|&x| x.exp()).sum::<f32>().ln();
         let log_prob = shifted[class_idx] - log_sum;
         total_loss += -log_prob;
     }
-    let mean_loss = total_loss / batch as f64;
-    Ok(Value::Float((mean_loss as f32) as f64))
+    let mean_loss = total_loss / batch as f32;
+    Ok(Value::Float(mean_loss))
 }

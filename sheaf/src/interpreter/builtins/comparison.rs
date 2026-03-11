@@ -113,7 +113,7 @@ fn builtin_shape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 let axis = resolve_idx(args[1].to_f64().unwrap(), data.ndim());
                 Ok(Value::Int(data.shape()[axis] as i64))
             } else {
-                let shape: Vec<f64> = data.shape().iter().map(|&s| s as f64).collect();
+                let shape: Vec<f32> = data.shape().iter().map(|&s| s as f32).collect();
                 Ok(Value::tensor_f32(ArrayD::from_shape_vec(IxDyn(&[shape.len()]), shape).unwrap()))
             }
         }
@@ -122,7 +122,7 @@ fn builtin_shape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 let axis = resolve_idx(args[1].to_f64().unwrap(), db.shape.len());
                 Ok(Value::Int(db.shape[axis] as i64))
             } else {
-                let shape: Vec<f64> = db.shape.iter().map(|&s| s as f64).collect();
+                let shape: Vec<f32> = db.shape.iter().map(|&s| s as f32).collect();
                 Ok(Value::tensor_f32(ArrayD::from_shape_vec(IxDyn(&[shape.len()]), shape).unwrap()))
             }
         }
@@ -168,7 +168,7 @@ fn builtin_int(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 fn builtin_float(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.is_empty() { return Err(runtime_error("float requires at least 1 argument")); }
     match &args[0] {
-        Value::Int(n) => Ok(Value::Float(*n as f64)),
+        Value::Int(n) => Ok(Value::Float(*n as f32)),
         Value::Float(f) => Ok(Value::Float(*f)),
         Value::Bool(b) => Ok(Value::Float(if *b { 1.0 } else { 0.0 })),
         Value::Tensor { data, .. } => {

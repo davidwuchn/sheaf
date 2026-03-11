@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! Sheaf interpreter — evaluates CompiledExpr directly to runtime Values.
+//! Sheaf interpreter, evaluates CompiledExpr directly to runtime Values.
 
 pub mod builtins;
 pub mod env;
@@ -22,7 +22,7 @@ use std::sync::Arc;
 pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
     match expr {
         CompiledExpr::Integer(n) => Ok(Value::Int(*n)),
-        CompiledExpr::Float(x) => Ok(Value::Float(*x)),
+        CompiledExpr::Float(x) => Ok(Value::Float(*x as f32)),
         CompiledExpr::Boolean(b) => Ok(Value::Bool(*b)),
         CompiledExpr::Nil => Ok(Value::Nil),
         CompiledExpr::String(s) => Ok(Value::String(s.clone())),
@@ -199,9 +199,9 @@ pub fn apply_guard_check(
         }
         GuardCheck::Range { lo, hi } => {
             if let Value::Tensor { data, .. } = val {
-                let v_min = data.iter().cloned().fold(f64::INFINITY, f64::min);
-                let v_max = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                if v_min < *lo || v_max > *hi {
+                let v_min = data.iter().cloned().fold(f32::INFINITY, f32::min);
+                let v_max = data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                if (v_min as f64) < *lo || (v_max as f64) > *hi {
                     return Err(format!(
                         "Value range [{:.2e}, {:.2e}] outside allowed [{}, {}]",
                         v_min, v_max, lo, hi
@@ -230,9 +230,9 @@ fn format_value_brief(val: &Value) -> String {
         Value::Tensor { data, .. } => {
             let shape: Vec<usize> = data.shape().to_vec();
             let shape_str: String = shape.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("x");
-            let v_min = data.iter().cloned().fold(f64::INFINITY, f64::min);
-            let v_max = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-            format!("f64[{}] [min:{:.2e} max:{:.2e}]", shape_str, v_min, v_max)
+            let v_min = data.iter().cloned().fold(f32::INFINITY, f32::min);
+            let v_max = data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            format!("f32[{}] [min:{:.2e} max:{:.2e}]", shape_str, v_min, v_max)
         }
         other => format!("{}", other),
     }
@@ -290,7 +290,7 @@ fn eval_vector(elements: &[CompiledExpr], env: &mut Env) -> Result<Value, SheafE
     // Check if all elements are numeric → produce a Tensor (always F32 by default)
     let all_numeric = vals.iter().all(|v| matches!(v, Value::Int(_) | Value::Float(_)));
     if all_numeric {
-        let data: Vec<f64> = vals.iter().map(|v| v.to_f64().unwrap()).collect();
+        let data: Vec<f32> = vals.iter().map(|v| v.to_f64().unwrap() as f32).collect();
         let arr = ArrayD::from_shape_vec(IxDyn(&[data.len()]), data).unwrap();
         return Ok(Value::tensor_f32(arr));
     }
@@ -338,7 +338,7 @@ fn eval_dict(pairs: &[(CompiledExpr, CompiledExpr)], env: &mut Env) -> Result<Va
 fn sheaf_value_to_value(sv: &SheafValue) -> Result<Value, SheafError> {
     match sv {
         SheafValue::Integer(n, _) => Ok(Value::Int(*n)),
-        SheafValue::Float(x, _) => Ok(Value::Float(*x)),
+        SheafValue::Float(x, _) => Ok(Value::Float(*x as f32)),
         SheafValue::Boolean(b, _) => Ok(Value::Bool(*b)),
         SheafValue::Nil(_) => Ok(Value::Nil),
         SheafValue::String(s, _) => Ok(Value::String(s.clone())),
@@ -458,7 +458,7 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
                 }
             } else {
                 env.trace_stale_calls += 1;
-                // No new recordings for many calls — we're in a loop, stop
+                // No new recordings for many calls, we're in a loop, stop
                 if env.trace_stale_calls > 20 {
                     return Err(SheafError::Runtime {
                         message: "trace complete".to_string(),
@@ -850,7 +850,7 @@ fn eval_apply(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
     match &args[1] {
         Value::List(items) => call_function(func, items, env),
         Value::Tensor { data, .. } => {
-            let call_args: Vec<_> = data.iter().map(|&x| Value::Float(x)).collect();
+            let call_args: Vec<Value> = data.iter().map(|&x| Value::Float(x)).collect();
             call_function(func, &call_args, env)
         }
         _ => Err(runtime_error("apply: expected list or tensor")),
@@ -975,7 +975,7 @@ fn eval_flatten(args: &[Value]) -> Result<Value, SheafError> {
     }
     let mut leaves = Vec::new();
     flatten_leaves(&args[0], &mut leaves);
-    // Returns (leaves_list, reconstruct_fn) — we return a list of [leaves, nil] for now
+    // Returns (leaves_list, reconstruct_fn), we return a list of [leaves, nil] for now
     // The test only uses (first (flatten params)) → the leaves list
     Ok(Value::List(vec![Value::List(leaves), Value::Nil]))
 }
@@ -1070,10 +1070,10 @@ fn eval_vmap_call(
         Ok(Value::Tensor { data: Arc::new(stacked), dtype })
     } else if results.iter().all(|r| matches!(r, Value::Float(_) | Value::Int(_))) {
         // Scalar results → 1D tensor
-        let vals: Vec<f64> = results.iter().map(|r| match r {
+        let vals: Vec<f32> = results.iter().map(|r| match r {
             Value::Float(f) => *f,
-            Value::Int(n) => *n as f64,
-            _ => 0.0,
+            Value::Int(n) => *n as f32,
+            _ => 0.0f32,
         }).collect();
         let arr = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[vals.len()]), vals)
             .map_err(|e| runtime_error(format!("vmap: {}", e)))?;
@@ -1194,14 +1194,14 @@ fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Resu
 
 /// Finite-difference fallback for value-and-grad.
 fn eval_vag_finite_diff(func: &Value, params: &Value, env: &mut Env) -> Result<Value, SheafError> {
-    let h = 1e-4_f64;
+    let h = 1e-4_f32;
 
     // Evaluate loss at params
     let loss_val = call_function(func, &[params.clone()], env)?;
     let loss = match &loss_val {
         Value::Float(x) => *x,
-        Value::Int(n) => *n as f64,
-        Value::Tensor { data, .. } => data.first().copied().unwrap_or(0.0),
+        Value::Int(n) => *n as f32,
+        Value::Tensor { data, .. } => data.first().copied().unwrap_or(0.0f32),
         _ => return Err(runtime_error("value-and-grad: loss function must return a scalar")),
     };
 
@@ -1221,7 +1221,7 @@ fn eval_vag_finite_diff(func: &Value, params: &Value, env: &mut Env) -> Result<V
     };
 
     // Central finite differences for each leaf
-    let mut grads = vec![0.0f64; n_leaves];
+    let mut grads = vec![0.0f32; n_leaves];
     for i in 0..n_leaves {
         let p_plus = perturb_leaf(params, i, h);
         let p_minus = perturb_leaf(params, i, -h);
@@ -1238,12 +1238,12 @@ fn eval_vag_finite_diff(func: &Value, params: &Value, env: &mut Env) -> Result<V
     Ok(Value::List(vec![Value::Float(loss), grad_tree]))
 }
 
-fn perturb_leaf(val: &Value, leaf_idx: usize, delta: f64) -> Value {
+fn perturb_leaf(val: &Value, leaf_idx: usize, delta: f32) -> Value {
     let mut counter = 0usize;
     perturb_leaf_inner(val, leaf_idx, delta, &mut counter)
 }
 
-fn perturb_leaf_inner(val: &Value, leaf_idx: usize, delta: f64, counter: &mut usize) -> Value {
+fn perturb_leaf_inner(val: &Value, leaf_idx: usize, delta: f32, counter: &mut usize) -> Value {
     match val {
         Value::Tensor { data, dtype } => {
             let n = data.len();
@@ -1262,12 +1262,12 @@ fn perturb_leaf_inner(val: &Value, leaf_idx: usize, delta: f64, counter: &mut us
             map.iter().map(|(k, v)| (k.clone(), perturb_leaf_inner(v, leaf_idx, delta, counter))).collect()
         ),
         Value::Float(x) => {
-            let result = if *counter == leaf_idx { Value::Float(x + delta) } else { val.clone() };
+            let result = if *counter == leaf_idx { Value::Float(*x + delta) } else { val.clone() };
             *counter += 1;
             result
         }
         Value::Int(n) => {
-            let result = if *counter == leaf_idx { Value::Float(*n as f64 + delta) } else { val.clone() };
+            let result = if *counter == leaf_idx { Value::Float(*n as f32 + delta) } else { val.clone() };
             *counter += 1;
             result
         }
@@ -1275,18 +1275,18 @@ fn perturb_leaf_inner(val: &Value, leaf_idx: usize, delta: f64, counter: &mut us
     }
 }
 
-fn scalar_from_value(val: &Value) -> Result<f64, SheafError> {
+fn scalar_from_value(val: &Value) -> Result<f32, SheafError> {
     let val = val.ensure_host()?;
     match &val {
         Value::Float(x) => Ok(*x),
-        Value::Int(n) => Ok(*n as f64),
+        Value::Int(n) => Ok(*n as f32),
         Value::Tensor { data, .. } => data.first().copied()
             .ok_or_else(|| runtime_error("value-and-grad: empty tensor result")),
         _ => Err(runtime_error("value-and-grad: loss must return a scalar")),
     }
 }
 
-fn build_grad_tree(params: &Value, grads: &[f64], counter: &mut usize) -> Value {
+fn build_grad_tree(params: &Value, grads: &[f32], counter: &mut usize) -> Value {
     match params {
         Value::Tensor { data, dtype } => {
             let n = data.len();
@@ -1362,7 +1362,7 @@ fn build_grad_tree_by_value(
                     }
                 }
             }
-            // No matching leaf found — this param wasn't used in the expression.
+            // No matching leaf found, this param wasn't used in the expression.
             // Return zeros with the same shape.
             Ok(zeros_like(params))
         }
@@ -1443,14 +1443,14 @@ fn reduce_grad_to_param_shape(grad: &Value, param: &Value) -> Result<Value, Shea
                 }
                 Ok(Value::Tensor { data: Arc::new(reduced), dtype: *dtype })
             } else {
-                // Grad has fewer dims than param — shouldn't happen, return as-is
+                // Grad has fewer dims than param, shouldn't happen, return as-is
                 Ok(grad.clone())
             }
         }
         (Value::Float(_), Value::Float(_)) => Ok(grad.clone()),
         (Value::Tensor { data, dtype: _ }, Value::Float(_)) => {
             // Reduce tensor gradient to scalar for a Float param
-            let sum: f64 = data.iter().sum();
+            let sum: f32 = data.iter().sum();
             Ok(Value::Float(sum))
         }
         _ => Ok(grad.clone()),
@@ -1613,7 +1613,7 @@ fn try_jit_vag(
         } else if let Some((_, val)) = closure.iter().find(|(k, _)| k == name) {
             args.push(val.clone());
         } else {
-            // Scalar capture — not passed to IREE
+            // Scalar capture, not passed to IREE
             continue;
         }
     }
@@ -1693,7 +1693,7 @@ fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
         if let Ok(val) = env.get(name) {
             augmented_closure.push((name.to_string(), val.clone()));
         }
-        // If not in env, leave it — the JIT will fail gracefully
+        // If not in env, leave it, the JIT will fail gracefully
     }
 
     Some(Value::Function {
@@ -1810,7 +1810,7 @@ fn tuple_to_dict(tuple_val: &Value, original: &BTreeMap<String, Value>) -> Optio
     let elems = match tuple_val {
         Value::Tuple(elems) => elems,
         _ => {
-            // Leaf value — not a dict, return as-is
+            // Leaf value, not a dict, return as-is
             return Some(tuple_val.clone());
         }
     };

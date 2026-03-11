@@ -202,7 +202,7 @@ fn format_value(val: &Value, level: TraceLevel) -> String {
         Value::Tensor { data, .. } => {
             let shape: Vec<usize> = data.shape().to_vec();
             let shape_str = shape.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("x");
-            let bytes = data.len() * 8;
+            let bytes = data.len() * 4;
             let mem = if bytes < 1024 {
                 format!("{}B", bytes)
             } else if bytes < 1024 * 1024 {
@@ -212,23 +212,23 @@ fn format_value(val: &Value, level: TraceLevel) -> String {
             };
 
             match level {
-                TraceLevel::Fast => format!("f64[{}] ({})", shape_str, mem),
+                TraceLevel::Fast => format!("f32[{}] ({})", shape_str, mem),
                 TraceLevel::Normal => {
-                    let v_min = data.iter().cloned().fold(f64::INFINITY, f64::min);
-                    let v_max = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    let v_min = data.iter().cloned().fold(f32::INFINITY, f32::min);
+                    let v_max = data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
                     let finite = data.iter().all(|x| x.is_finite());
-                    let mut s = format!("f64[{}] [min:{:.2e} max:{:.2e}] ({})", shape_str, v_min, v_max, mem);
+                    let mut s = format!("f32[{}] [min:{:.2e} max:{:.2e}] ({})", shape_str, v_min, v_max, mem);
                     if !finite {
                         s.push_str(" \x1b[91m[NaN DETECTED]\x1b[0m");
                     }
                     s
                 }
                 TraceLevel::Verbose => {
-                    let v_min = data.iter().cloned().fold(f64::INFINITY, f64::min);
-                    let v_max = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                    let v_mean: f64 = data.iter().sum::<f64>() / data.len().max(1) as f64;
+                    let v_min = data.iter().cloned().fold(f32::INFINITY, f32::min);
+                    let v_max = data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let v_mean: f32 = data.iter().sum::<f32>() / data.len().max(1) as f32;
                     let finite = data.iter().all(|x| x.is_finite());
-                    let mut s = format!("f64[{}] [μ:{:.2e} min:{:.2e} max:{:.2e}] ({})", shape_str, v_mean, v_min, v_max, mem);
+                    let mut s = format!("f32[{}] [μ:{:.2e} min:{:.2e} max:{:.2e}] ({})", shape_str, v_mean, v_min, v_max, mem);
                     if !finite {
                         s.push_str(" \x1b[91m[NaN DETECTED]\x1b[0m");
                     }

@@ -3,7 +3,10 @@
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// Cached target backend string, set once on first IreeSession creation.
+static CACHED_BACKEND: OnceLock<String> = OnceLock::new();
 
 use crate::core::error::SheafError;
 use crate::interpreter::value::{Dtype, Value};
@@ -45,7 +48,7 @@ impl Drop for DeviceBufferInner {
 
 impl DeviceBufferInner {
     /// Transfer data to host, returning an ndarray.
-    pub fn to_host(&self) -> Result<ArrayD<f64>, SheafError> {
+    pub fn to_host(&self) -> Result<ArrayD<f32>, SheafError> {
         unsafe {
             let n_elems: usize = self.shape.iter().product::<usize>().max(1);
             let byte_len = n_elems * 4; // f32 = 4 bytes
@@ -66,8 +69,7 @@ impl DeviceBufferInner {
                 return Err(iree_err("d2h transfer failed"));
             }
 
-            let f64_data: Vec<f64> = f32_buf.iter().map(|&x| x as f64).collect();
-            ArrayD::from_shape_vec(self.shape.clone(), f64_data)
+            ArrayD::from_shape_vec(self.shape.clone(), f32_buf)
                 .map_err(|e| iree_err(&format!("shape mismatch: {}", e)))
         }
     }
@@ -100,10 +102,10 @@ unsafe fn libc_stderr() -> *mut c_void {
 /// Identity-based fingerprint for buffer view caching.
 /// Uses Arc identity for tensors (O(1), no false positives).
 /// Same Arc = same data = cache hit. New Arc = miss (correct for computed values).
-/// Stores a clone of the Arc to keep it alive — prevents address reuse (ABA problem).
+/// Stores a clone of the Arc to keep it alive and prevent address reuse (ABA problem).
 #[derive(Clone)]
 enum TensorFingerprint {
-    Tensor(Arc<ndarray::ArrayD<f64>>),
+    Tensor(Arc<ndarray::ArrayD<f32>>),
     DeviceBuffer(Arc<DeviceBufferInner>),
     Scalar(u64),
 }
@@ -113,7 +115,7 @@ impl TensorFingerprint {
         match val {
             Value::Tensor { data, .. } => Some(Self::Tensor(Arc::clone(data))),
             Value::DeviceBuffer(db) => Some(Self::DeviceBuffer(Arc::clone(db))),
-            Value::Float(f) => Some(Self::Scalar(f.to_bits())),
+            Value::Float(f) => Some(Self::Scalar(f.to_bits() as u64)),
             Value::Int(n) => Some(Self::Scalar(*n as u64)),
             Value::Bool(b) => Some(Self::Scalar(*b as u64)),
             _ => None,
@@ -124,7 +126,7 @@ impl TensorFingerprint {
         match (self, val) {
             (Self::Tensor(cached), Value::Tensor { data, .. }) => Arc::ptr_eq(cached, data),
             (Self::DeviceBuffer(cached), Value::DeviceBuffer(db)) => Arc::ptr_eq(cached, db),
-            (Self::Scalar(s), Value::Float(f)) => *s == f.to_bits(),
+            (Self::Scalar(s), Value::Float(f)) => *s == (f.to_bits() as u64),
             (Self::Scalar(s), Value::Int(n)) => *s == (*n as u64),
             (Self::Scalar(s), Value::Bool(b)) => *s == (*b as u64),
             _ => false,
@@ -206,6 +208,15 @@ impl IreeSession {
                     "failed to create IREE device (tried: {})", tried
                 )));
             }
+            // Cache the target backend for JIT (avoids re-probing drivers)
+            let backend = match chosen_driver {
+                "metal" => "metal-spirv",
+                "vulkan" => "vulkan-spirv",
+                "cuda" => "cuda",
+                _ => "llvm-cpu",
+            };
+            let _ = CACHED_BACKEND.set(backend.to_string());
+
             {
                 use std::sync::atomic::AtomicBool;
                 static PRINTED: AtomicBool = AtomicBool::new(false);
@@ -270,6 +281,12 @@ impl IreeSession {
             "cuda" => "cuda",
             _ => "llvm-cpu",
         }
+    }
+
+    /// Returns the cached target backend without creating a new session.
+    /// Available after the first IreeSession::new() call.
+    pub fn cached_target_backend() -> Option<&'static str> {
+        CACHED_BACKEND.get().map(|s| s.as_str())
     }
 
     /// Returns the HAL driver name ("metal", "local-task", etc.)
@@ -665,10 +682,8 @@ unsafe fn value_to_buffer_view(
                 let shape: Vec<iree_hal_dim_t> =
                     data.shape().iter().map(|&d| d as iree_hal_dim_t).collect();
 
-                // All StableHLO codegen emits f32 — cast I32 tensors (indices, tokens)
-                // to f32 at the IREE boundary.
-                let f32_data: Vec<f32> = data.iter().map(|&x| x as f32).collect();
-                let byte_data: Vec<u8> = f32_data
+                let f32_slice = data.as_slice().unwrap();
+                let byte_data: Vec<u8> = f32_slice
                     .iter()
                     .flat_map(|f| f.to_ne_bytes())
                     .collect();
@@ -713,20 +728,20 @@ unsafe fn value_to_buffer_view(
             }
             Value::Int(n) => {
                 let tensor = Value::Tensor {
-                    data: Arc::new(ArrayD::from_elem(vec![], *n as f64)),
+                    data: Arc::new(ArrayD::from_elem(vec![], *n as f32)),
                     dtype: Dtype::F32,
                 };
                 value_to_buffer_view(device, allocator, &tensor)
             }
             Value::Bool(b) => {
                 let tensor = Value::Tensor {
-                    data: Arc::new(ArrayD::from_elem(vec![], if *b { 1.0 } else { 0.0 })),
+                    data: Arc::new(ArrayD::from_elem(vec![], if *b { 1.0f32 } else { 0.0f32 })),
                     dtype: Dtype::F32,
                 };
                 value_to_buffer_view(device, allocator, &tensor)
             }
             Value::DeviceBuffer(db) => {
-                // Already an IREE buffer view — pass through directly.
+                // Already an IREE buffer view, pass through directly.
                 // Caller must not cache/release this pointer (not owned by cache).
                 Ok(db.buffer_view())
             }
@@ -753,7 +768,7 @@ unsafe fn buffer_view_to_value(
 
         let buf = iree_hal_buffer_view_buffer(bv);
 
-        let (f64_data, dtype) = if elem_type == IREE_HAL_ELEMENT_TYPE_FLOAT_32 {
+        let (f32_data, dtype) = if elem_type == IREE_HAL_ELEMENT_TYPE_FLOAT_32 {
             let mut f32_buf: Vec<f32> = vec![0.0; n_elems];
             let status = iree_hal_device_transfer_d2h(
                 device, buf, 0,
@@ -765,7 +780,7 @@ unsafe fn buffer_view_to_value(
                 unsafe { iree_status_fprint(__stderrp, status); }
                 return Err(iree_err("failed to read IREE buffer data"));
             }
-            (f32_buf.iter().map(|&x| x as f64).collect::<Vec<f64>>(), Dtype::F32)
+            (f32_buf, Dtype::F32)
         } else if elem_type == IREE_HAL_ELEMENT_TYPE_INT_32 {
             let mut i32_buf: Vec<i32> = vec![0; n_elems];
             let status = iree_hal_device_transfer_d2h(
@@ -778,7 +793,7 @@ unsafe fn buffer_view_to_value(
                 unsafe { iree_status_fprint(__stderrp, status); }
                 return Err(iree_err("failed to read IREE buffer data"));
             }
-            (i32_buf.iter().map(|&x| x as f64).collect::<Vec<f64>>(), Dtype::I32)
+            (i32_buf.iter().map(|&x| x as f32).collect::<Vec<f32>>(), Dtype::I32)
         } else {
             return Err(iree_err(&format!(
                 "unsupported IREE element type: 0x{:08x}",
@@ -786,7 +801,7 @@ unsafe fn buffer_view_to_value(
             )));
         };
 
-        let data = ArrayD::from_shape_vec(shape, f64_data)
+        let data = ArrayD::from_shape_vec(shape, f32_data)
             .map_err(|e| iree_err(&format!("shape mismatch: {}", e)))?;
 
         Ok(Value::Tensor {

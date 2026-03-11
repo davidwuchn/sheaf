@@ -24,8 +24,7 @@ fn builtin_leaky_relu(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         .unwrap_or(0.01) as f32;
     let (arr, _dt) = to_array(&args[0])?;
     let result = arr.mapv(|x| {
-        let xf = x as f32;
-        (if xf > 0.0 { xf } else { slope * xf }) as f64
+        if x > 0.0 { x } else { slope * x }
     });
     if result.ndim() == 0 {
         Ok(Value::Float(*result.first().unwrap()))
@@ -42,12 +41,12 @@ fn builtin_sigmoid(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_tanh(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    unary_op(args, f64::tanh)
+    unary_op(args, f32::tanh)
 }
 
 fn builtin_gelu(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     unary_op(args, |x| {
-        0.5 * x * (1.0 + (std::f64::consts::FRAC_2_SQRT_PI * std::f64::consts::FRAC_1_SQRT_2 * (x + 0.044715 * x * x * x)).tanh())
+        0.5 * x * (1.0 + (std::f32::consts::FRAC_2_SQRT_PI * std::f32::consts::FRAC_1_SQRT_2 * (x + 0.044715 * x * x * x)).tanh())
     })
 }
 
@@ -56,8 +55,7 @@ fn builtin_selu(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let scale = 1.0507009873554805_f32;
     let (arr, _dt) = to_array(&args[0])?;
     let result = arr.mapv(|x| {
-        let xf = x as f32;
-        (if xf > 0.0 { scale * xf } else { scale * alpha * (xf.exp() - 1.0) }) as f64
+        if x > 0.0 { scale * x } else { scale * alpha * (x.exp() - 1.0) }
     });
     if result.ndim() == 0 {
         Ok(Value::Float(*result.first().unwrap()))
@@ -70,8 +68,7 @@ fn builtin_celu(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let alpha = kw.get("alpha").and_then(|v| v.to_f64()).unwrap_or(1.0) as f32;
     let (arr, _dt) = to_array(&args[0])?;
     let result = arr.mapv(|x| {
-        let xf = x as f32;
-        (if xf > 0.0 { xf } else { alpha * ((xf / alpha).exp() - 1.0) }) as f64
+        if x > 0.0 { x } else { alpha * ((x / alpha).exp() - 1.0) }
     });
     if result.ndim() == 0 {
         Ok(Value::Float(*result.first().unwrap()))
@@ -89,14 +86,13 @@ fn builtin_softmax(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let axis = get_axis(kw).unwrap_or(-1);
     let ndim = arr.ndim();
     let ax = if axis < 0 { (ndim as i64 + axis) as usize } else { axis as usize };
-    let arr_f32 = arr.mapv(|x| x as f32);
-    let max_arr = reduce_along_axis(&arr_f32.mapv(|x| x as f64), ax, |v| v.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+    let max_arr = reduce_along_axis(&arr, ax, |v| v.iter().copied().fold(f32::NEG_INFINITY, f32::max));
     let max_bc = max_arr.insert_axis(ndarray::Axis(ax));
-    let shifted = (&arr - &max_bc).mapv(|x| (x as f32) as f64);
-    let exp_arr = shifted.mapv(|x| (x as f32).exp() as f64);
-    let sum_arr = reduce_along_axis(&exp_arr, ax, |v| v.iter().sum::<f64>());
+    let shifted = &arr - &max_bc;
+    let exp_arr = shifted.mapv(|x| x.exp());
+    let sum_arr = reduce_along_axis(&exp_arr, ax, |v| v.iter().sum::<f32>());
     let sum_bc = sum_arr.insert_axis(ndarray::Axis(ax));
-    let result = (&exp_arr / &sum_bc).mapv(|x| (x as f32) as f64);
+    let result = &exp_arr / &sum_bc;
     Ok(Value::tensor_f32(result))
 }
 
@@ -105,13 +101,13 @@ fn builtin_log_softmax(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let axis = get_axis(kw).unwrap_or(-1);
     let ndim = arr.ndim();
     let ax = if axis < 0 { (ndim as i64 + axis) as usize } else { axis as usize };
-    let max_arr = reduce_along_axis(&arr, ax, |v| v.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+    let max_arr = reduce_along_axis(&arr, ax, |v| v.iter().copied().fold(f32::NEG_INFINITY, f32::max));
     let max_bc = max_arr.insert_axis(ndarray::Axis(ax));
-    let shifted = (&arr - &max_bc).mapv(|x| (x as f32) as f64);
-    let exp_arr = shifted.mapv(|x| (x as f32).exp() as f64);
-    let sum_arr = reduce_along_axis(&exp_arr, ax, |v| v.iter().sum::<f64>());
-    let log_sum = sum_arr.mapv(|x| (x as f32).ln() as f64);
+    let shifted = &arr - &max_bc;
+    let exp_arr = shifted.mapv(|x| x.exp());
+    let sum_arr = reduce_along_axis(&exp_arr, ax, |v| v.iter().sum::<f32>());
+    let log_sum = sum_arr.mapv(|x| x.ln());
     let log_sum_bc = log_sum.insert_axis(ndarray::Axis(ax));
-    let result = (&shifted - &log_sum_bc).mapv(|x| (x as f32) as f64);
+    let result = &shifted - &log_sum_bc;
     Ok(Value::tensor_f32(result))
 }

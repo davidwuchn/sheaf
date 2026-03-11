@@ -81,41 +81,41 @@ pub fn load_safetensors(data: &[u8]) -> Result<Value, SheafError> {
     Ok(nest_flat_keys(flat))
 }
 
-fn decode_raw(raw: &[u8], dtype: &str) -> Result<(Vec<f64>, Dtype), String> {
+fn decode_raw(raw: &[u8], dtype: &str) -> Result<(Vec<f32>, Dtype), String> {
     match dtype {
         "F32" => Ok((
             raw.chunks_exact(4)
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect(),
             Dtype::F32,
         )),
         "F64" => Ok((
             raw.chunks_exact(8)
-                .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+                .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32)
                 .collect(),
             Dtype::F32,
         )),
         "F16" => Ok((
             raw.chunks_exact(2)
-                .map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]])) as f64)
+                .map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]])))
                 .collect(),
             Dtype::F32,
         )),
         "BF16" => Ok((
             raw.chunks_exact(2)
-                .map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16) as f64)
+                .map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16))
                 .collect(),
             Dtype::F32,
         )),
         "I32" => Ok((
             raw.chunks_exact(4)
-                .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64)
+                .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32)
                 .collect(),
             Dtype::I32,
         )),
         "I64" => Ok((
             raw.chunks_exact(8)
-                .map(|c| i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f64)
+                .map(|c| i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32)
                 .collect(),
             Dtype::I32,
         )),
@@ -124,7 +124,7 @@ fn decode_raw(raw: &[u8], dtype: &str) -> Result<(Vec<f64>, Dtype), String> {
             Dtype::Bool,
         )),
         "U8" => Ok((
-            raw.iter().map(|&b| b as f64).collect(),
+            raw.iter().map(|&b| b as f32).collect(),
             Dtype::I32,
         )),
         other => Err(format!("unsupported dtype '{}'", other)),

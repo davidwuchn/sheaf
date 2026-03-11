@@ -441,7 +441,7 @@ fn extract_scalars_rec(
 ) {
     let scalar = match val {
         Value::Int(n) => Some(*n as f64),
-        Value::Float(f) => Some(*f),
+        Value::Float(f) => Some(*f as f64),
         Value::Dict(map) => {
             for (key, child) in map {
                 path.push(key.clone());
@@ -551,7 +551,7 @@ fn try_infer_shape(
                     None
                 }
             }
-            // get: tensor indexing — (get tensor idx)
+            // get: tensor indexing, (get tensor idx)
             // tensor[idx] -> idx.shape + tensor.shape[1:]
             "get" if args.len() == 2 => {
                 let tensor_shape = try_infer_shape(&args[0], shapes)?;
@@ -566,7 +566,7 @@ fn try_infer_shape(
                     None => Some(trailing.to_vec()), // scalar index
                 }
             }
-            // slice: (slice tensor start end) — axis 0
+            // slice: (slice tensor start end), axis 0
             "slice" if args.len() == 3 => {
                 let tensor_shape = try_infer_shape(&args[0], shapes)?;
                 if tensor_shape.is_empty() { return None; }
@@ -682,7 +682,7 @@ pub fn unroll_reduces(
                     (&params[0], &params[1], body.as_ref())
                 }
                 _ => {
-                    // Not a lambda — can't unroll, recurse into args
+                    // Not a lambda, can't unroll, recurse into args
                     return CompiledExpr::FunctionCall {
                         name: name.clone(),
                         args: args.iter().map(|a| unroll_reduces(a, param_types)).collect(),
@@ -717,7 +717,7 @@ pub fn unroll_reduces(
             let (n, coll_info) = match unroll_info {
                 Some(info) => info,
                 None => {
-                    // Can't determine length — leave as-is
+                    // Can't determine length, leave as-is
                     return CompiledExpr::FunctionCall {
                         name: name.clone(),
                         args: vec![args[0].clone(), init, coll],

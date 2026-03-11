@@ -284,8 +284,8 @@ fn builtin_index_of(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             for (i, item) in items.iter().enumerate() {
                 let eq = match (item, target) {
                     (Value::Int(a), Value::Int(b)) => a == b,
-                    (Value::Float(a), Value::Float(b)) => (a - b).abs() < 1e-10,
-                    (Value::Int(a), Value::Float(b)) | (Value::Float(b), Value::Int(a)) => (*a as f64 - b).abs() < 1e-10,
+                    (Value::Float(a), Value::Float(b)) => (a - b).abs() < 1e-6,
+                    (Value::Int(a), Value::Float(b)) | (Value::Float(b), Value::Int(a)) => (*a as f32 - b).abs() < 1e-6,
                     (Value::String(a), Value::String(b)) => a == b,
                     (Value::Keyword(a), Value::Keyword(b)) => a == b,
                     (Value::Bool(a), Value::Bool(b)) => a == b,

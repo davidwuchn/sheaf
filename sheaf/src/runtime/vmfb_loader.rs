@@ -67,7 +67,7 @@ pub fn try_load_vmfb(
             }
         }
         Err(_) => {
-            // No manifest — try module.vmfb with timestamp fallback
+            // No manifest: try module.vmfb with timestamp fallback
             let vmfb_path = dir.join("module.vmfb");
             if !vmfb_path.exists() {
                 return false;

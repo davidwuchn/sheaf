@@ -330,7 +330,7 @@ impl CodeGenerator {
                 Ok((reg, ty))
             }
         }
-        // first: (first x) — special case: (first (scan fn init coll)) = final carry
+        // first: (first x), special case: (first (scan fn init coll)) = final carry
         else if name == "first" && args.len() == 1 {
             if let CompiledExpr::FunctionCall { name: inner, args: inner_args } = &args[0] {
                 if inner == "scan" && inner_args.len() == 3 {
@@ -390,7 +390,7 @@ impl CodeGenerator {
                 })
             }
         }
-        // sum_to_shape: (sum_to_shape x [M N]) — reduce x by summing over
+        // sum_to_shape: (sum_to_shape x [M N]), reduce x by summing over
         // broadcast dimensions until its shape matches [M N].
         // Used by autodiff to undo implicit broadcasting in +, -, *, /.
         else if name == "sum_to_shape" && args.len() == 2 {
@@ -400,7 +400,7 @@ impl CodeGenerator {
                 let from_shape = ty.shape().to_vec();
 
                 if from_shape == target_shape {
-                    // Already matching — no-op
+                    // Already matching, no-op
                     return Ok((reg, ty));
                 }
 
@@ -435,7 +435,7 @@ impl CodeGenerator {
                 })
             }
         }
-        // slice_grad: (slice_grad adj [target_shape] start) — pad adj with zeros
+        // slice_grad: (slice_grad adj [target_shape] start), pad adj with zeros
         // to restore the original tensor shape before slicing.
         // The slice operates on axis 0 by default.
         else if name == "slice_grad" && args.len() == 3 {
@@ -496,7 +496,7 @@ impl CodeGenerator {
                 })
             }
         }
-        // broadcast: (broadcast x [M N]) — broadcast x to target shape
+        // broadcast: (broadcast x [M N]), broadcast x to target shape
         else if name == "broadcast" && args.len() == 2 {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             if let CompiledExpr::Vector(shape_elems) = &args[1] {
@@ -597,7 +597,7 @@ impl CodeGenerator {
                 })
             }
         }
-        // transpose: (transpose tensor [1 0]) or (transpose tensor) — default perm [1 0]
+        // transpose: (transpose tensor [1 0]) or (transpose tensor), default perm [1 0]
         else if name == "transpose" && (args.len() == 1 || args.len() == 2) {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             let permutation: Vec<i64> = if args.len() == 2 {
@@ -765,7 +765,7 @@ impl CodeGenerator {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
 
             // Parse keyword args: :axis N :keepdims [bool?]
-            // :keepdims may be bare (no following value) — treat as true
+            // :keepdims may be bare (no following value), treat as true
             let mut axis: Option<i64> = None;
             let mut keepdims = false;
             let mut i = 1;
@@ -877,7 +877,7 @@ impl CodeGenerator {
             Ok((reg, ty))
         }
         // min/max reduction: (min x :axis N) or (max x :axis N)
-        // 1-arg form with keyword args — reduction along axis
+        // 1-arg form with keyword args, reduction along axis
         else if matches!(name, "min" | "max") && !args.is_empty()
             && (args.len() == 1 || matches!(&args[1], CompiledExpr::Keyword(_)))
         {
@@ -954,11 +954,11 @@ impl CodeGenerator {
             };
             Ok((reg, ty))
         }
-        // reduce: (reduce fn init coll) — static unrolling when coll type is known
+        // reduce: (reduce fn init coll), static unrolling when coll type is known
         else if name == "reduce" && args.len() == 3 {
             self.generate_reduce_scan(&args[0], &args[1], &args[2])
         }
-        // scan: (scan fn init coll) — same as reduce for the final carry
+        // scan: (scan fn init coll), same as reduce for the final carry
         // Note: (first (scan ...)) is intercepted above in the "first" handler.
         else if name == "scan" && args.len() == 3 {
             self.generate_reduce_scan(&args[0], &args[1], &args[2])
@@ -1003,7 +1003,7 @@ impl CodeGenerator {
             let sym_name = if let CompiledExpr::Symbol(s) = &args[0] { Some(s.clone()) } else { None };
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             match &operand_ty {
-                // Tuple + keyword/string — try to resolve via tuple_key_layouts
+                // Tuple + keyword/string, try to resolve via tuple_key_layouts
                 StableHLOType::Tuple(_) => {
                     // Resolve layout key from symbol name or layout_key_map
                     let layout_key = sym_name.clone()
@@ -1064,7 +1064,7 @@ impl CodeGenerator {
                             let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, actual_idx);
                             Ok((reg, ty))
                         }
-                        // (get tensor ... idx) — ellipsis: index last axis
+                        // (get tensor ... idx), ellipsis: index last axis
                         CompiledExpr::Symbol(s) if s == "..." => {
                             if args.len() >= 3 {
                                 if let CompiledExpr::Integer(idx) = &args[2] {
@@ -1116,7 +1116,7 @@ impl CodeGenerator {
                 }
             }
         }
-        // get-in: (get-in tuple [:k1 :k2]) — should be lowered by lower_get_calls
+        // get-in: (get-in tuple [:k1 :k2]), should be lowered by lower_get_calls
         else if name == "get-in" && args.len() >= 2 {
             Err(SheafError::Compile {
                 message: "get-in requires type info (use --trace-with or auto-trace)".to_string(),
@@ -1284,7 +1284,7 @@ impl CodeGenerator {
             let (reg, ty) = tensor_ops::emit_append_and_roll(&mut self.emitter, &operand_reg, &operand_ty, &value_reg, &value_ty);
             Ok((reg, ty))
         }
-        // last: (last x) — last element along axis 0
+        // last: (last x), last element along axis 0
         else if name == "last" && args.len() == 1 {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             let shape = operand_ty.shape();
@@ -1298,15 +1298,15 @@ impl CodeGenerator {
             let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, last_idx);
             Ok((reg, ty))
         }
-        // int: (int x) — cast to integer (identity in codegen, shape info is already i64)
+        // int: (int x), cast to integer (identity in codegen, shape info is already i64)
         else if name == "int" && args.len() == 1 {
             self.generate(&args[0])
         }
-        // float: (float x) — cast to float (identity in codegen)
+        // float: (float x), cast to float (identity in codegen)
         else if name == "float" && args.len() == 1 {
             self.generate(&args[0])
         }
-        // slice: (slice tensor start end :axis N) — start inclusive, end exclusive
+        // slice: (slice tensor start end :axis N), start inclusive, end exclusive
         else if name == "slice" && args.len() >= 2 {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             // Parse positional args (start, end) and keyword :axis
@@ -1369,7 +1369,7 @@ impl CodeGenerator {
             let (reg, ty) = tensor_ops::emit_tensor_split(&mut self.emitter, &operand_reg, &operand_ty, num_sections);
             Ok((reg, ty))
         }
-        // count/len: (count x) or (len x) — compile-time length
+        // count/len: (count x) or (len x), compile-time length
         else if (name == "count" || name == "len") && args.len() == 1 {
             let (_, operand_ty) = self.generate(&args[0])?;
             let shape = operand_ty.shape();
@@ -1383,11 +1383,11 @@ impl CodeGenerator {
             let reg = self.emitter.emit_constant_f32(len as f64);
             Ok((reg, StableHLOType::ScalarF32))
         }
-        // static: deprecated identity — evaluate inner expression directly
+        // static: deprecated identity, evaluate inner expression directly
         else if name == "static" && args.len() == 1 {
             self.generate(&args[0])
         }
-        // assoc: (assoc tuple :k1 v1 :k2 v2 ...) — create new tuple with replaced elements
+        // assoc: (assoc tuple :k1 v1 :k2 v2 ...), create new tuple with replaced elements
         else if name == "assoc" && args.len() >= 3 && args.len() % 2 == 1 {
             let sym_name = if let CompiledExpr::Symbol(s) = &args[0] { Some(s.clone()) } else { None };
             let (base_reg, base_ty) = self.generate(&args[0])?;

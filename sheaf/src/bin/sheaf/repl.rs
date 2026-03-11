@@ -159,7 +159,7 @@ fn is_silent_result(val: &Value) -> bool {
 }
 
 pub fn run() {
-    println!("Sheaf {} — interactive REPL", env!("CARGO_PKG_VERSION"));
+    println!("Sheaf {}", env!("CARGO_PKG_VERSION"));
     println!("Type :help or :h for help, :quit or :q to exit.\n");
 
     let history_file = std::env::var_os("HOME")
@@ -517,7 +517,7 @@ fn print_symbol_help(name: &str) {
         } else if trimmed == "---" {
             // Skip separators
         } else if !trimmed.is_empty() {
-            // Description text — strip markdown
+            // Description text, strip markdown
             let clean = trimmed
                 .replace("**", "")
                 .replace('`', "");

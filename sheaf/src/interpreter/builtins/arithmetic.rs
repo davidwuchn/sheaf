@@ -48,7 +48,7 @@ fn builtin_mul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 fn builtin_div(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let result = binary_op(args, |a, b| a / b)?;
     match result {
-        Value::Int(n) => Ok(Value::Float(n as f64)),
+        Value::Int(n) => Ok(Value::Float(n as f32)),
         Value::Tensor { data, .. } => Ok(Value::Tensor { data, dtype: Dtype::F32 }),
         other => Ok(other),
     }
@@ -77,7 +77,7 @@ fn builtin_pow(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 2 => return binary_op(&[args[0].clone(), args[0].clone()], |a, b| a * b),
                 3 => return unary_op(&args[..1], |a| a * a * a),
                 _ => {
-                    let exp = n as f64;
+                    let exp = n as f32;
                     return binary_op(&[args[0].clone(), Value::Float(exp)], |a, b| a.powf(b));
                 }
             }
@@ -87,7 +87,7 @@ fn builtin_pow(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_abs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    unary_op(args, f64::abs)
+    unary_op(args, f32::abs)
 }
 
 fn builtin_ash(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
@@ -112,7 +112,7 @@ fn builtin_ash(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::Tensor { data, .. } => {
             let result = data.mapv(|x| {
                 let n = x as i64;
-                if shift >= 0 { (n << shift) as f64 } else { (n >> (-shift)) as f64 }
+                if shift >= 0 { (n << shift) as f32 } else { (n >> (-shift)) as f32 }
             });
             Ok(Value::Tensor { data: Arc::new(result), dtype: Dtype::I32 })
         }
@@ -121,7 +121,7 @@ fn builtin_ash(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_exp(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    unary_op(args, f64::exp)
+    unary_op(args, f32::exp)
 }
 
 fn builtin_log(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
@@ -129,7 +129,7 @@ fn builtin_log(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_sqrt(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    unary_op(args, f64::sqrt)
+    unary_op(args, f32::sqrt)
 }
 
 fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
@@ -258,9 +258,9 @@ fn expand_einsum_ellipsis(subscript: &str, shape_a: &[usize], shape_b: &[usize])
 /// can be expressed this way.
 fn try_einsum_as_matmul(
     idx_a: &[char], idx_b: &[char], idx_out: &[char],
-    a: &ArrayD<f64>, b: &ArrayD<f64>,
+    a: &ArrayD<f32>, b: &ArrayD<f32>,
     sizes: &std::collections::HashMap<char, usize>,
-) -> Option<ArrayD<f64>> {
+) -> Option<ArrayD<f32>> {
     use std::collections::HashSet;
     let a_set: HashSet<char> = idx_a.iter().copied().collect();
     let b_set: HashSet<char> = idx_b.iter().copied().collect();
@@ -342,14 +342,14 @@ fn try_einsum_as_matmul(
 
 fn einsum_naive(
     idx_a: &[char], idx_b: &[char], idx_out: &[char],
-    a: &ArrayD<f64>, b: &ArrayD<f64>,
+    a: &ArrayD<f32>, b: &ArrayD<f32>,
     sizes: &std::collections::HashMap<char, usize>,
-) -> ArrayD<f64> {
+) -> ArrayD<f32> {
     let out_shape: Vec<usize> = idx_out.iter()
         .map(|c| *sizes.get(c).unwrap_or(&1))
         .collect();
     let out_len: usize = out_shape.iter().product::<usize>().max(1);
-    let mut result = vec![0.0f64; out_len];
+    let mut result = vec![0.0f32; out_len];
 
     let mut all_labels: Vec<char> = idx_out.to_vec();
     for &c in idx_a.iter().chain(idx_b.iter()) {
@@ -377,8 +377,7 @@ fn einsum_naive(
             coords[k] = 0;
         }
     }
-    let result_f32: Vec<f64> = result.iter().map(|&x| (x as f32) as f64).collect();
-    ArrayD::from_shape_vec(IxDyn(&out_shape), result_f32).unwrap()
+    ArrayD::from_shape_vec(IxDyn(&out_shape), result).unwrap()
 }
 
 fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
@@ -418,7 +417,6 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let arr = try_einsum_as_matmul(&idx_a, &idx_b, &idx_out, &a, &b, &sizes)
         .unwrap_or_else(|| einsum_naive(&idx_a, &idx_b, &idx_out, &a, &b, &sizes));
 
-    let arr = arr.mapv(|x| (x as f32) as f64);
     if arr.ndim() == 0 {
         Ok(Value::Float(*arr.first().unwrap()))
     } else {
@@ -437,8 +435,8 @@ fn builtin_append_and_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let new_val = args[1].to_f64()
         .ok_or_else(|| runtime_error("append-and-roll: second argument must be a number"))?;
     let n = arr.shape()[0];
-    let mut data: Vec<f64> = arr.iter().skip(1).copied().collect();
-    data.push(new_val);
+    let mut data: Vec<f32> = arr.iter().skip(1).copied().collect();
+    data.push(new_val as f32);
     let result = ArrayD::from_shape_vec(IxDyn(&[n]), data).unwrap();
     Ok(Value::tensor_f32(result))
 }

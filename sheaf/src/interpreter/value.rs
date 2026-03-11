@@ -23,14 +23,14 @@ pub type BuiltinFnPtr = fn(&[Value], &BTreeMap<String, Value>) -> Result<Value, 
 #[derive(Clone)]
 pub enum Value {
     Int(i64),
-    Float(f64),
+    Float(f32),
     Bool(bool),
     Nil,
     String(String),
     Keyword(String),
-    Tensor { data: Arc<ArrayD<f64>>, dtype: Dtype },
+    Tensor { data: Arc<ArrayD<f32>>, dtype: Dtype },
     List(Vec<Value>),
-    /// Fixed-size heterogeneous tuple — output of VMFB calls and value-and-grad.
+    /// Fixed-size heterogeneous tuple. Output of VMFB calls and value-and-grad.
     /// Destructured with `let [[a b] expr]`.
     Tuple(Vec<Value>),
     Dict(BTreeMap<String, Value>),
@@ -61,6 +61,18 @@ impl Value {
     pub fn to_f64(&self) -> Option<f64> {
         match self {
             Value::Int(n) => Some(*n as f64),
+            Value::Float(f) => Some(*f as f64),
+            Value::Tensor { data, .. } if data.ndim() == 0 => data.first().map(|&x| x as f64),
+            Value::DeviceBuffer(db) if db.shape.is_empty() => {
+                db.to_host().ok().and_then(|a| a.first().map(|&x| x as f64))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn to_f32(&self) -> Option<f32> {
+        match self {
+            Value::Int(n) => Some(*n as f32),
             Value::Float(f) => Some(*f),
             Value::Tensor { data, .. } if data.ndim() == 0 => data.first().copied(),
             Value::DeviceBuffer(db) if db.shape.is_empty() => {
@@ -70,9 +82,9 @@ impl Value {
         }
     }
 
-    pub fn to_tensor(&self) -> Option<ArrayD<f64>> {
+    pub fn to_tensor(&self) -> Option<ArrayD<f32>> {
         match self {
-            Value::Int(n) => Some(ArrayD::from_elem(vec![], *n as f64)),
+            Value::Int(n) => Some(ArrayD::from_elem(vec![], *n as f32)),
             Value::Float(f) => Some(ArrayD::from_elem(vec![], *f)),
             Value::Tensor { data, .. } => Some((**data).clone()),
             Value::DeviceBuffer(db) => db.to_host().ok(),
@@ -100,11 +112,11 @@ impl Value {
         }
     }
 
-    pub fn tensor_f32(data: ArrayD<f64>) -> Self {
+    pub fn tensor_f32(data: ArrayD<f32>) -> Self {
         Value::Tensor { data: Arc::new(data), dtype: Dtype::F32 }
     }
 
-    pub fn tensor_i32(data: ArrayD<f64>) -> Self {
+    pub fn tensor_i32(data: ArrayD<f32>) -> Self {
         Value::Tensor { data: Arc::new(data), dtype: Dtype::I32 }
     }
 
@@ -149,7 +161,7 @@ impl fmt::Debug for Value {
     }
 }
 
-fn format_scalar_f64(x: f64) -> String {
+fn format_scalar_f32(x: f32) -> String {
     if x == x.floor() && x.abs() < 1e15 {
         format!("{}.0", x as i64)
     } else {
@@ -157,27 +169,23 @@ fn format_scalar_f64(x: f64) -> String {
     }
 }
 
-fn format_tensor_f64(x: f64) -> String {
-    // Format via f32 to match NumPy/JAX float32 display precision
-    let xf = x as f32;
-    if xf == xf.floor() && xf.abs() < 1e15 {
-        format!("{}.", xf as i64)
+fn format_tensor_f32(x: f32) -> String {
+    if x == x.floor() && x.abs() < 1e15 {
+        format!("{}.", x as i64)
     } else {
-        // Rust f32 Display uses minimum digits needed to uniquely represent the value,
-        // which matches NumPy's default float32 formatting
-        format!("{}", xf)
+        format!("{}", x)
     }
 }
 
-fn format_element(x: f64, dtype: Dtype) -> String {
+fn format_element(x: f32, dtype: Dtype) -> String {
     match dtype {
-        Dtype::I32 => format!("{}", x as i64),
-        Dtype::F32 => format_tensor_f64(x),
+        Dtype::I32 => format!("{}", x as i32),
+        Dtype::F32 => format_tensor_f32(x),
         Dtype::Bool => if x != 0.0 { " True".to_string() } else { "False".to_string() },
     }
 }
 
-fn format_tensor_1d(data: &[f64], dtype: Dtype) -> String {
+fn format_tensor_1d(data: &[f32], dtype: Dtype) -> String {
     let formatted: Vec<String> = data.iter().map(|&x| format_element(x, dtype)).collect();
     let max_width = formatted.iter().map(|s| s.len()).max().unwrap_or(0);
     let padded: Vec<String> = formatted.iter().map(|s| {
@@ -186,14 +194,14 @@ fn format_tensor_1d(data: &[f64], dtype: Dtype) -> String {
     format!("[{}]", padded.join(" "))
 }
 
-fn format_tensor_nd(arr: &ArrayD<f64>, dtype: Dtype) -> String {
+fn format_tensor_nd(arr: &ArrayD<f32>, dtype: Dtype) -> String {
     let shape = arr.shape();
     match shape.len() {
         0 => {
             let x = arr.first().copied().unwrap_or(0.0);
             match dtype {
-                Dtype::I32 => format!("{}", x as i64),
-                Dtype::F32 => format_tensor_f64(x),
+                Dtype::I32 => format!("{}", x as i32),
+                Dtype::F32 => format_tensor_f32(x),
                 Dtype::Bool => if x != 0.0 { "True".to_string() } else { "False".to_string() },
             }
         }
@@ -209,7 +217,7 @@ fn format_tensor_nd(arr: &ArrayD<f64>, dtype: Dtype) -> String {
     }
 }
 
-fn format_tensor_2d(arr: &ArrayD<f64>, dtype: Dtype) -> String {
+fn format_tensor_2d(arr: &ArrayD<f32>, dtype: Dtype) -> String {
     let shape = arr.shape();
     let (nrows, ncols) = (shape[0], shape[1]);
     let all_formatted: Vec<Vec<String>> = (0..nrows).map(|r| {
@@ -231,7 +239,7 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Int(n) => write!(f, "{}", n),
-            Value::Float(x) => write!(f, "{}", format_scalar_f64(*x)),
+            Value::Float(x) => write!(f, "{}", format_scalar_f32(*x)),
             Value::Bool(true) => write!(f, "True"),
             Value::Bool(false) => write!(f, "False"),
             Value::Nil => write!(f, "nil"),

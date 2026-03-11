@@ -57,13 +57,13 @@ fn builtin_random_split(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     Ok(Value::List(keys))
 }
 
-fn splitmix64(state: &mut u64) -> f64 {
+fn splitmix64(state: &mut u64) -> f32 {
     *state = state.wrapping_add(0x9e3779b97f4a7c15);
     let mut z = *state;
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
     z = z ^ (z >> 31);
-    (z >> 11) as f64 / (1u64 << 53) as f64
+    (z >> 11) as f32 / (1u64 << 53) as f32
 }
 
 fn builtin_random_normal(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
@@ -78,10 +78,10 @@ fn builtin_random_normal(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     while i < n {
         let u1 = splitmix64(&mut state).max(1e-10);
         let u2 = splitmix64(&mut state);
-        let r = (-2.0 * u1.ln()).sqrt();
-        let theta = 2.0 * std::f64::consts::PI * u2;
-        data.push((r * theta.cos()) as f64);
-        if i + 1 < n { data.push((r * theta.sin()) as f64); }
+        let r = (-2.0f32 * u1.ln()).sqrt();
+        let theta = 2.0f32 * std::f32::consts::PI * u2;
+        data.push(r * theta.cos());
+        if i + 1 < n { data.push(r * theta.sin()); }
         i += 2;
     }
     data.truncate(n);
@@ -97,7 +97,7 @@ fn builtin_random_uniform(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let mut state = key_to_seed(&args[0]);
     let shape = parse_shape(&args[1])?;
     let n: usize = shape.iter().product();
-    let data: Vec<f64> = (0..n).map(|_| splitmix64(&mut state)).collect();
+    let data: Vec<f32> = (0..n).map(|_| splitmix64(&mut state)).collect();
     let arr = ArrayD::from_shape_vec(IxDyn(&shape), data)
         .map_err(|e| runtime_error(format!("random-uniform: shape error: {}", e)))?;
     Ok(Value::tensor_f32(arr))
@@ -124,11 +124,11 @@ fn builtin_random_randint(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     }
     let range = (high - low) as u64;
     let n: usize = shape.iter().product();
-    let data: Vec<f64> = (0..n)
+    let data: Vec<f32> = (0..n)
         .map(|_| {
             let u = splitmix64(&mut state);
-            let idx = (u * range as f64) as i64;
-            (low + idx.min(high - low - 1)) as f64
+            let idx = (u * range as f32) as i64;
+            (low + idx.min(high - low - 1)) as f32
         })
         .collect();
     let arr = ArrayD::from_shape_vec(IxDyn(&shape), data)
@@ -163,7 +163,7 @@ fn builtin_choice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let u = splitmix64(&mut state);
     match probs {
         Some(Value::Tensor { data, .. }) => {
-            let mut cumsum = 0.0;
+            let mut cumsum = 0.0f32;
             for (i, &p) in data.iter().enumerate() {
                 cumsum += p;
                 if u < cumsum {
@@ -173,8 +173,8 @@ fn builtin_choice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             Ok(Value::Int((data.len() - 1) as i64))
         }
         Some(Value::List(items)) => {
-            let flat: Vec<f64> = items.iter().filter_map(|v| v.to_f64()).collect();
-            let mut cumsum = 0.0;
+            let flat: Vec<f32> = items.iter().filter_map(|v| v.to_f64().map(|x| x as f32)).collect();
+            let mut cumsum = 0.0f32;
             for (i, &p) in flat.iter().enumerate() {
                 cumsum += p;
                 if u < cumsum {
@@ -184,7 +184,7 @@ fn builtin_choice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             Ok(Value::Int((flat.len() - 1) as i64))
         }
         None => {
-            Ok(Value::Int((u * n as f64) as i64))
+            Ok(Value::Int((u * n as f32) as i64))
         }
         _ => Err(runtime_error("choice: :p must be a tensor or list of probabilities")),
     }
@@ -201,12 +201,12 @@ fn builtin_top_k(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::Tensor { data, .. } if data.ndim() == 0 => *data.first().unwrap() as usize,
         _ => return Err(runtime_error("top_k: k must be integer")),
     };
-    let flat: Vec<f64> = arr.iter().copied().collect();
-    let mut indexed: Vec<(usize, f64)> = flat.into_iter().enumerate().collect();
+    let flat: Vec<f32> = arr.iter().copied().collect();
+    let mut indexed: Vec<(usize, f32)> = flat.into_iter().enumerate().collect();
     indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let k = k.min(indexed.len());
-    let top_vals: Vec<f64> = indexed[..k].iter().map(|(_, v)| *v).collect();
-    let top_idxs: Vec<f64> = indexed[..k].iter().map(|(i, _)| *i as f64).collect();
+    let top_vals: Vec<f32> = indexed[..k].iter().map(|(_, v)| *v).collect();
+    let top_idxs: Vec<f32> = indexed[..k].iter().map(|(i, _)| *i as f32).collect();
     let vals = ArrayD::from_shape_vec(IxDyn(&[k]), top_vals)
         .map_err(|e| runtime_error(format!("top_k: {}", e)))?;
     let idxs = ArrayD::from_shape_vec(IxDyn(&[k]), top_idxs)

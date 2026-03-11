@@ -61,13 +61,13 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let axis = get_axis(kw).unwrap_or(0) as usize;
     let has_axis_kw = kw.contains_key("axis");
 
-    let maybe_arrays: Option<Vec<(ArrayD<f64>, Dtype)>> = args.iter().map(|a| list_to_tensor(a)).collect();
+    let maybe_arrays: Option<Vec<(ArrayD<f32>, Dtype)>> = args.iter().map(|a| list_to_tensor(a)).collect();
 
     if let Some(arrays) = maybe_arrays {
         if has_axis_kw || args.iter().any(|a| matches!(a, Value::Tensor { .. })) {
             let all_i32 = arrays.iter().all(|(_, dt)| *dt == Dtype::I32);
             let dtype = if all_i32 { Dtype::I32 } else { Dtype::F32 };
-            let views: Vec<ndarray::ArrayViewD<f64>> = arrays.iter().map(|(a, _)| a.view()).collect();
+            let views: Vec<ndarray::ArrayViewD<f32>> = arrays.iter().map(|(a, _)| a.view()).collect();
             let result = ndarray::concatenate(ndarray::Axis(axis), &views)
                 .map_err(|e| runtime_error(e.to_string()))?;
             return Ok(Value::Tensor { data: Arc::new(result), dtype });
@@ -96,10 +96,10 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         return Ok(Value::List(all_items));
     }
 
-    let arrays: Vec<ArrayD<f64>> = args.iter().map(|a| {
+    let arrays: Vec<ArrayD<f32>> = args.iter().map(|a| {
         to_array(a).map(|(arr, _)| arr)
     }).collect::<Result<Vec<_>, _>>()?;
-    let views: Vec<ndarray::ArrayViewD<f64>> = arrays.iter().map(|a| a.view()).collect();
+    let views: Vec<ndarray::ArrayViewD<f32>> = arrays.iter().map(|a| a.view()).collect();
     let result = ndarray::concatenate(ndarray::Axis(axis), &views)
         .map_err(|e| runtime_error(e.to_string()))?;
     Ok(Value::tensor_f32(result))
@@ -269,7 +269,7 @@ fn builtin_where(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 fn builtin_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (arr, _dt) = to_array(&args[0])?;
     let shift = args[1].to_f64().unwrap() as i64;
-    let data: Vec<f64> = arr.iter().copied().collect();
+    let data: Vec<f32> = arr.iter().copied().collect();
     let n = data.len() as i64;
     let shift = ((shift % n) + n) % n;
     let mut result = vec![0.0; data.len()];
@@ -289,7 +289,7 @@ fn builtin_index_update(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             slice.assign(new_val);
         }
         other => {
-            let v = other.to_f64().unwrap();
+            let v = other.to_f64().unwrap() as f32;
             arr[IxDyn(&[idx])] = v;
         }
     }

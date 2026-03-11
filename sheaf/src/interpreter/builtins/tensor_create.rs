@@ -30,7 +30,7 @@ fn builtin_arange(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let mut data = Vec::new();
     let mut i = start;
     while (step > 0 && i < stop) || (step < 0 && i > stop) {
-        data.push(i as f64);
+        data.push(i as f32);
         i += step;
     }
     Ok(Value::tensor_i32(ArrayD::from_shape_vec(IxDyn(&[data.len()]), data).unwrap()))
@@ -85,7 +85,7 @@ fn builtin_tensor(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::List(items) => {
             let all_numeric = items.iter().all(|v| matches!(v, Value::Int(_) | Value::Float(_)));
             if all_numeric && !items.is_empty() {
-                let data: Vec<f64> = items.iter().map(|v| v.to_f64().unwrap()).collect();
+                let data: Vec<f32> = items.iter().map(|v| v.to_f64().unwrap() as f32).collect();
                 let arr = ArrayD::from_shape_vec(IxDyn(&[data.len()]), data).unwrap();
                 Ok(Value::tensor_f32(arr))
             } else {

@@ -91,9 +91,9 @@ fn format_value_with_spec(val: &Value, spec: &str) -> String {
         if let Some(prec_str) = rest.strip_suffix('f') {
             if let Ok(prec) = prec_str.parse::<usize>() {
                 let f = match val {
-                    Value::Float(x) => *x,
+                    Value::Float(x) => *x as f64,
                     Value::Int(n) => *n as f64,
-                    Value::Tensor { data, .. } => data.first().copied().unwrap_or(0.0),
+                    Value::Tensor { data, .. } => data.first().copied().unwrap_or(0.0) as f64,
                     _ => return format!("{}", val),
                 };
                 return format!("{:.prec$}", f, prec = prec);
@@ -262,7 +262,7 @@ fn value_to_json(val: &Value) -> Result<serde_json::Value, crate::core::error::S
         }
         Value::Tensor { data, dtype } => {
             let shape: Vec<usize> = data.shape().to_vec();
-            let flat: Vec<f64> = data.iter().copied().collect();
+            let flat: Vec<f32> = data.iter().copied().collect();
             let dtype_str = match dtype {
                 Dtype::F32 => "f32",
                 Dtype::I32 => "i32",
@@ -293,7 +293,7 @@ fn json_to_value(json: &serde_json::Value) -> Result<Value, crate::core::error::
             if let Some(i) = n.as_i64() {
                 Ok(Value::Int(i))
             } else if let Some(f) = n.as_f64() {
-                Ok(Value::Float(f))
+                Ok(Value::Float(f as f32))
             } else {
                 Err(runtime_error("io load: invalid number"))
             }
@@ -309,9 +309,9 @@ fn json_to_value(json: &serde_json::Value) -> Result<Value, crate::core::error::
                     .and_then(|v| v.as_array())
                     .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as usize)).collect())
                     .unwrap_or_default();
-                let flat: Vec<f64> = obj.get("data")
+                let flat: Vec<f32> = obj.get("data")
                     .and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|x| x.as_f64()).collect())
+                    .map(|a| a.iter().filter_map(|x| x.as_f64().map(|v| v as f32)).collect())
                     .unwrap_or_default();
                 let dtype = match obj.get("dtype").and_then(|v| v.as_str()) {
                     Some("i32") => Dtype::I32,

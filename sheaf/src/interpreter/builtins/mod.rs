@@ -43,17 +43,17 @@ pub fn register_builtins(env: &mut Env) {
 /// Negative indices wrap from the end: -1 → len-1, -2 → len-2, etc.
 pub(self) fn resolve_idx(f: f64, len: usize) -> usize {
     if f < 0.0 {
-        (len as f64 + f) as usize
+        (len as i64 + f as i64) as usize
     } else {
         f as usize
     }
 }
 
-pub(self) fn to_array(val: &Value) -> Result<(ArrayD<f64>, Dtype), crate::core::error::SheafError> {
+pub(self) fn to_array(val: &Value) -> Result<(ArrayD<f32>, Dtype), crate::core::error::SheafError> {
     match val {
-        Value::Int(n) => Ok((ArrayD::from_elem(IxDyn(&[]), *n as f64), Dtype::I32)),
+        Value::Int(n) => Ok((ArrayD::from_elem(IxDyn(&[]), *n as f32), Dtype::I32)),
         Value::Float(f) => Ok((ArrayD::from_elem(IxDyn(&[]), *f), Dtype::F32)),
-        Value::Bool(b) => Ok((ArrayD::from_elem(IxDyn(&[]), if *b { 1.0 } else { 0.0 }), Dtype::I32)),
+        Value::Bool(b) => Ok((ArrayD::from_elem(IxDyn(&[]), if *b { 1.0f32 } else { 0.0f32 }), Dtype::I32)),
         Value::Tensor { data, dtype } => Ok(((**data).clone(), *dtype)),
         Value::DeviceBuffer(db) => {
             let data = db.to_host().map_err(|e| runtime_error(format!("materialize: {}", e)))?;
@@ -82,7 +82,7 @@ pub(self) fn result_dtype(a: Dtype, b: Dtype) -> Dtype {
     if a == Dtype::F32 || b == Dtype::F32 { Dtype::F32 } else if a == Dtype::Bool && b == Dtype::Bool { Dtype::Bool } else { Dtype::I32 }
 }
 
-pub(self) fn binary_op(args: &[Value], op: fn(f64, f64) -> f64) -> R {
+pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
     if args.len() < 2 {
         return Err(runtime_error("Binary operation requires at least 2 arguments"));
     }
@@ -99,7 +99,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f64, f64) -> f64) -> R {
         // Borrow RHS from Arc when possible, avoiding clone
         match arg {
             Value::Int(n) => {
-                let s = *n as f64;
+                let s = *n as f32;
                 dt = result_dtype(dt, Dtype::I32);
                 if acc.ndim() == 0 {
                     acc = ArrayD::from_elem(IxDyn(&[]), op(*acc.first().unwrap(), s));
@@ -108,7 +108,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f64, f64) -> f64) -> R {
                 }
             }
             Value::Float(f) => {
-                let s = *f;
+                let s = *f as f32;
                 dt = result_dtype(dt, Dtype::F32);
                 if acc.ndim() == 0 {
                     acc = ArrayD::from_elem(IxDyn(&[]), op(*acc.first().unwrap(), s));
@@ -163,7 +163,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f64, f64) -> f64) -> R {
 
 /// Zero-clone fast path for binary ops with exactly 2 arguments.
 /// Borrows tensor data directly from Arc instead of cloning.
-fn binary_op_two(a: &Value, b: &Value, op: fn(f64, f64) -> f64) -> R {
+fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
     // Materialize DeviceBuffers to host for arithmetic
     let a_host;
     let b_host;
@@ -237,9 +237,9 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f64, f64) -> f64) -> R {
     Err(runtime_error(format!("Expected numeric values, got {} and {}", a.type_name(), b.type_name())))
 }
 
-fn scalar_of(v: &Value) -> Option<f64> {
+fn scalar_of(v: &Value) -> Option<f32> {
     match v {
-        Value::Int(n) => Some(*n as f64),
+        Value::Int(n) => Some(*n as f32),
         Value::Float(f) => Some(*f),
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
         _ => None,
@@ -254,7 +254,7 @@ fn dtype_of(v: &Value) -> Dtype {
     }
 }
 
-pub(self) fn unary_op(args: &[Value], op: fn(f64) -> f64) -> R {
+pub(self) fn unary_op(args: &[Value], op: fn(f32) -> f32) -> R {
     if args.is_empty() {
         return Err(runtime_error("Unary operation requires at least 1 argument"));
     }
@@ -272,7 +272,7 @@ pub(self) fn unary_op_f32(args: &[Value], op: fn(f32) -> f32) -> R {
         return Err(runtime_error("Unary operation requires at least 1 argument"));
     }
     let (arr, _dt) = to_array(&args[0])?;
-    let result = arr.mapv(|x| op(x as f32) as f64);
+    let result = arr.mapv(op);
     if result.ndim() == 0 {
         Ok(Value::Float(*result.first().unwrap()))
     } else {
@@ -288,16 +288,16 @@ pub(self) fn get_axis(kw: &BTreeMap<String, Value>) -> Option<i64> {
     })
 }
 
-pub(self) fn reduce_along_axis(arr: &ArrayD<f64>, axis: usize, op: fn(&[f64]) -> f64) -> ArrayD<f64> {
+pub(self) fn reduce_along_axis(arr: &ArrayD<f32>, axis: usize, op: fn(&[f32]) -> f32) -> ArrayD<f32> {
     let shape = arr.shape();
     if shape.is_empty() || axis >= shape.len() {
-        let data: Vec<f64> = arr.iter().copied().collect();
+        let data: Vec<f32> = arr.iter().copied().collect();
         return ArrayD::from_elem(IxDyn(&[]), op(&data));
     }
     let mut new_shape: Vec<usize> = shape.to_vec();
     new_shape.remove(axis);
     if new_shape.is_empty() {
-        let data: Vec<f64> = arr.iter().copied().collect();
+        let data: Vec<f32> = arr.iter().copied().collect();
         return ArrayD::from_elem(IxDyn(&[]), op(&data));
     }
     let total = new_shape.iter().product::<usize>();
@@ -315,14 +315,14 @@ pub(self) fn reduce_along_axis(arr: &ArrayD<f64>, axis: usize, op: fn(&[f64]) ->
     ArrayD::from_shape_vec(IxDyn(&new_shape), result_data).unwrap()
 }
 
-pub(self) fn argreduce_along_axis(arr: &ArrayD<f64>, axis: usize, cmp: fn(f64, f64) -> bool) -> ArrayD<f64> {
+pub(self) fn argreduce_along_axis(arr: &ArrayD<f32>, axis: usize, cmp: fn(f32, f32) -> bool) -> ArrayD<f32> {
     let shape = arr.shape();
     let mut new_shape: Vec<usize> = shape.to_vec();
     new_shape.remove(axis);
     if new_shape.is_empty() {
-        let data: Vec<f64> = arr.iter().copied().collect();
+        let data: Vec<f32> = arr.iter().copied().collect();
         let idx = data.iter().enumerate().fold(0, |best, (i, &x)| if cmp(x, data[best]) { i } else { best });
-        return ArrayD::from_elem(IxDyn(&[]), idx as f64);
+        return ArrayD::from_elem(IxDyn(&[]), idx as f32);
     }
     let total = new_shape.iter().product::<usize>();
     let mut result_data = Vec::with_capacity(total);
@@ -340,7 +340,7 @@ pub(self) fn argreduce_along_axis(arr: &ArrayD<f64>, axis: usize, cmp: fn(f64, f
                 best_idx = k;
             }
         }
-        result_data.push(best_idx as f64);
+        result_data.push(best_idx as f32);
     }
     ArrayD::from_shape_vec(IxDyn(&new_shape), result_data).unwrap()
 }
@@ -361,22 +361,22 @@ pub(self) fn shape_from_value(val: &Value) -> Result<Vec<usize>, crate::core::er
     }
 }
 
-pub(self) fn list_to_tensor(v: &Value) -> Option<(ArrayD<f64>, Dtype)> {
+pub(self) fn list_to_tensor(v: &Value) -> Option<(ArrayD<f32>, Dtype)> {
     match v {
         Value::Tensor { data, dtype } => Some(((**data).clone(), *dtype)),
         Value::List(items) => {
             let all_int = items.iter().all(|x| matches!(x, Value::Int(_)));
-            let nums: Option<Vec<f64>> = items.iter().map(|x| x.to_f64()).collect();
+            let nums: Option<Vec<f32>> = items.iter().map(|x| x.to_f64().map(|v| v as f32)).collect();
             if let Some(data) = nums {
                 let dtype = if all_int { Dtype::I32 } else { Dtype::F32 };
                 return ArrayD::from_shape_vec(IxDyn(&[data.len()]), data).ok()
                     .map(|a| (a, dtype));
             }
-            let rows: Option<Vec<(ArrayD<f64>, Dtype)>> = items.iter().map(list_to_tensor).collect();
+            let rows: Option<Vec<(ArrayD<f32>, Dtype)>> = items.iter().map(list_to_tensor).collect();
             if let Some(rows) = rows {
                 let all_i32 = rows.iter().all(|(_, dt)| *dt == Dtype::I32);
                 let dtype = if all_i32 { Dtype::I32 } else { Dtype::F32 };
-                let stacked: Option<ArrayD<f64>> = ndarray::concatenate(
+                let stacked: Option<ArrayD<f32>> = ndarray::concatenate(
                     ndarray::Axis(0),
                     &rows.iter().map(|(r, _)| r.view().insert_axis(ndarray::Axis(0))).collect::<Vec<_>>()
                 ).ok();
@@ -389,7 +389,7 @@ pub(self) fn list_to_tensor(v: &Value) -> Option<(ArrayD<f64>, Dtype)> {
     }
 }
 
-pub(self) fn cmp_op(args: &[Value], op: fn(f64, f64) -> f64, _dt: Dtype) -> R {
+pub(self) fn cmp_op(args: &[Value], op: fn(f32, f32) -> f32, _dt: Dtype) -> R {
     if args.len() != 2 { return Err(runtime_error("Comparison requires 2 arguments")); }
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
@@ -411,6 +411,6 @@ pub(self) fn cmp_op(args: &[Value], op: fn(f64, f64) -> f64, _dt: Dtype) -> R {
     Ok(bool_tensor(result))
 }
 
-pub(self) fn bool_tensor(data: ArrayD<f64>) -> Value {
+pub(self) fn bool_tensor(data: ArrayD<f32>) -> Value {
     Value::Tensor { data: Arc::new(data), dtype: Dtype::Bool }
 }

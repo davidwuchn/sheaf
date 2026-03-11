@@ -256,7 +256,7 @@ fn run_init_ai() {
 
     let output = std::path::Path::new("sheaf-context.md");
     if output.exists() {
-        eprintln!("sheaf-context.md already exists — overwrite? [y/N] ");
+        eprintln!("sheaf-context.md already exists: overwrite? [y/N] ");
         let mut answer = String::new();
         if std::io::stdin().read_line(&mut answer).is_err() || !answer.trim().eq_ignore_ascii_case("y") {
             eprintln!("Aborted.");
