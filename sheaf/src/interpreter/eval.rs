@@ -43,38 +43,6 @@ pub fn eval_source_with_path(
     for expr in &exprs {
         compiled.push(compiler.compile(expr)?);
     }
-    // Hint: if all defn bodies defined directly in this file are side-effect-free,
-    // suggest compilation. Imported functions (from `use`) are excluded.
-    if file_path.is_some() {
-        let local_defns: Vec<&str> = exprs
-            .iter()
-            .filter_map(|e| {
-                e.as_list()
-                    .and_then(|l| l.first())
-                    .and_then(|h| h.as_symbol())
-                    .filter(|&s| s == "defn")
-                    .and_then(|_| {
-                        e.as_list()
-                            .and_then(|l| l.get(1))
-                            .and_then(|n| n.as_symbol())
-                    })
-            })
-            .collect();
-        let has_any_defn = !local_defns.is_empty();
-        let all_pure = has_any_defn
-            && local_defns.iter().all(|name| {
-                compiler
-                    .registry
-                    .get(*name)
-                    .and_then(|f| f.body_compiled.as_ref())
-                    .map(|b| !has_side_effects(b))
-                    .unwrap_or(true)
-            });
-        if all_pure {
-            eprintln!("hint: pure functions detected — run `sheaf build` to compile them");
-        }
-    }
-
     // Auto-detect companion VMFB for the file being run
     #[cfg(iree_runtime)]
     if let Some(path) = file_path {
