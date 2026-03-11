@@ -187,8 +187,8 @@ fn param_layout_to_dummy_value(layout: &ParamLayout) -> Value {
 pub fn value_to_stablehlo_type(val: &Value) -> SheafResult<StableHLOType> {
     match val {
         Value::Float(_) => Ok(StableHLOType::scalar_f32()),
-        Value::Int(_) => Ok(StableHLOType::ScalarI64),
-        Value::Bool(_) => Ok(StableHLOType::ScalarI1),
+        Value::Int(_) => Ok(StableHLOType::scalar_f32()),
+        Value::Bool(_) => Ok(StableHLOType::scalar_f32()),
         Value::Tensor { data, .. } => {
             let shape: Vec<i64> = data.shape().iter().map(|&d| d as i64).collect();
             if shape.is_empty() {

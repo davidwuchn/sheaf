@@ -45,6 +45,13 @@ impl StableHLOType {
         }
     }
 
+    pub fn i32_tensor(shape: impl Into<Vec<i64>>) -> Self {
+        Self::Tensor {
+            shape: shape.into(),
+            dtype: "i32".to_string(),
+        }
+    }
+
     pub fn i64_tensor(shape: impl Into<Vec<i64>>) -> Self {
         Self::Tensor {
             shape: shape.into(),
@@ -292,7 +299,20 @@ impl StableHLOEmitter {
         reg
     }
 
-    /// Emit a constant integer
+    /// Emit a constant i32 scalar
+    pub fn emit_constant_i32(&mut self, value: i64) -> Register {
+        let reg = self.fresh_register();
+        let ty = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+        self.body.push(format!(
+            "    {} = stablehlo.constant dense<{}> : {}",
+            reg.to_mlir(),
+            value,
+            ty.to_mlir()
+        ));
+        reg
+    }
+
+    /// Emit a constant integer (i64)
     pub fn emit_constant_i64(&mut self, value: i64) -> Register {
         let reg = self.fresh_register();
         let ty = StableHLOType::ScalarI64;
@@ -303,6 +323,19 @@ impl StableHLOEmitter {
             ty.to_mlir()
         ));
         reg
+    }
+
+    /// Convert a tensor from one type to another (e.g. i1→f32, f32→i32)
+    pub fn emit_convert(&mut self, reg: &Register, from_ty: &StableHLOType, to_ty: &StableHLOType) -> Register {
+        let result = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.convert {} : ({}) -> {}",
+            result.to_mlir(),
+            reg.to_mlir(),
+            from_ty.to_mlir(),
+            to_ty.to_mlir(),
+        ));
+        result
     }
 
     /// Emit a tensor constant from a nested vector

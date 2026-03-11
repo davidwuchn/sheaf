@@ -214,9 +214,9 @@ impl StableHLOEmitter {
         let cond_shape = condition_ty.shape();
         let result_shape = broadcast_result_shape(x_shape, y_shape, cond_shape);
 
-        // Broadcast condition to i1 tensor matching result shape if needed
+        // Broadcast condition in f32 (comparisons return f32 0.0/1.0)
         let (actual_cond, actual_cond_ty) = if cond_shape != result_shape.as_slice() {
-            let target = StableHLOType::i1_tensor(result_shape.clone());
+            let target = StableHLOType::f32_tensor(result_shape.clone());
             let r = self.emit_broadcast(condition, condition_ty, &target);
             (r, target)
         } else {
@@ -306,41 +306,15 @@ impl StableHLOEmitter {
         ));
 
         // Compare: row_idx >= col_idx (i >= j for lower triangle)
-        let mask = self.fresh_register();
-        let mask_ty = StableHLOType::i1_tensor(vec![m, n]);
-        self.body.push(format!(
-            "    {} = \"stablehlo.compare\"({}, {}) {{",
-            mask.to_mlir(),
-            row_iota.to_mlir(),
-            col_iota.to_mlir()
-        ));
-        self.body
-            .push("      comparison_direction = #stablehlo<comparison_direction GE>,".to_string());
-        self.body
-            .push("      compare_type = #stablehlo<comparison_type FLOAT>".to_string());
-        self.body.push(format!(
-            "    }} : ({}, {}) -> {}",
-            row_iota_ty.to_mlir(),
-            col_iota_ty.to_mlir(),
-            mask_ty.to_mlir()
-        ));
+        // emit_compare returns f32 (0.0/1.0)
+        let (mask, _mask_ty) = self.emit_compare(">=", &row_iota, &col_iota, &row_iota_ty, &col_iota_ty);
 
-        // Create zero tensor for the false branch
-        let zero_reg = self.fresh_register();
+        // Multiply: operand * mask_f32 (zeros out upper triangle)
         self.body.push(format!(
-            "    {} = stablehlo.constant dense<0.0> : {}",
-            zero_reg.to_mlir(),
-            result_ty.to_mlir()
-        ));
-
-        // Select: where mask is true, use operand, else use zero
-        self.body.push(format!(
-            "    {} = stablehlo.select {}, {}, {} : {}, {}",
+            "    {} = stablehlo.multiply {}, {} : {}",
             reg.to_mlir(),
-            mask.to_mlir(),
             operand.to_mlir(),
-            zero_reg.to_mlir(),
-            mask_ty.to_mlir(),
+            mask.to_mlir(),
             result_ty.to_mlir()
         ));
 
@@ -660,7 +634,8 @@ impl StableHLOEmitter {
                 update_ty.to_mlir(),
             ));
 
-            let idx_reg = self.emit_constant_i64(index);
+            let idx_reg = self.emit_constant_i32(index);
+            let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
             let result_reg = self.fresh_register();
             self.body.push(format!(
                 "    {} = stablehlo.dynamic_update_slice {}, {}, {} : ({}, {}, {}) -> {}",
@@ -670,7 +645,7 @@ impl StableHLOEmitter {
                 idx_reg.to_mlir(),
                 input_ty.to_mlir(),
                 update_ty.to_mlir(),
-                StableHLOType::ScalarI64.to_mlir(),
+                scalar_i32.to_mlir(),
                 input_ty.to_mlir(),
             ));
             (result_reg, input_ty.clone())
@@ -687,17 +662,18 @@ impl StableHLOEmitter {
             ));
 
             // Start indices: [index, 0, 0, ...]
-            let idx_reg = self.emit_constant_i64(index);
-            let zero_idx = self.emit_constant_i64(0);
+            let idx_reg = self.emit_constant_i32(index);
+            let zero_idx = self.emit_constant_i32(0);
+            let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
             let mut start_regs = vec![idx_reg.to_mlir()];
             for _ in 1..ndim {
                 start_regs.push(zero_idx.to_mlir());
             }
             let start_str = start_regs.join(", ");
 
-            let mut start_types = vec![StableHLOType::ScalarI64.to_mlir()];
+            let mut start_types = vec![scalar_i32.to_mlir()];
             for _ in 1..ndim {
-                start_types.push(StableHLOType::ScalarI64.to_mlir());
+                start_types.push(scalar_i32.to_mlir());
             }
             let start_types_str = start_types.join(", ");
 
@@ -805,27 +781,20 @@ impl StableHLOEmitter {
         let operand_shape = operand_ty.shape();
         let indices_shape = indices_ty.shape();
 
-        // Convert indices to i64 (Sheaf tensors are f32)
-        let indices_i64_reg = self.fresh_register();
-        let indices_i64_ty = StableHLOType::i64_tensor(indices_shape.to_vec());
-        self.body.push(format!(
-            "    {} = stablehlo.convert {} : ({}) -> {}",
-            indices_i64_reg.to_mlir(),
-            indices.to_mlir(),
-            indices_ty.to_mlir(),
-            indices_i64_ty.to_mlir(),
-        ));
+        // Convert indices to i32 (Sheaf tensors are f32; i32 avoids SPIRV crash)
+        let indices_int_ty = StableHLOType::i32_tensor(indices_shape.to_vec());
+        let indices_int_reg = self.emit_convert(indices, indices_ty, &indices_int_ty);
 
         // Reshape indices to add trailing index_vector_dim: [I1, I2, ...] → [I1, I2, ..., 1]
         let mut reshaped_shape: Vec<i64> = indices_shape.to_vec();
         reshaped_shape.push(1);
         let indices_3d_reg = self.fresh_register();
-        let indices_3d_ty = StableHLOType::i64_tensor(reshaped_shape.clone());
+        let indices_3d_ty = StableHLOType::i32_tensor(reshaped_shape.clone());
         self.body.push(format!(
             "    {} = stablehlo.reshape {} : ({}) -> {}",
             indices_3d_reg.to_mlir(),
-            indices_i64_reg.to_mlir(),
-            indices_i64_ty.to_mlir(),
+            indices_int_reg.to_mlir(),
+            indices_int_ty.to_mlir(),
             indices_3d_ty.to_mlir(),
         ));
 

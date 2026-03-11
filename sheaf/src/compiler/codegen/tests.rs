@@ -43,8 +43,8 @@ fn test_generate_compare() {
     let result = codegen.generate(&expr);
     assert!(result.is_ok());
     let (_, ty) = result.unwrap();
-    // Result should be i1 type (boolean results)
-    assert!(matches!(ty, StableHLOType::ScalarI1));
+    // Comparisons return f32 (0.0/1.0) to avoid SPIRV i1 issues
+    assert!(matches!(ty, StableHLOType::ScalarF32));
 }
 
 #[test]
@@ -57,8 +57,9 @@ fn test_emit_compare() {
     let mlir = codegen.emit_function("test_eq", &expr);
     assert!(mlir.is_ok());
     let mlir_str = mlir.unwrap();
-    assert!(mlir_str.contains("stablehlo.compare"));
-    assert!(mlir_str.contains("comparison_direction = #stablehlo<comparison_direction EQ>"));
+    // EQ uses abs + minimum (f32-only, no stablehlo.compare)
+    assert!(mlir_str.contains("stablehlo.abs"));
+    assert!(mlir_str.contains("stablehlo.minimum"));
 }
 
 #[test]
@@ -80,8 +81,9 @@ fn test_emit_boolean_and() {
     let mlir = codegen.emit_function("test_and", &expr);
     assert!(mlir.is_ok());
     let mlir_str = mlir.unwrap();
-    assert!(mlir_str.contains("stablehlo.compare"));
-    assert!(mlir_str.contains("stablehlo.and"));
+    // Comparisons use sign+clamp (f32-only), AND uses multiply
+    assert!(mlir_str.contains("stablehlo.sign"));
+    assert!(mlir_str.contains("stablehlo.multiply"));
 }
 
 #[test]
@@ -97,6 +99,7 @@ fn test_emit_boolean_not() {
     let mlir = codegen.emit_function("test_not", &expr);
     assert!(mlir.is_ok());
     let mlir_str = mlir.unwrap();
-    assert!(mlir_str.contains("stablehlo.compare"));
-    assert!(mlir_str.contains("stablehlo.not"));
+    // Comparison uses sign+clamp (f32-only), NOT uses subtract
+    assert!(mlir_str.contains("stablehlo.sign"));
+    assert!(mlir_str.contains("stablehlo.subtract"));
 }

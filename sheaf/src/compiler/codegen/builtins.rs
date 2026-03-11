@@ -314,8 +314,8 @@ impl CodeGenerator {
                 // (shape tensor axis) -> scalar integer
                 if let CompiledExpr::Integer(ax) = &args[1] {
                     let idx = if *ax < 0 { (dims.len() as i64 + *ax) as usize } else { *ax as usize };
-                    let reg = self.emitter.emit_constant_i64(dims[idx]);
-                    Ok((reg, StableHLOType::ScalarI64))
+                    let reg = self.emitter.emit_constant_f32(dims[idx] as f64);
+                    Ok((reg, StableHLOType::ScalarF32))
                 } else {
                     Err(SheafError::Compile {
                         message: "shape: axis must be integer".to_string(),
@@ -1137,8 +1137,8 @@ impl CodeGenerator {
         else if name == "ndim" && args.len() == 1 {
             let (_, operand_ty) = self.generate(&args[0])?;
             let ndim = operand_ty.shape().len() as i64;
-            let reg = self.emitter.emit_constant_i64(ndim);
-            Ok((reg, StableHLOType::ScalarI64))
+            let reg = self.emitter.emit_constant_f32(ndim as f64);
+            Ok((reg, StableHLOType::ScalarF32))
         }
         // var: (var x :axis N) or (var x)
         else if name == "var" && !args.is_empty() {
@@ -1380,8 +1380,8 @@ impl CodeGenerator {
                 });
             }
             let len = shape[0];
-            let reg = self.emitter.emit_constant_i64(len);
-            Ok((reg, StableHLOType::ScalarI64))
+            let reg = self.emitter.emit_constant_f32(len as f64);
+            Ok((reg, StableHLOType::ScalarF32))
         }
         // static: deprecated identity — evaluate inner expression directly
         else if name == "static" && args.len() == 1 {

@@ -54,7 +54,7 @@ pub fn json_to_stablehlo_type(val: &JsonValue) -> SheafResult<StableHLOType> {
             }
         }
         JsonValue::Number(_) => Ok(StableHLOType::ScalarF32),
-        JsonValue::Bool(_) => Ok(StableHLOType::ScalarI1),
+        JsonValue::Bool(_) => Ok(StableHLOType::scalar_f32()),
         other => Err(SheafError::Compile {
             message: format!("config: unsupported JSON value {}", other),
             location: SourceLocation::unknown(),
