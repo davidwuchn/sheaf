@@ -161,7 +161,7 @@ fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             Ok(Value::tensor_f32(a1.dot(&b2).into_dyn()))
         }
         _ if a.ndim() >= 2 && b.ndim() >= 2 => {
-            // Batched matmul: [...batch, M, K] @ [...batch, K, N] → [...batch, M, N]
+            // Batched matmul: [...batch, M, K] @ [...batch, K, N] -> [...batch, M, N]
             // Also handles nD @ 2D and 2D @ nD by broadcasting the 2D operand
             let a_shape = a.shape();
             let b_shape = b.shape();
@@ -253,7 +253,7 @@ fn expand_einsum_ellipsis(subscript: &str, shape_a: &[usize], shape_b: &[usize])
     subscript.replace("...", &batch_labels)
 }
 
-/// Try to decompose an einsum into permute → reshape 3D → BLAS matmul → reshape → permute.
+/// Try to decompose an einsum into permute -> reshape 3D -> BLAS matmul -> reshape -> permute.
 /// Every 2-operand einsum where each label falls into batch/free_a/free_b/contract
 /// can be expressed this way.
 fn try_einsum_as_matmul(

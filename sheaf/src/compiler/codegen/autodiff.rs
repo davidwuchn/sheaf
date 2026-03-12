@@ -89,7 +89,7 @@ impl CodeGenerator {
             return Ok((grad_reg, grad_ty.clone()));
         }
 
-        // Same number of elements but different shape → reshape (e.g. [32] → [32,1])
+        // Same number of elements but different shape -> reshape (e.g. [32] -> [32,1])
         let grad_elems: i64 = grad_shape.iter().product();
         let param_elems: i64 = param_shape.iter().product();
         if grad_elems == param_elems && grad_elems > 0 && grad_shape != param_shape {

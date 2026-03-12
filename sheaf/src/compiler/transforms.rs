@@ -9,7 +9,7 @@ use crate::interpreter::value::Value;
 use std::collections::{BTreeMap, HashMap};
 
 /// Substitute known scalar constants and propagate Let-bound constants.
-/// Handles: GetTupleElement → Integer, (static expr) → evaluate, Symbol → local constant,
+/// Handles: GetTupleElement -> Integer, (static expr) -> evaluate, Symbol -> local constant,
 /// and constant folding of arithmetic on known values.
 pub fn resolve_static_constants(
     expr: &CompiledExpr,
@@ -367,7 +367,7 @@ fn lower_inlined_gets_rec(
 
 /// Propagate tuple_key_layouts from dict key names to Let-bound variable names.
 /// e.g. `input-layer = GetTupleElement("params", [2])` where index 2 = key "input"
-/// → copy tuple_key_layouts["input"] to tuple_key_layouts["input-layer"]
+/// -> copy tuple_key_layouts["input"] to tuple_key_layouts["input-layer"]
 pub fn propagate_let_layouts(
     expr: &CompiledExpr,
     idx_to_key: &HashMap<(String, usize), String>,
@@ -711,7 +711,7 @@ static UNROLL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// Navigate a `StableHLOType` tree following tuple indices.
 ///
 /// E.g. for `Tuple([Tuple([T0, T1]), Tuple([T2, T3])])` with indices `[1, 0]`
-/// → returns `T2`.
+/// -> returns `T2`.
 fn resolve_type_at_indices(
     param: &str,
     indices: &[usize],
@@ -738,15 +738,15 @@ fn resolve_type_at_indices(
 /// ```
 /// into:
 /// ```text
-/// let __r_0 = body[carry→init, elem→coll[0]]
-/// let __r_1 = body[carry→__r_0, elem→coll[1]]
+/// let __r_0 = body[carry->init, elem->coll[0]]
+/// let __r_1 = body[carry->__r_0, elem->coll[1]]
 /// ...
 /// result = __r_{n-1}
 /// ```
 ///
 /// The collection length `n` is determined from the StableHLO type of `coll`:
-/// - `GetTupleElement { param, indices }` → resolve type → `Tuple(elems)` → n = len
-/// - `Vector(elems)` → n = len
+/// - `GetTupleElement { param, indices }` -> resolve type -> `Tuple(elems)` -> n = len
+/// - `Vector(elems)` -> n = len
 pub fn unroll_reduces(
     expr: &CompiledExpr,
     param_types: &[(String, StableHLOType)],

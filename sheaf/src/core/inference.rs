@@ -14,7 +14,7 @@ pub enum ValueLayout {
     Dict(Vec<(String, ValueLayout)>),
     /// List with sub-layouts per element
     List(Vec<ValueLayout>),
-    /// Leaf (tensor or scalar) — no reconstruction needed
+    /// Leaf (tensor or scalar): no reconstruction needed
     Leaf,
 }
 
@@ -51,7 +51,7 @@ impl ValueLayout {
     }
 
     /// Reconstruct a Value from a flat tuple using this layout.
-    /// Converts Value::Tuple → Value::Dict/List based on the stored structure.
+    /// Converts Value::Tuple -> Value::Dict/List based on the stored structure.
     pub fn reconstruct(&self, val: crate::interpreter::value::Value) -> crate::interpreter::value::Value {
         use crate::interpreter::value::Value;
         match (self, val) {
@@ -427,7 +427,7 @@ fn infer_type_with_context(
         }
 
         CompiledExpr::Dict(pairs) => {
-            // Dict becomes a tuple sorted by key — infer element types
+            // Dict becomes a tuple sorted by key: infer element types
             let mut sorted: Vec<_> = pairs.iter().collect();
             sorted.sort_by(|(k1, _), (k2, _)| {
                 let key1 = match k1 {
@@ -501,9 +501,9 @@ fn infer_type(expr: &CompiledExpr) -> SheafResult<StableHLOType> {
 
 /// Recursively infer the shape of a vector literal.
 ///
-/// `[1.0 2.0 3.0]`             → `[3]`
-/// `[[1.0 2.0] [3.0 4.0]]`     → `[2, 2]`
-/// `[[[1] [2]] [[3] [4]]]`     → `[2, 2, 1]`
+/// `[1.0 2.0 3.0]`             -> `[3]`
+/// `[[1.0 2.0] [3.0 4.0]]`     -> `[2, 2]`
+/// `[[[1] [2]] [[3] [4]]]`     -> `[2, 2, 1]`
 fn infer_vector_shape(elements: &[CompiledExpr]) -> Vec<i64> {
     if elements.is_empty() {
         return vec![0];

@@ -137,7 +137,7 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             };
             match map.get(&key) {
                 Some(v) => {
-                    // Chained lookup: (get dict :k1 :k2 ...) → nested dict access
+                    // Chained lookup: (get dict :k1 :k2 ...) -> nested dict access
                     if args.len() > 2 {
                         let mut cur = v.clone();
                         for extra in &args[2..] {
@@ -189,7 +189,7 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                     Ok(Value::tensor_f32(sliced))
                 };
             }
-            // Tensor gather: (get table indices) → gathers rows
+            // Tensor gather: (get table indices) -> gathers rows
             if let Value::Tensor { data: idx_data, .. } = &args[1] {
                 let row_shape = &data.shape()[1..];
                 let idx_shape = idx_data.shape();

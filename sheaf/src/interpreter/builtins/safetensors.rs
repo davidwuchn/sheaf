@@ -187,7 +187,7 @@ fn tree_to_value(node: TreeNode) -> Value {
             if n == 0 {
                 return Value::Dict(BTreeMap::new());
             }
-            // Contiguous numeric keys 0..n → Value::List
+            // Contiguous numeric keys 0..n -> Value::List
             let all_numeric = children.keys().all(|k| k.parse::<usize>().is_ok());
             if all_numeric {
                 let max_idx = children.keys()

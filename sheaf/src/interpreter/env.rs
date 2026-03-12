@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! Environment for the Sheaf interpreter — scoped variable bindings.
+//! Environment for the Sheaf interpreter: scoped variable bindings.
 
 use crate::core::compiler::{FunctionDef, VmfbSession};
 use crate::core::error::SheafError;

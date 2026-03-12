@@ -22,14 +22,14 @@ use crate::core::error::{SheafError, SheafResult, SourceLocation};
 /// Keys are sorted alphabetically at each level (BTreeMap order).
 ///
 /// JSON schema:
-/// - `{"W": [2, 8], "b": [8]}` → `Tuple([tensor<2x8xf32>, tensor<8xf32>])`
-/// - `{"l1": {"W": [2,8], "b": [8]}, "l2": {...}}` → `Tuple([Tuple([...]), Tuple([...])])`
-/// - scalar (empty array `[]`) → `tensor<f32>` (0D)
-/// - float number → `tensor<f32>` (0D scalar)
+/// - `{"W": [2, 8], "b": [8]}` -> `Tuple([tensor<2x8xf32>, tensor<8xf32>])`
+/// - `{"l1": {"W": [2,8], "b": [8]}, "l2": {...}}` -> `Tuple([Tuple([...]), Tuple([...])])`
+/// - scalar (empty array `[]`) -> `tensor<f32>` (0D)
+/// - float number -> `tensor<f32>` (0D scalar)
 pub fn json_to_stablehlo_type(val: &JsonValue) -> SheafResult<StableHLOType> {
     match val {
         JsonValue::Object(map) => {
-            // Sort keys alphabetically — BTreeMap preserves insertion order for serde_json,
+            // Sort keys alphabetically: BTreeMap preserves insertion order for serde_json,
             // so we collect into a BTreeMap first.
             let sorted: BTreeMap<&str, &JsonValue> =
                 map.iter().map(|(k, v)| (k.as_str(), v)).collect();
@@ -65,15 +65,15 @@ pub fn json_to_stablehlo_type(val: &JsonValue) -> SheafResult<StableHLOType> {
 /// Build a flat index map from a JSON config dict.
 ///
 /// Returns `BTreeMap<Vec<String>, Vec<usize>>`:
-///   key path (e.g. `["l1", "W"]`) → tuple indices (e.g. `[0, 0]`)
+///   key path (e.g. `["l1", "W"]`) -> tuple indices (e.g. `[0, 0]`)
 ///
 /// Example for `{"l1": {"W": [2,8], "b": [8]}, "l2": {"W": [8,1], "b": [1]}}`:
-///   `["l1"]`     → `[0]`
-///   `["l1","W"]` → `[0, 0]`
-///   `["l1","b"]` → `[0, 1]`
-///   `["l2"]`     → `[1]`
-///   `["l2","W"]` → `[1, 0]`
-///   `["l2","b"]` → `[1, 1]`
+///   `["l1"]`     -> `[0]`
+///   `["l1","W"]` -> `[0, 0]`
+///   `["l1","b"]` -> `[0, 1]`
+///   `["l2"]`     -> `[1]`
+///   `["l2","W"]` -> `[1, 0]`
+///   `["l2","b"]` -> `[1, 1]`
 pub fn build_index_map(val: &JsonValue) -> BTreeMap<Vec<String>, Vec<usize>> {
     let mut map = BTreeMap::new();
     build_index_map_rec(val, &[], &[], &mut map);
@@ -104,10 +104,10 @@ fn build_index_map_rec(
 /// Build an index map from a `ParamLayout` (same format as `build_index_map`).
 ///
 /// Converts each field's `path` and `tuple_index` into the expected mapping:
-///   `["l1", "W"]` → `[0, 0]`, etc.
+///   `["l1", "W"]` -> `[0, 0]`, etc.
 ///
 /// Also inserts prefix paths for intermediate levels:
-///   `["l1"]` → `[0]` (inferred from children with path starting with "l1")
+///   `["l1"]` -> `[0]` (inferred from children with path starting with "l1")
 pub fn layout_to_index_map(layout: &crate::core::compiler::ParamLayout) -> BTreeMap<Vec<String>, Vec<usize>> {
     let mut map = BTreeMap::new();
     for field in &layout.fields {
@@ -129,7 +129,7 @@ pub fn layout_to_index_map(layout: &crate::core::compiler::ParamLayout) -> BTree
 /// into `GetTupleElement { param, indices }` using the pre-built index map.
 ///
 /// Handles arbitrary nesting depth:
-///   `(get (get p :l1) :W)` → `GetTupleElement { param: "p", indices: [0, 0] }`
+///   `(get (get p :l1) :W)` -> `GetTupleElement { param: "p", indices: [0, 0] }`
 ///
 /// `param_name`: the name of the parameter that holds the dict (e.g. `"p"`)
 /// `index_map`: output of `build_index_map()`
@@ -230,9 +230,9 @@ fn extract_key_path(expr: &CompiledExpr, param_name: &str) -> Option<Vec<String>
     match expr {
         CompiledExpr::Symbol(name) if name == param_name => Some(vec![]),
         CompiledExpr::FunctionCall { name, args, .. } if name == "get" && args.len() >= 2 => {
-            // args[0] is the receiver — recurse
+            // args[0] is the receiver: recurse
             let mut path = extract_key_path(&args[0], param_name)?;
-            // args[1..] are keyword keys: (get x :k1 :k2) → path ["k1", "k2"]
+            // args[1..] are keyword keys: (get x :k1 :k2) -> path ["k1", "k2"]
             for arg in &args[1..] {
                 match arg {
                     CompiledExpr::Keyword(k) | CompiledExpr::String(k) => path.push(k.clone()),
@@ -241,7 +241,7 @@ fn extract_key_path(expr: &CompiledExpr, param_name: &str) -> Option<Vec<String>
             }
             Some(path)
         }
-        // (get-in params [:k1 :k2 ...]) → key path from the vector
+        // (get-in params [:k1 :k2 ...]) -> key path from the vector
         CompiledExpr::FunctionCall { name, args, .. } if name == "get-in" && args.len() >= 2 => {
             // args[0] must resolve to param_name
             let base_path = extract_key_path(&args[0], param_name)?;

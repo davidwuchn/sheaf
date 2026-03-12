@@ -360,7 +360,7 @@ impl StableHLOEmitter {
     /// Emit argmax: index of the maximum value along an axis.
     /// Returns f32 indices (matching our tensor type system).
     ///
-    /// Strategy: max_val → compare → iota → where(mask, iota, +inf) → reduce_min
+    /// Strategy: max_val -> compare -> iota -> where(mask, iota, +inf) -> reduce_min
     pub fn emit_argmax(
         &mut self,
         input: &Register,
@@ -396,7 +396,7 @@ impl StableHLOEmitter {
         // 5. Where mask is true, take iota index; else +inf
         let (masked_reg, _masked_ty) = self.emit_select(&mask_reg, &iota_reg, &inf_reg, &mask_ty, &iota_ty, input_ty);
 
-        // 6. Reduce min along axis → first index of maximum value
+        // 6. Reduce min along axis -> first index of maximum value
         self.emit_reduce_min(&masked_reg, input_ty, axis, false)
     }
 
@@ -437,7 +437,7 @@ impl StableHLOEmitter {
         // 5. Where mask is true, take iota index; else +inf
         let (masked_reg, _masked_ty) = self.emit_select(&mask_reg, &iota_reg, &inf_reg, &mask_ty, &iota_ty, input_ty);
 
-        // 6. Reduce min along axis → first index of minimum value
+        // 6. Reduce min along axis -> first index of minimum value
         self.emit_reduce_min(&masked_reg, input_ty, axis, false)
     }
 }

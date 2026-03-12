@@ -566,7 +566,7 @@ impl<'a> PickleVM<'a> {
 
     fn handle_build(&self, obj: PV, state: PV) -> Result<PV, SheafError> {
         match obj {
-            // numpy array Placeholder → fill from BUILD state
+            // numpy array Placeholder -> fill from BUILD state
             PV::Placeholder => {
                 let state_vec = match state {
                     PV::Tuple(v) => v,

@@ -46,7 +46,7 @@ impl SpecialForm for IfForm {
     }
 }
 
-/// do - Sequential evaluation: (do expr1 expr2 ... exprN) → returns exprN
+/// do - Sequential evaluation: (do expr1 expr2 ... exprN) -> returns exprN
 pub struct DoForm;
 
 impl SpecialForm for DoForm {

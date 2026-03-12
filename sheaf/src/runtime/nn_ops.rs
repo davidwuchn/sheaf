@@ -252,13 +252,13 @@ pub fn emit_sparse_cross_entropy(
     // log-softmax along last axis
     let (log_sm, log_sm_ty) = emit_log_softmax(emitter, logits, logits_ty, -1);
 
-    // one-hot encoding of labels → [batch, classes]
+    // one-hot encoding of labels -> [batch, classes]
     let (oh, oh_ty) = emitter.emit_one_hot(labels, labels_ty, num_classes);
 
     // Multiply: pick correct class log-probs
     let (prod, prod_ty) = emitter.emit_binop("*", &oh, &log_sm, &oh_ty, &log_sm_ty);
 
-    // Sum along class axis (-1) → [batch]
+    // Sum along class axis (-1) -> [batch]
     let (batch_loss, batch_loss_ty) = emitter.emit_reduce_sum(&prod, &prod_ty, -1, false);
 
     // Negate

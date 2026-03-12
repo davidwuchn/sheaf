@@ -390,8 +390,8 @@ impl StableHLOEmitter {
     }
 
     /// Emit slice on the last axis, then squeeze that dimension if size 1.
-    /// E.g. tensor<5x9xf32> slice [3:4] on last axis → tensor<5xf32>
-    /// E.g. tensor<5x9xf32> slice [2:5] on last axis → tensor<5x3xf32>
+    /// E.g. tensor<5x9xf32> slice [3:4] on last axis -> tensor<5xf32>
+    /// E.g. tensor<5x9xf32> slice [2:5] on last axis -> tensor<5x3xf32>
     pub fn emit_slice_last_axis(
         &mut self,
         input: &Register,
@@ -456,7 +456,7 @@ impl StableHLOEmitter {
     }
 
     /// Emit identity matrix: (eye N) or (eye N M)
-    /// Strategy: iota(dim=0) == iota(dim=1) → select(mask, 1.0, 0.0)
+    /// Strategy: iota(dim=0) == iota(dim=1) -> select(mask, 1.0, 0.0)
     pub fn emit_eye(&mut self, n: i64, m: i64) -> (Register, StableHLOType) {
         let shape = vec![n, m];
         let result_ty = StableHLOType::f32_tensor(shape.clone());
@@ -466,7 +466,7 @@ impl StableHLOEmitter {
         // Col indices: [0,1,2...; 0,1,2...; ...] shape [N,M]
         let (col_iota, iota_ty) = self.emit_iota(&shape, 1);
 
-        // Compare row == col → bool mask [N, M]
+        // Compare row == col -> bool mask [N, M]
         let (mask_reg, mask_ty) = self.emit_compare("==", &row_iota, &col_iota, &iota_ty, &iota_ty);
 
         // ones and zeros tensors
@@ -491,7 +491,7 @@ impl StableHLOEmitter {
         let indices_shape = indices_ty.shape();
 
         if indices_shape.is_empty() {
-            // Scalar index → output [C]
+            // Scalar index -> output [C]
             let out_shape = vec![num_classes];
             let out_ty = StableHLOType::f32_tensor(out_shape.clone());
 
@@ -511,15 +511,15 @@ impl StableHLOEmitter {
 
             self.emit_select(&mask_reg, &ones_reg, &zeros_reg, &mask_ty, &out_ty, &out_ty)
         } else {
-            // Tensor indices [N] → output [N, C]
+            // Tensor indices [N] -> output [N, C]
             let n = indices_shape[0];
             let out_shape = vec![n, num_classes];
             let out_ty = StableHLOType::f32_tensor(out_shape.clone());
 
-            // iota [N, C] along dim 1 → class indices
+            // iota [N, C] along dim 1 -> class indices
             let (class_iota, iota_ty) = self.emit_iota(&out_shape, 1);
 
-            // Reshape indices [N] → [N, 1] then broadcast to [N, C]
+            // Reshape indices [N] -> [N, 1] then broadcast to [N, C]
             let idx_2d_shape = vec![n, 1];
             let idx_2d_ty = StableHLOType::f32_tensor(idx_2d_shape);
             let idx_2d = self.fresh_register();
@@ -699,7 +699,7 @@ impl StableHLOEmitter {
     }
 
     /// Emit slice along axis 0 with exclusive end: (slice tensor start end)
-    /// start inclusive, end exclusive — matches standard Python/NumPy semantics
+    /// start inclusive, end exclusive: matches standard Python/NumPy semantics
     pub fn emit_slice_exclusive(
         &mut self,
         input: &Register,
@@ -794,7 +794,7 @@ impl StableHLOEmitter {
         let indices_int_ty = StableHLOType::i32_tensor(indices_shape.to_vec());
         let indices_int_reg = self.emit_convert(indices, indices_ty, &indices_int_ty);
 
-        // Reshape indices to add trailing index_vector_dim: [I1, I2, ...] → [I1, I2, ..., 1]
+        // Reshape indices to add trailing index_vector_dim: [I1, I2, ...] -> [I1, I2, ..., 1]
         let mut reshaped_shape: Vec<i64> = indices_shape.to_vec();
         reshaped_shape.push(1);
         let indices_3d_reg = self.fresh_register();

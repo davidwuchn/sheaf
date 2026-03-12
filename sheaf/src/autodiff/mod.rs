@@ -106,9 +106,9 @@ pub(crate) fn replace_symbol(expr: &CompiledExpr, name: &str, replacement: &Comp
 /// Basic algebraic simplification to reduce the symbolic gradient expression.
 ///
 /// Rules:
-///   0 + x  →  x,  x + 0  →  x
-///   0 * x  →  0,  x * 0  →  0
-///   1 * x  →  x,  x * 1  →  x
+///   0 + x  ->  x,  x + 0  ->  x
+///   0 * x  ->  0,  x * 0  ->  0
+///   1 * x  ->  x,  x * 1  ->  x
 pub fn simplify(expr: CompiledExpr) -> CompiledExpr {
     match expr {
         CompiledExpr::FunctionCall { name, args, .. } => {
@@ -143,7 +143,7 @@ pub fn simplify(expr: CompiledExpr) -> CompiledExpr {
 /// Compute the symbolic gradient of `expr` with respect to `wrt`.
 ///
 /// `grad_output` is the upstream gradient (dL/d_expr). Pass `None` when
-/// differentiating the loss itself — an implicit `1.0` is used.
+/// differentiating the loss itself: an implicit `1.0` is used.
 ///
 /// Returns a `CompiledExpr` that can be fed to the code generator as-is.
 pub fn grad(expr: &CompiledExpr, wrt: &str, grad_output: Option<CompiledExpr>) -> CompiledExpr {
@@ -153,7 +153,7 @@ pub fn grad(expr: &CompiledExpr, wrt: &str, grad_output: Option<CompiledExpr>) -
 
 fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
     match expr {
-        // Constants and irrelevant symbols → zero
+        // Constants and irrelevant symbols -> zero
         CompiledExpr::Float(_) | CompiledExpr::Integer(_) => float(0.0),
 
         CompiledExpr::Symbol(name) => {
@@ -327,7 +327,7 @@ fn has_shadowed_bindings(bindings: &[(String, CompiledExpr)]) -> bool {
 }
 
 /// Convert a flat Let with shadowed bindings into nested Lets.
-/// Splits at the first duplicate: [a=e1, a=e2, b=e3] → Let{a=e1, Let{a=e2, b=e3, body}}
+/// Splits at the first duplicate: [a=e1, a=e2, b=e3] -> Let{a=e1, Let{a=e2, b=e3, body}}
 fn unshadow_let(bindings: &[(String, CompiledExpr)], body: &CompiledExpr) -> CompiledExpr {
     let mut seen = std::collections::HashSet::new();
     for (i, (name, _)) in bindings.iter().enumerate() {
@@ -523,13 +523,13 @@ fn grad_function_call(
 
         "gelu" => {
             // GELU approximation gradient (pass-through for now, same as relu)
-            // Full: gelu'(x) ≈ 0.5*(1+tanh(...))*... — complex, we'll treat as pass-through
+            // Full: gelu'(x) ≈ 0.5*(1+tanh(...))*...: complex, we'll treat as pass-through
             // This is a simplification that works for training
             grad_with(&args[0], wrt, g)
         }
 
         "log-softmax" => {
-            // d/dx log_softmax(f) — pass through for now (same simplification as softmax)
+            // d/dx log_softmax(f): pass through for now (same simplification as softmax)
             grad_with(&args[0], wrt, g)
         }
 
@@ -550,7 +550,7 @@ fn grad_function_call(
         }
 
         "slice" if args.len() >= 3 => {
-            // slice is a view — gradient flows through the slice
+            // slice is a view: gradient flows through the slice
             // (simplified: treat as pass-through, codegen handles the shape)
             grad_with(&args[0], wrt, g)
         }
@@ -822,7 +822,7 @@ pub fn cse(expr: CompiledExpr) -> CompiledExpr {
     // Collect sub-expressions that appear more than once, in discovery order.
     let mut seen_keys: Vec<String> = Vec::new();
     let mut bindings: Vec<(String, CompiledExpr)> = Vec::new();
-    let mut subst: HashMap<String, String> = HashMap::new(); // key → binding name
+    let mut subst: HashMap<String, String> = HashMap::new(); // key -> binding name
 
     collect_cse_candidates(&expr, &counts, &mut seen_keys, &mut bindings, &mut subst);
 

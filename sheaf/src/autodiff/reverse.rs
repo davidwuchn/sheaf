@@ -4,13 +4,13 @@
 //! Reverse-mode autodiff on ANF (Administrative Normal Form).
 //!
 //! Two passes:
-//! 1. `to_anf` — flatten a CompiledExpr tree into a flat Let chain where every
+//! 1. `to_anf`: flatten a CompiledExpr tree into a flat Let chain where every
 //!    sub-expression is named.  Symbols, literals and GetTupleElement are "trivial"
 //!    and stay inline; everything else gets a `__anf_N` binding.
 //!
-//! 2. `reverse_grad` — walk the ANF bindings in reverse, emitting backward
+//! 2. `reverse_grad`: walk the ANF bindings in reverse, emitting backward
 //!    bindings that compute adjoint contributions.  Each adjoint is itself a
-//!    named binding, so the backward expression is also flat (ANF) — no tree
+//!    named binding, so the backward expression is also flat (ANF): no tree
 //!    duplication, guaranteed O(n) size.
 
 use crate::autodiff::replace_symbol;
@@ -115,8 +115,8 @@ fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(String, CompiledExpr)>) -> Compil
         }
 
         // Vector: ANF-ify elements but keep the Vector inline (not bound).
-        // Vectors are structural (shape specs, etc.), not computational —
-        // binding them to symbols breaks pattern matching in codegen (e.g. reshape).
+        // Vectors are structural (shape specs, etc.), not computational.
+        // Binding them to symbols breaks pattern matching in codegen (e.g. reshape).
         CompiledExpr::Vector(elems) => {
             let anf_elems: Vec<CompiledExpr> = elems.iter().map(|e| anf_rec(e, out)).collect();
             CompiledExpr::Vector(anf_elems)
@@ -147,7 +147,7 @@ fn fresh_grad_name() -> String {
 ///
 /// Returns `(backward_bindings, grad_map)` where:
 /// - `backward_bindings`: flat Let bindings computing all adjoint intermediates
-/// - `grad_map`: maps each wrt name → the Symbol name of its gradient
+/// - `grad_map`: maps each wrt name -> the Symbol name of its gradient
 ///
 /// The backward bindings reference the forward ANF bindings by name.
 /// The caller must emit both forward and backward bindings in a single scope.
@@ -157,7 +157,7 @@ pub fn reverse_grad(
     wrt: &[String],
     shapes: &HashMap<String, Vec<i64>>,
 ) -> (Vec<(String, CompiledExpr)>, HashMap<String, String>) {
-    // Map: variable name → name of its current adjoint accumulator symbol.
+    // Map: variable name -> name of its current adjoint accumulator symbol.
     // When a new contribution arrives, we emit a new binding that adds it.
     let mut adj_names: HashMap<String, String> = HashMap::new();
     let mut backward_bindings: Vec<(String, CompiledExpr)> = Vec::new();
@@ -179,7 +179,7 @@ pub fn reverse_grad(
         distribute_adjoint_named(value, &adj_sym, &mut adj_names, &mut backward_bindings, shapes);
     }
 
-    // Build grad_map: wrt name → adjoint symbol name
+    // Build grad_map: wrt name -> adjoint symbol name
     let grad_map: HashMap<String, String> = wrt
         .iter()
         .filter_map(|param| {
@@ -274,7 +274,7 @@ fn maybe_unbroadcast(
         // We don't know the adj shape directly, but if we can look up the
         // result shape (shape of the binding that produced the forward
         // value), we can compare.  For now, always emit sum_to_shape and
-        // let the codegen handle the identity case (same shape → no-op).
+        // let the codegen handle the identity case (same shape -> no-op).
         let reduced = emit_binding(
             bindings,
             call("sum_to_shape", vec![adj, shape_vec(&target_shape)]),
@@ -288,7 +288,7 @@ fn maybe_unbroadcast(
 /// Distribute the adjoint `adj_sym` (a Symbol) to the operands of `expr`.
 ///
 /// All emitted expressions reference `adj_sym` by Symbol, never clone the
-/// underlying expression — this guarantees O(1) per distribution step.
+/// underlying expression: this guarantees O(1) per distribution step.
 fn distribute_adjoint_named(
     expr: &CompiledExpr,
     adj_sym: &CompiledExpr,
@@ -297,7 +297,7 @@ fn distribute_adjoint_named(
     shapes: &HashMap<String, Vec<i64>>,
 ) {
     match expr {
-        // Alias: let x = y  →  dy += dx
+        // Alias: let x = y  ->  dy += dx
         CompiledExpr::Symbol(s) => {
             accumulate_named(s, adj_sym.clone(), adj_names, bindings);
         }
@@ -384,7 +384,7 @@ fn distribute_fn_adjoint_named(
 
             // dL/dB = A^T @ G
             if a_ndim == 1 {
-                // A is 1D [m], G may be 1D [n] → outer product → [m, n]
+                // A is 1D [m], G may be 1D [n] -> outer product -> [m, n]
                 // reshape(A,[m,1]) @ reshape(G,[1,n])
                 if let (Some(a_shape), Some(b_shape)) = (arg_shape(&args[0], shapes), arg_shape(&args[1], shapes)) {
                     let m = a_shape[0];
@@ -692,7 +692,7 @@ fn distribute_fn_adjoint_named(
             acc_arg(&args[0], adj.clone(), adj_names, bindings);
         }
 
-        // scan(lambda, init, coll) — emit a __scan_vjp__ call that the codegen compiles.
+        // scan(lambda, init, coll): emit a __scan_vjp__ call that the codegen compiles.
         // The adjoint flows to init and coll via the backward scan.
         "scan" if args.len() == 3 => {
             let vjp_result = emit_binding(bindings, call("__scan_vjp__", vec![
@@ -701,7 +701,7 @@ fn distribute_fn_adjoint_named(
                 args[2].clone(),  // coll
                 adj.clone(),      // adj of scan result (carry adjoint)
             ]));
-            // __scan_vjp__ returns [adj_init, adj_coll] — extract with first/second
+            // __scan_vjp__ returns [adj_init, adj_coll]: extract with first/second
             let adj_init = emit_binding(bindings, call("first", vec![sym(&vjp_result)]));
             let adj_coll = emit_binding(bindings, call("second", vec![sym(&vjp_result)]));
             acc_arg(&args[1], sym(&adj_init), adj_names, bindings);

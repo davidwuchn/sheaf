@@ -223,7 +223,7 @@ pub fn emit_normalize(
     emitter.emit_binop("/", operand, &sum_reg, operand_ty, &sum_ty)
 }
 
-/// Emit dynamic-slice: (dynamic-slice tensor start end) — 1D slice with inclusive end
+/// Emit dynamic-slice: (dynamic-slice tensor start end): 1D slice with inclusive end
 pub fn emit_dynamic_slice(
     emitter: &mut StableHLOEmitter,
     operand: &Register,
@@ -234,7 +234,7 @@ pub fn emit_dynamic_slice(
     emitter.emit_slice_range(operand, operand_ty, start, end)
 }
 
-/// Emit roll: (roll tensor shift) — circular shift along flat dimension
+/// Emit roll: (roll tensor shift): circular shift along flat dimension
 pub fn emit_roll(
     emitter: &mut StableHLOEmitter,
     operand: &Register,
@@ -257,7 +257,7 @@ pub fn emit_index_update(
 }
 
 /// Emit append-and-roll: shift 1D tensor left by 1, append new value at end.
-/// (append-and-roll [a b c d] x) → [b c d x]
+/// (append-and-roll [a b c d] x) -> [b c d x]
 pub fn emit_append_and_roll(
     emitter: &mut StableHLOEmitter,
     operand: &Register,
@@ -282,7 +282,7 @@ pub fn emit_append_and_roll(
     emitter.emit_concatenate(&[tail, val_1d], &[tail_ty, val_1d_ty], 0)
 }
 
-/// Emit slice: (slice tensor start end :axis N) — start inclusive, end exclusive
+/// Emit slice: (slice tensor start end :axis N): start inclusive, end exclusive
 pub fn emit_slice(
     emitter: &mut StableHLOEmitter,
     operand: &Register,

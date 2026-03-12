@@ -317,7 +317,7 @@ impl CodeGenerator {
                 }
 
                 // 1. Sum over leading extra dimensions
-                // e.g. from [4,256,384] target [256,384] → sum axis 0
+                // e.g. from [4,256,384] target [256,384] -> sum axis 0
                 let extra = from_shape.len().saturating_sub(target_shape.len());
                 for _ in 0..extra {
                     let (r, t) = self.emitter.emit_reduce_sum(&reg, &ty, 0, false);
@@ -326,7 +326,7 @@ impl CodeGenerator {
                 }
 
                 // 2. Sum over dims where target is 1 but current is > 1
-                // e.g. from [4,256,384] target [1,256,384] → sum axis 0 keepdims
+                // e.g. from [4,256,384] target [1,256,384] -> sum axis 0 keepdims
                 let cur_shape = ty.shape().to_vec();
                 for (i, (&cur_d, &tgt_d)) in
                     cur_shape.iter().zip(target_shape.iter()).enumerate().rev()
@@ -690,7 +690,7 @@ impl CodeGenerator {
             Ok((reg, ty))
         }
         // sum/mean: (sum x :axis N) or (sum x :axis N :keepdims true)
-        // Without :axis → reduce all dimensions to scalar
+        // Without :axis -> reduce all dimensions to scalar
         else if (name == "sum" || name == "mean") && !args.is_empty() {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
 
@@ -735,7 +735,7 @@ impl CodeGenerator {
                     }
                 }
                 None => {
-                    // No :axis → reduce all dimensions sequentially (last to first)
+                    // No :axis -> reduce all dimensions sequentially (last to first)
                     let ndim = operand_ty.shape().len();
                     if ndim == 0 {
                         (operand_reg, operand_ty)
@@ -986,7 +986,7 @@ impl CodeGenerator {
                         location: crate::core::error::SourceLocation::unknown(),
                     })
                 }
-                // Tensor + integer → index axis 0
+                // Tensor + integer -> index axis 0
                 _ if !operand_ty.shape().is_empty() => {
                     match &args[1] {
                         CompiledExpr::Integer(idx) => {
@@ -1079,7 +1079,7 @@ impl CodeGenerator {
             );
             Ok((result_reg, result_ty))
         }
-        // ndim: (ndim tensor) → compile-time rank
+        // ndim: (ndim tensor) -> compile-time rank
         else if name == "ndim" && args.len() == 1 {
             let (_, operand_ty) = self.generate(&args[0])?;
             let ndim = operand_ty.shape().len() as i64;
@@ -1126,7 +1126,7 @@ impl CodeGenerator {
                     tensor_ops::emit_var(&mut self.emitter, &operand_reg, &operand_ty, ax, keepdims)
                 }
                 None => {
-                    // No axis → reduce all dimensions sequentially
+                    // No axis -> reduce all dimensions sequentially
                     let ndim = operand_ty.shape().len();
                     if ndim == 0 {
                         // var of scalar = 0

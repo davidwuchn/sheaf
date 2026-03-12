@@ -40,7 +40,7 @@ pub fn register_builtins(env: &mut Env) {
 }
 
 /// Resolve a potentially negative index against a dimension length.
-/// Negative indices wrap from the end: -1 → len-1, -2 → len-2, etc.
+/// Negative indices wrap from the end: -1 -> len-1, -2 -> len-2, etc.
 pub(self) fn resolve_idx(f: f64, len: usize) -> usize {
     if f < 0.0 {
         (len as i64 + f as i64) as usize

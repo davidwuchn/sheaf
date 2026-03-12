@@ -221,11 +221,11 @@ impl Register {
 pub struct StableHLOEmitter {
     counter: usize,
     pub(crate) body: Vec<String>,
-    /// Cache for reduce_mean results: (input_register, normalized_axis, keepdims) → (result_reg, result_type).
+    /// Cache for reduce_mean results: (input_register, normalized_axis, keepdims) -> (result_reg, result_type).
     /// Avoids recomputing mean(x, axis) when var(x, axis) also needs it internally.
     reduce_mean_cache: HashMap<(Register, usize, bool), (Register, StableHLOType)>,
     /// Virtual tuple registers: maps a register to its constituent (register, type) pairs.
-    /// Tuples are never materialized as MLIR ops — they exist only as register groupings.
+    /// Tuples are never materialized as MLIR ops: they exist only as register groupings.
     virtual_tuples: HashMap<Register, Vec<(Register, StableHLOType)>>,
     /// Compile-time known scalar values for constant propagation.
     /// Populated from constants and scalar function params; used to resolve
@@ -347,7 +347,7 @@ impl StableHLOEmitter {
         reg
     }
 
-    /// Convert a tensor from one type to another (e.g. i1→f32, f32→i32)
+    /// Convert a tensor from one type to another (e.g. i1->f32, f32->i32)
     pub fn emit_convert(&mut self, reg: &Register, from_ty: &StableHLOType, to_ty: &StableHLOType) -> Register {
         let result = self.fresh_register();
         self.body.push(format!(
@@ -529,7 +529,7 @@ impl StableHLOEmitter {
             vec![]
         } else {
             // Try numpy-style right-alignment first:
-            // [4] → [4, 4] maps to dims=[1], [1, 256] → [4, 256, 384] maps to dims=[1, 2]
+            // [4] -> [4, 4] maps to dims=[1], [1, 256] -> [4, 256, 384] maps to dims=[1, 2]
             let offset = to_shape.len() - from_shape.len();
             let right_aligned: Vec<usize> = (offset..to_shape.len()).collect();
             let valid = from_shape.iter().enumerate().all(|(i, &src)| {
@@ -539,7 +539,7 @@ impl StableHLOEmitter {
                 right_aligned
             } else {
                 // Fallback: greedy left-to-right size matching
-                // [1024] → [1024, 65] maps to dims=[0]
+                // [1024] -> [1024, 65] maps to dims=[0]
                 let mut mapping = Vec::with_capacity(from_shape.len());
                 let mut search_start = 0;
                 for &src_dim in from_shape {

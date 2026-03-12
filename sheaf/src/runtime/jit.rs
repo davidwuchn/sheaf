@@ -5,8 +5,8 @@
 //!
 //! When the interpreter calls a function that has no pre-compiled VMFB,
 //! the JIT attempts to compile it on the fly via the same pipeline as
-//! `sheaf build`: type inference → dict lowering → inlining → codegen → MLIR
-//! → iree-compile → load VMFB. On success, subsequent calls dispatch via IREE.
+//! `sheaf build`: type inference -> dict lowering -> inlining -> codegen -> MLIR
+//! -> iree-compile -> load VMFB. On success, subsequent calls dispatch via IREE.
 //! On failure, the function is added to a blocklist and the interpreter
 //! handles it normally.
 
@@ -39,7 +39,7 @@ pub struct JitCompiler {
     iree_compile_path: Option<String>,
     target_backend: String,
     failed_fns: HashSet<String>,
-    /// Cache compiled VAG sessions: vag_key → (session_idx, signature, param_names)
+    /// Cache compiled VAG sessions: vag_key -> (session_idx, signature, param_names)
     vag_cache: HashMap<String, (usize, FunctionSignature, Vec<String>)>,
 }
 
@@ -50,7 +50,7 @@ impl JitCompiler {
             match ensure_toolchain() {
                 Ok(path) => Some(path),
                 Err(e) => {
-                    sheaf_msg!("sheaf: JIT compilation unavailable — {}", e);
+                    sheaf_msg!("sheaf: JIT compilation unavailable: {}", e);
                     sheaf_msg!("sheaf: functions without cached .vmfb will run in interpreter (slow)");
                     None
                 }
@@ -351,7 +351,7 @@ impl JitCompiler {
         }
 
         // Register layout for return type (may differ from param type due to
-        // scalar promotion, e.g. ScalarI64→scalar_f32 after adam-step)
+        // scalar promotion, e.g. ScalarI64->scalar_f32 after adam-step)
         if let StableHLOType::Tuple(ret_elems, _) = &sig.return_type {
             if !sig.arg_type_layouts.iter().any(|(t, _)| t == &sig.return_type) {
                 for (t, layout) in sig.arg_type_layouts.clone() {
@@ -518,7 +518,7 @@ impl JitCompiler {
                     scalar_substitutions.push((cap_name.clone(), *n as f64));
                 }
                 _ => {
-                    // Tensor, Dict, Tuple etc. → promote to MLIR parameter
+                    // Tensor, Dict, Tuple etc. -> promote to MLIR parameter
                     if value_to_stablehlo_type(cap_val).is_ok() {
                         all_param_names.push(cap_name.clone());
                         all_arg_values.push(cap_val.clone());
@@ -809,7 +809,7 @@ impl JitCompiler {
                     }
                     eprintln!("--- Grad map ---");
                     for (sym, grad_name) in &grad_sym_map {
-                        eprintln!("  {} → {}", sym, grad_name);
+                        eprintln!("  {} -> {}", sym, grad_name);
                     }
                     eprintln!("--- wrt symbols ---");
                     for s in &all_wrt_symbols {

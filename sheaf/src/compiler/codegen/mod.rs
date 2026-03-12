@@ -42,7 +42,7 @@ pub struct CodeGenerator {
     emitter: StableHLOEmitter,
     /// Map from variable names to registers and their types
     bindings: HashMap<String, (Register, StableHLOType)>,
-    /// Lambdas bound in let forms — stored for inlining, not emitted as SSA.
+    /// Lambdas bound in let forms: stored for inlining, not emitted as SSA.
     lambda_bindings: HashMap<String, CompiledExpr>,
     /// Function registry for user-defined functions
     function_registry: HashMap<String, crate::core::compiler::FunctionDef>,
@@ -94,7 +94,7 @@ impl CodeGenerator {
     }
 
     /// Create a CodeGenerator with function parameters bound to %arg0, %arg1, etc.
-    /// Tuple parameters become virtual tuples in the emitter — each leaf maps to
+    /// Tuple parameters become virtual tuples in the emitter: each leaf maps to
     /// a separate MLIR %arg, but the CodeGenerator sees normal tuple registers.
     pub fn with_function_params(
         registry: HashMap<String, crate::core::compiler::FunctionDef>,
@@ -160,7 +160,7 @@ impl CodeGenerator {
         self.bindings.insert(name.to_string(), (reg, ty));
     }
 
-    /// Return a map of symbol name → shape for all current bindings.
+    /// Return a map of symbol name -> shape for all current bindings.
     /// Used by reverse-mode AD to generate shape-aware gradient expressions.
     pub fn binding_shapes(&self) -> std::collections::HashMap<String, Vec<i64>> {
         self.bindings
@@ -170,8 +170,8 @@ impl CodeGenerator {
     }
 
     /// Generate and bind a single Let binding in the current scope.
-    /// Handles Lambda storage, destructuring, and layout propagation —
-    /// same logic as the Let codegen but without scope save/restore.
+    /// Handles Lambda storage, destructuring, and layout propagation.
+    /// Same logic as the Let codegen but without scope save/restore.
     pub fn generate_binding(&mut self, name: &str, value_expr: &CompiledExpr) -> SheafResult<()> {
         if matches!(value_expr, CompiledExpr::Lambda { .. }) {
             self.lambda_bindings.insert(name.to_string(), value_expr.clone());
@@ -332,7 +332,7 @@ impl CodeGenerator {
                 let saved_lambda_bindings = self.lambda_bindings.clone();
                 for (name, value_expr) in bindings {
                     if matches!(value_expr, CompiledExpr::Lambda { .. }) {
-                        // Store lambda for inlining — no SSA emitted.
+                        // Store lambda for inlining: no SSA emitted.
                         self.lambda_bindings
                             .insert(name.clone(), value_expr.clone());
                     } else if name.starts_with('[') && name.ends_with(']') {

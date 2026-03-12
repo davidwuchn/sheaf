@@ -7,7 +7,7 @@ use super::{Register, StableHLOEmitter, StableHLOType};
 
 impl StableHLOEmitter {
     /// Emit a comparison operation using pure f32 arithmetic.
-    /// Returns f32 tensor (0.0/1.0). Zero i1 types — avoids IREE SPIRV crash.
+    /// Returns f32 tensor (0.0/1.0). Zero i1 types: avoids IREE SPIRV crash.
     ///
     /// GE: clamp(0, sign(a-b) + 1, 1)    GT: clamp(0, sign(a-b), 1)
     /// LE: clamp(0, sign(b-a) + 1, 1)    LT: clamp(0, sign(b-a), 1)

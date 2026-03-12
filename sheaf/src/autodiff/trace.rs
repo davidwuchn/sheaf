@@ -101,7 +101,7 @@ fn trace_rec(
 
         CompiledExpr::FunctionCall { name, args, .. } => {
             if name == "mean" && args.len() == 1 {
-                // Rewrite mean(x) → sum(x) / N
+                // Rewrite mean(x) -> sum(x) / N
                 let traced_arg = trace_rec(&args[0], env, leaf_map, sym_env)?;
                 let concrete = eval(&args[0], env)?;
                 let n = match &concrete {
@@ -313,7 +313,7 @@ fn trace_reduce(
             sym_env.remove(item_param)
         };
 
-        // Trace the lambda body — result is a flat expression
+        // Trace the lambda body: result is a flat expression
         let step_expr = trace_rec(&lambda_body, env, leaf_map, sym_env)?;
 
         // Evaluate concretely to get the new accumulator value

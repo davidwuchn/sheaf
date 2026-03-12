@@ -146,7 +146,7 @@ impl Tracer {
 
         let indent = "│ ".repeat(self.depth);
         let result_str = format_value(result, self.level_mode);
-        let line = format!("{}└─ ← {} ({})", indent, result_str, elapsed_str);
+        let line = format!("{}└─ <- {} ({})", indent, result_str, elapsed_str);
 
         self.push_ring(&line);
         if self.should_trace(name) {

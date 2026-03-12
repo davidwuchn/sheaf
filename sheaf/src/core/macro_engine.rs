@@ -82,7 +82,7 @@ impl MacroEngine {
             }
         }
 
-        // Not a macro call — recursively expand children
+        // Not a macro call: recursively expand children
         let expanded: SheafResult<Vec<SheafValue>> = elements
             .iter()
             .map(|e| self.expand(e, compiler_env, registry))
@@ -291,7 +291,7 @@ fn eval_at_compile_time(
             } else if let Some(val) = compiler_env.get(name) {
                 Ok(val.clone())
             } else {
-                // Unknown symbol in compile-time eval — return as-is (it's data)
+                // Unknown symbol in compile-time eval: return as-is (it's data)
                 Ok(expr.clone())
             }
         }
@@ -325,7 +325,7 @@ fn eval_at_compile_time(
             let func_name = match &elems[0] {
                 SheafValue::Symbol(name, _) => name.as_str(),
                 _ => {
-                    // Not a symbol head — eval each element and return as data
+                    // Not a symbol head: eval each element and return as data
                     let evaled: SheafResult<Vec<SheafValue>> = elems
                         .iter()
                         .map(|e| eval_at_compile_time(e, bindings, compiler_env, registry, loc))

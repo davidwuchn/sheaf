@@ -195,7 +195,7 @@ impl StableHLOEmitter {
             out_str.chars().collect()
         };
 
-        // Build label→dim index maps
+        // Build label->dim index maps
         let mut lhs_map: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
         for (i, &c) in lhs_labels.iter().enumerate() {
             lhs_map.insert(c, i);
@@ -269,7 +269,7 @@ impl StableHLOEmitter {
         dot_output_labels.extend(&lhs_remaining_labels);
         dot_output_labels.extend(&rhs_remaining_labels);
 
-        // Compute result shape from label→size mapping
+        // Compute result shape from label->size mapping
         let mut label_sizes: std::collections::HashMap<char, i64> =
             std::collections::HashMap::new();
         for (i, &c) in lhs_labels.iter().enumerate() {
