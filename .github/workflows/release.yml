@@ -29,7 +29,7 @@ jobs:
         include:
           - os: ubuntu-24.04
             target: linux-x86_64
-            cmake_extra: ""
+            cmake_extra: "-DIREE_HAL_DRIVER_CUDA=ON"
           - os: ubuntu-24.04
             target: linux-aarch64
             cmake_extra: >-
@@ -47,13 +47,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: iree-install
-          key: iree-runtime-${{ needs.read-iree-version.outputs.version }}-${{ matrix.target }}-v2
+          key: iree-runtime-${{ needs.read-iree-version.outputs.version }}-${{ matrix.target }}-v3
 
       - name: Install cross-compilation toolchain (linux-aarch64)
         if: steps.cache-iree.outputs.cache-hit != 'true' && matrix.target == 'linux-aarch64'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Install CUDA headers (linux-x86_64)
+        if: steps.cache-iree.outputs.cache-hit != 'true' && matrix.target == 'linux-x86_64'
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y cuda-nvcc-12-6
 
       - name: Install build tools
         if: steps.cache-iree.outputs.cache-hit != 'true'
