@@ -51,9 +51,8 @@ impl JitCompiler {
             match ensure_toolchain() {
                 Ok(path) => Some(path),
                 Err(e) => {
-                    if verbose {
-                        eprintln!("sheaf: toolchain download failed: {}", e);
-                    }
+                    eprintln!("sheaf: JIT compilation unavailable — {}", e);
+                    eprintln!("sheaf: functions without cached .vmfb will run in interpreter (slow)");
                     None
                 }
             }
@@ -979,6 +978,13 @@ impl JitCompiler {
         self.failed_fns.insert(name.to_string());
         if self.verbose {
             eprintln!("jit: {} skipped ({})", name, reason);
+        } else if reason.contains("compile failed")
+            || reason.contains("compile exec")
+            || reason.contains("init:")
+            || reason.contains("load:")
+        {
+            eprintln!("sheaf: '{}' will run in interpreter mode (compilation failed)", name);
+
         }
     }
 }
@@ -1110,7 +1116,13 @@ pub fn ensure_toolchain() -> Result<String, Box<dyn std::error::Error>> {
         .ok_or("cannot determine home directory")?;
     std::fs::create_dir_all(&dir)?;
 
-    eprintln!("sheaf: downloading IREE compiler v{}...", IREE_COMPILER_VERSION);
+    for tool in &["curl", "unzip"] {
+        if which(tool).is_none() {
+            return Err(format!("'{}' is required to download the compiler toolchain", tool).into());
+        }
+    }
+
+    eprintln!("sheaf: downloading compiler toolchain...");
 
     // Fetch PyPI JSON metadata to find the wheel URL
     let pypi_url = format!(
@@ -1196,7 +1208,7 @@ pub fn ensure_toolchain() -> Result<String, Box<dyn std::error::Error>> {
     std::fs::write(dir.join("version"), IREE_COMPILER_VERSION)?;
 
     let binary = dir.join("iree-compile");
-    eprintln!("sheaf: IREE compiler ready");
+    eprintln!("sheaf: compiler successfully installed in {}", dir.display());
     Ok(binary.to_string_lossy().to_string())
 }
 
@@ -1329,4 +1341,3 @@ fn update_manifest(cache_dir: &std::path::Path, name: &str, hash: &str) {
     manifest.insert(name.to_string(), serde_json::Value::String(hash.to_string()));
     let _ = std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap());
 }
-
