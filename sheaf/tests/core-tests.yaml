@@ -698,3 +698,36 @@
 - name: vmap multi-arg
   test: ((vmap (fn [x w] (+ x w)) (quote [0 nil])) (tensor [[1 2] [3 4]]) 10)
   expected: "[[11. 12.]\n [13. 14.]]"
+
+# Regression: ** with integer exponent must propagate gradients
+- name: grad-power-int
+  test: (let [f (fn [x] (** x 2)) [v g] ((value-and-grad f) 3.0)] g)
+  expected: '6.0'
+- name: grad-power-float
+  test: (let [f (fn [x] (** x 2.0)) [v g] ((value-and-grad f) 3.0)] g)
+  expected: '6.0'
+
+# Regression: first/second/last/nth on tensors (DeviceBuffer handled via ensure_host)
+- name: first-tensor
+  test: (first [10 20 30])
+  expected: '10.0'
+- name: second-tensor
+  test: (second [10 20 30])
+  expected: '20.0'
+- name: last-tensor
+  test: (last [10 20 30])
+  expected: '30.0'
+- name: nth-tensor
+  test: (nth [10 20 30] 2)
+  expected: '30.0'
+
+# Regression: matmul 1D cases (dot_ops.rs)
+- name: matmul-vec-mat
+  test: (@ [1 2] [[3 4] [5 6]])
+  expected: '[13. 16.]'
+- name: matmul-mat-vec
+  test: (@ [[1 2] [3 4]] [5 6])
+  expected: '[17. 39.]'
+- name: matmul-dot
+  test: (@ [1 2 3] [4 5 6])
+  expected: '32.0'

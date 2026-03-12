@@ -449,8 +449,13 @@ fn grad_function_call(
         "**" if args.len() == 2 => {
             // d/dx (f^n) = n * f^(n-1) * df/dx
             let (base, exp) = (&args[0], &args[1]);
-            if let CompiledExpr::Float(n) = exp {
-                let local_g = mul(float(*n), call("**", vec![base.clone(), float(n - 1.0)]));
+            let n = match exp {
+                CompiledExpr::Float(n) => Some(*n),
+                CompiledExpr::Integer(n) => Some(*n as f64),
+                _ => None,
+            };
+            if let Some(n) = n {
+                let local_g = mul(float(n), call("**", vec![base.clone(), float(n - 1.0)]));
                 grad_with(base, wrt, mul(g, local_g))
             } else {
                 // General case: d/dx f^g = f^g * (g/f * df/dx + log(f) * dg/dx)

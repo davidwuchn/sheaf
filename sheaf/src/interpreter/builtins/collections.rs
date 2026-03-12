@@ -21,7 +21,7 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("index-of", builtin_index_of);
 }
 
-fn builtin_first(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+fn builtin_first(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::List(items) | Value::Tuple(items) => items.first().cloned().ok_or_else(|| runtime_error("first: empty list")),
         Value::Tensor { data, .. } => {
@@ -29,11 +29,15 @@ fn builtin_first(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
             else { Ok(Value::tensor_f32(sliced)) }
         }
+        Value::DeviceBuffer(_) => {
+            let host = args[0].ensure_host()?;
+            builtin_first(std::slice::from_ref(&host), kw)
+        }
         _ => Err(runtime_error("first: expected list or tensor")),
     }
 }
 
-fn builtin_second(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+fn builtin_second(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::List(items) | Value::Tuple(items) => items.get(1).cloned().ok_or_else(|| runtime_error("second: list too short")),
         Value::Tensor { data, .. } => {
@@ -41,11 +45,15 @@ fn builtin_second(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
             else { Ok(Value::tensor_f32(sliced)) }
         }
+        Value::DeviceBuffer(_) => {
+            let host = args[0].ensure_host()?;
+            builtin_second(std::slice::from_ref(&host), kw)
+        }
         _ => Err(runtime_error("second: expected list or tensor")),
     }
 }
 
-fn builtin_last(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+fn builtin_last(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::List(items) => items.last().cloned().ok_or_else(|| runtime_error("last: empty list")),
         Value::Tensor { data, .. } => {
@@ -53,6 +61,10 @@ fn builtin_last(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             let sliced = data.index_axis(ndarray::Axis(0), n - 1).to_owned();
             if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
             else { Ok(Value::tensor_f32(sliced)) }
+        }
+        Value::DeviceBuffer(_) => {
+            let host = args[0].ensure_host()?;
+            builtin_last(std::slice::from_ref(&host), kw)
         }
         _ => Err(runtime_error("last: expected list or tensor")),
     }
@@ -68,7 +80,7 @@ fn builtin_rest(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     }
 }
 
-fn builtin_nth(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+fn builtin_nth(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let f = args[1].to_f64().unwrap();
     match &args[0] {
         Value::List(items) => {
@@ -80,6 +92,10 @@ fn builtin_nth(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             let sliced = data.index_axis(ndarray::Axis(0), idx).to_owned();
             if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
             else { Ok(Value::tensor_f32(sliced)) }
+        }
+        Value::DeviceBuffer(_) => {
+            let host = args[0].ensure_host()?;
+            builtin_nth(&[host, args[1].clone()], kw)
         }
         _ => Err(runtime_error("nth: expected list or tensor")),
     }

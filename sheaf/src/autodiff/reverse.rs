@@ -612,9 +612,14 @@ fn distribute_fn_adjoint_named(
         }
 
         "**" if args.len() == 2 => {
-            if let CompiledExpr::Float(n) = &args[1] {
+            let n = match &args[1] {
+                CompiledExpr::Float(n) => Some(*n),
+                CompiledExpr::Integer(n) => Some(*n as f64),
+                _ => None,
+            };
+            if let Some(n) = n {
                 let pow = emit_binding(bindings, call("**", vec![args[0].clone(), float(n - 1.0)]));
-                let local = emit_binding(bindings, call("*", vec![float(*n), sym(&pow)]));
+                let local = emit_binding(bindings, call("*", vec![float(n), sym(&pow)]));
                 let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&local)]));
                 acc_arg(&args[0], sym(&contrib), adj_names, bindings);
             }
