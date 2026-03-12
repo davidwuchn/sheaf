@@ -34,10 +34,42 @@
   (+ (@ x w) b))
 
 
-(defn xavier-init [key shape]
+;; Weight initializers
+;; All follow (init key shape) convention, matching PyTorch naming.
+
+(defn xavier-uniform [key shape]
+  ;; Xavier/Glorot uniform: U(-limit, limit), limit = sqrt(6 / (fan_in + fan_out))
   (let [fan-in  (first shape)
         fan-out (second shape)
         limit (sqrt (/ 6.0 (+ fan-in fan-out)))]
+    (* (- (* (random-uniform key shape) 2.0) 1.0) limit)))
+
+(defn xavier-normal [key shape]
+  ;; Xavier/Glorot normal: N(0, sqrt(2 / (fan_in + fan_out)))
+  (let [fan-in  (first shape)
+        fan-out (second shape)]
+    (* (random-normal key shape) (sqrt (/ 2.0 (+ fan-in fan-out))))))
+
+(defn kaiming-uniform [key shape]
+  ;; Kaiming/He uniform: U(-limit, limit), limit = sqrt(6 / fan_in)
+  (let [fan-in (first shape)
+        limit (sqrt (/ 6.0 fan-in))]
+    (* (- (* (random-uniform key shape) 2.0) 1.0) limit)))
+
+(defn kaiming-normal [key shape]
+  ;; Kaiming/He normal: N(0, sqrt(2 / fan_in))
+  (let [fan-in (first shape)]
+    (* (random-normal key shape) (sqrt (/ 2.0 fan-in)))))
+
+(defn lecun-normal [key shape]
+  ;; LeCun normal: N(0, sqrt(1 / fan_in))
+  (let [fan-in (first shape)]
+    (* (random-normal key shape) (sqrt (/ 1.0 fan-in)))))
+
+(defn lecun-uniform [key shape]
+  ;; LeCun uniform: U(-limit, limit), limit = sqrt(3 / fan_in)
+  (let [fan-in (first shape)
+        limit (sqrt (/ 3.0 fan-in))]
     (* (- (* (random-uniform key shape) 2.0) 1.0) limit)))
 
 (defn clamp [x lo hi]

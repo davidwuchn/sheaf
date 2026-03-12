@@ -870,73 +870,48 @@ Cast a scalar tensor or number to a 32-bit integer or 32-bit float, respectively
 
 ## Initializers
 
-### init-zeros, init-ones
+Provided by `(use nn)`. All follow the `(init key shape)` convention, matching PyTorch naming.
+Use a quoted vector for the shape (e.g., `'[256 128]`) to ensure it is treated as static data.
 
-**Type:** function  
-**Signature:** `(init-zeros key shape)`, `(init-ones key shape)`
+For zero/one initialization, use the builtins `zeros` and `ones` directly (no key needed).
 
-Initialize a tensor of the specified shape filled entirely with `0.0` or `1.0`. While a PRNG `key` is required for signature consistency, the output of these functions is deterministic.
+### xavier-uniform, xavier-normal
+
+**Type:** function (`nn` module)
+**Signature:** `(xavier-uniform key shape)`, `(xavier-normal key shape)`
+
+Xavier (Glorot) initialization. Scales weights so variance stays constant across layers. Effective with symmetric activations (`tanh`, `sigmoid`).
 
 ```sheaf
-(init-zeros (random-key 0) '[128])  ; => f32[128] (μ=0.000 min=0.000 max=0.000)
-(init-ones (random-key 0) '[128])   ; => f32[128] (μ=1.000 min=1.000 max=1.000)
+(use nn)
+(xavier-uniform (random-key 42) '[256 128])  ; U(-limit, limit), limit = sqrt(6/(fan_in+fan_out))
+(xavier-normal  (random-key 42) '[256 128])  ; N(0, sqrt(2/(fan_in+fan_out)))
 ```
 
 ---
 
-### init-xavier-normal, init-xavier-uniform
+### kaiming-uniform, kaiming-normal
 
-**Type:** function  
-**Signature:** `(init-xavier-* key shape)`
+**Type:** function (`nn` module)
+**Signature:** `(kaiming-uniform key shape)`, `(kaiming-normal key shape)`
 
-Implements Xavier (also known as Glorot) initialization. It scales the weights such that the variance of the activations remains constant across layers. This is highly effective for networks using symmetric activation functions like `tanh` or `sigmoid`.
-
-**Note:** Use a quoted vector (e.g., `'[256 256]`) for the shape to ensure it is treated as static data and not as a tensor.
+Kaiming (He) initialization. Accounts for ReLU non-linearity by scaling variance by `2/fan_in`.
 
 ```sheaf
-(let [key (random-key 42)]
-  (init-xavier-normal key '[256 256]))
-
-; => f32[256x256]
+(kaiming-normal (random-key 42) '[512 256])
 ```
 
 ---
 
-### init-kaiming-normal, init-kaiming-uniform
+### lecun-normal, lecun-uniform
 
-**Type:** function  
-**Signature:** `(init-kaiming-* key shape)`
+**Type:** function (`nn` module)
+**Signature:** `(lecun-normal key shape)`, `(lecun-uniform key shape)`
 
-Implements Kaiming (also known as He) initialization. This method accounts for the non-linearity of ReLU-based activations by doubling the variance of the weights, preventing the signal from vanishing in deep architectures.
-
-```sheaf
-(init-kaiming-normal (random-key 0) [512 512])
-```
-
----
-
-### init-lecun-normal, init-lecun-uniform
-
-**Type:** function  
-**Signature:** `(init-lecun-* key shape)`
-
-Implements LeCun initialization. It draws weights from a distribution scaled by the inverse square root of the fan-in. This is the default initialization for many classic neural network architectures and is particularly effective when using the SELU activation.
+LeCun initialization. Scales by `1/fan_in`. Default for SELU networks.
 
 ```sheaf
-(init-lecun-normal (random-key 0) [256 256])
-```
-
----
-
-### init-orthogonal
-
-**Type:** function  
-**Signature:** `(init-orthogonal key shape)`
-
-Initializes a square or rectangular matrix as an orthogonal (or semi-orthogonal) matrix. Orthogonal initialization is particularly useful in recurrent networks (RNNs) and deep transformers to preserve the norm of the gradient and prevent explosion or vanishing.
-
-```sheaf
-(init-orthogonal (random-key 0) [128 128])
+(lecun-normal (random-key 42) '[256 128])
 ```
 
 ---
@@ -2508,16 +2483,16 @@ Clamps values element-wise to the range [lo, hi]. Supports broadcasting between 
 (clamp [-50 100 300] 0 255) ; => [0. 100. 255.]
 ```
 
-#### xavier-init
+#### xavier-uniform
 
-**Type:** function  
-**Signature:** `(xavier-init key shape)`
+**Type:** function
+**Signature:** `(xavier-uniform key shape)`
 
-Xavier (Glorot) initialization for weight matrices. Draws from uniform distribution with bounds based on fan-in/fan-out. This is a pure Sheaf implementation of `init-xavier`.
+Xavier (Glorot) uniform initialization for weight matrices. Draws from `U(-limit, limit)` where `limit = sqrt(6 / (fan_in + fan_out))`. See also `xavier-normal`, `kaiming-uniform`, `kaiming-normal`, `lecun-normal`, `lecun-uniform`.
 
 ```sheaf
 (let [key (random-key 42)]
-  (xavier-init key '[256 256]))
+  (xavier-uniform key '[256 256]))
 
 ; => f32[256x256]  (suitable for dense layer weights)
 ```
