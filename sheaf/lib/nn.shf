@@ -1,5 +1,40 @@
 ;; Neural network library for Sheaf
 
+
+;; Activation functions
+;; Defined in Sheaf so the JIT inlines them into the caller's MLIR,
+;; enabling kernel fusion (e.g. matmul + relu = one IREE dispatch).
+
+(defn relu [x] (maximum x 0.0))
+
+(defn sigmoid [x] (/ 1.0 (+ 1.0 (exp (- 0 x)))))
+
+(defn silu [x] (* x (sigmoid x)))
+
+(defn gelu [x]
+  (* 0.5 (* x (+ 1.0 (tanh (* 0.7978846 (+ x (* 0.044715 (** x 3)))))))))
+
+(defn leaky-relu [x] (+ (maximum x 0.0) (* 0.01 (minimum x 0.0))))
+
+(defn selu [x]
+  (let [alpha 1.6732632
+        scale 1.0507010]
+    (* scale (+ (maximum x 0.0) (* alpha (- (exp (minimum x 0.0)) 1.0))))))
+
+(defn celu [x]
+  (+ (maximum x 0.0) (minimum 0.0 (- (exp x) 1.0))))
+
+(defn softmax [x]
+  (let [e (exp (- x (max x :axis -1 :keepdims)))]
+    (/ e (sum e :axis -1 :keepdims))))
+
+(defn log-softmax [x]
+  (let [s (- x (max x :axis -1 :keepdims))]
+    (- s (log (sum (exp s) :axis -1 :keepdims)))))
+
+
+;; Loss functions
+
 (defn cross-entropy-loss [logits targets]
   (let [V (int (last (shape logits)))
         log-p (log-softmax (reshape logits (cons -1 (cons V '[]))) :axis -1)

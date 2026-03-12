@@ -201,20 +201,41 @@ impl CompilerContext {
     /// Load core macros from the standard library (macros.shf).
     /// These are always available without explicit `(use macros)`.
     fn load_prelude(&mut self) {
-        for dir in &self.load_path {
+        let dirs = self.load_path.clone();
+        for dir in &dirs {
             let path = dir.join("macros.shf");
             if path.exists() {
-                if let Ok(source) = std::fs::read_to_string(&path) {
-                    let filename = path.to_str().unwrap_or("<prelude>");
-                    if let Ok(exprs) = crate::core::parse(&source, filename) {
-                        for expr in &exprs {
-                            let _ = self.compile(expr);
-                        }
-                    }
-                    self.loaded_modules.insert(path);
-                }
-                return;
+                self.load_stdlib_file(&path);
+                break;
             }
+        }
+        // Load all remaining .shf files in stdlib dirs
+        for dir in &dirs {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                let mut paths: Vec<_> = entries
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|e| e == "shf"))
+                    .collect();
+                paths.sort();
+                for path in paths {
+                    if !self.loaded_modules.contains(&path) {
+                        self.load_stdlib_file(&path);
+                    }
+                }
+            }
+        }
+    }
+
+    fn load_stdlib_file(&mut self, path: &std::path::Path) {
+        if let Ok(source) = std::fs::read_to_string(path) {
+            let filename = path.to_str().unwrap_or("<stdlib>");
+            if let Ok(exprs) = crate::core::parse(&source, filename) {
+                for expr in &exprs {
+                    let _ = self.compile(expr);
+                }
+            }
+            self.loaded_modules.insert(path.to_path_buf());
         }
     }
 
@@ -222,12 +243,10 @@ impl CompilerContext {
     fn default_load_path() -> Vec<PathBuf> {
         let mut paths = Vec::new();
 
-        // 1. $SHEAF_LIB env var
         if let Ok(lib) = std::env::var("SHEAF_LIB") {
             paths.push(PathBuf::from(lib));
         }
 
-        // 2. Stdlib relative to the running binary: <binary>/../lib/
         if let Ok(exe) = std::env::current_exe() {
             if let Some(bin_dir) = exe.parent() {
                 let candidate = bin_dir.join("../lib");

@@ -172,6 +172,17 @@ fn builtin_choice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             }
             Ok(Value::Int((data.len() - 1) as i64))
         }
+        Some(Value::DeviceBuffer(db)) => {
+            let data = db.to_host().map_err(|e| runtime_error(format!("choice: {}", e)))?;
+            let mut cumsum = 0.0f32;
+            for (i, &p) in data.iter().enumerate() {
+                cumsum += p;
+                if u < cumsum {
+                    return Ok(Value::Int(i as i64));
+                }
+            }
+            Ok(Value::Int((data.len() - 1) as i64))
+        }
         Some(Value::List(items)) => {
             let flat: Vec<f32> = items.iter().filter_map(|v| v.to_f64().map(|x| x as f32)).collect();
             let mut cumsum = 0.0f32;

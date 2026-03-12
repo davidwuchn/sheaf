@@ -585,66 +585,6 @@ impl StableHLOEmitter {
         let reg = self.fresh_register();
 
         match op {
-            "relu" => {
-                let zero_reg = self.emit_constant_f32(0.0);
-                let zero_ty = StableHLOType::scalar_f32();
-
-                let broadcasted_zero = if ty.shape() != zero_ty.shape() && !ty.shape().is_empty() {
-                    self.emit_broadcast(&zero_reg, &zero_ty, ty)
-                } else {
-                    zero_reg
-                };
-
-                self.body.push(format!(
-                    "    {} = stablehlo.maximum {}, {} : {}",
-                    reg.to_mlir(),
-                    operand.to_mlir(),
-                    broadcasted_zero.to_mlir(),
-                    ty.to_mlir()
-                ));
-            }
-            "sigmoid" => {
-                let neg_reg = self.fresh_register();
-                self.body.push(format!(
-                    "    {} = stablehlo.negate {} : {}",
-                    neg_reg.to_mlir(),
-                    operand.to_mlir(),
-                    ty.to_mlir()
-                ));
-
-                let exp_reg = self.fresh_register();
-                self.body.push(format!(
-                    "    {} = stablehlo.exponential {} : {}",
-                    exp_reg.to_mlir(),
-                    neg_reg.to_mlir(),
-                    ty.to_mlir()
-                ));
-
-                let one_reg = self.emit_constant_f32(1.0);
-                let one_ty = StableHLOType::scalar_f32();
-                let broadcasted_one = if ty.shape() != one_ty.shape() && !ty.shape().is_empty() {
-                    self.emit_broadcast(&one_reg, &one_ty, ty)
-                } else {
-                    one_reg.clone()
-                };
-
-                let one_plus_exp = self.fresh_register();
-                self.body.push(format!(
-                    "    {} = stablehlo.add {}, {} : {}",
-                    one_plus_exp.to_mlir(),
-                    broadcasted_one.to_mlir(),
-                    exp_reg.to_mlir(),
-                    ty.to_mlir()
-                ));
-
-                self.body.push(format!(
-                    "    {} = stablehlo.divide {}, {} : {}",
-                    reg.to_mlir(),
-                    broadcasted_one.to_mlir(),
-                    one_plus_exp.to_mlir(),
-                    ty.to_mlir()
-                ));
-            }
             "tanh" => {
                 self.body.push(format!(
                     "    {} = stablehlo.tanh {} : {}",

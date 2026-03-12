@@ -214,22 +214,7 @@ pub fn run() {
 
     let mut interp = Interpreter::new();
 
-    // Load all stdlib modules (macros.shf is already loaded as prelude)
-    for dir in interp.load_path().to_vec() {
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|e| e == "shf") {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        if stem == "macros" { continue; }
-                        let _ = interp.eval(&format!("(use {})", stem));
-                    }
-                }
-            }
-        }
-    }
-
-    // Initial refresh with builtins + stdlib
+    // Initial refresh with builtins + stdlib (all stdlib loaded by CompilerContext)
     rl.helper_mut().unwrap().refresh(&interp);
 
     loop {
