@@ -316,8 +316,7 @@ impl IreeSession {
                 null_alloc,
             );
             if !iree_status_is_ok(status) {
-                unsafe extern "C" { static __stderrp: *mut std::ffi::c_void; }
-                iree_status_fprint(__stderrp, status);
+                unsafe { iree_status_fprint(libc_stderr(), status); }
                 return Err(iree_err("failed to load VMFB module"));
             }
             Ok(())
@@ -796,8 +795,7 @@ unsafe fn buffer_view_to_value(
                 byte_len as u64, 0, iree_timeout_t::infinite(),
             );
             if !iree_status_is_ok(status) {
-                unsafe extern "C" { static __stderrp: *mut std::ffi::c_void; }
-                unsafe { iree_status_fprint(__stderrp, status); }
+                unsafe { iree_status_fprint(libc_stderr(), status); }
                 return Err(iree_err("failed to read IREE buffer data"));
             }
             (f32_buf, Dtype::F32)
@@ -809,8 +807,7 @@ unsafe fn buffer_view_to_value(
                 byte_len as u64, 0, iree_timeout_t::infinite(),
             );
             if !iree_status_is_ok(status) {
-                unsafe extern "C" { static __stderrp: *mut std::ffi::c_void; }
-                unsafe { iree_status_fprint(__stderrp, status); }
+                unsafe { iree_status_fprint(libc_stderr(), status); }
                 return Err(iree_err("failed to read IREE buffer data"));
             }
             (i32_buf.iter().map(|&x| x as f32).collect::<Vec<f32>>(), Dtype::I32)
