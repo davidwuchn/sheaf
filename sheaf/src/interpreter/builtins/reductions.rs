@@ -69,7 +69,11 @@ fn builtin_min(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if let Some(axis) = get_axis(kw) {
         let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
         let result = reduce_along_axis(&arr, ax, |v| v.iter().copied().fold(f32::INFINITY, f32::min));
-        Ok(Value::tensor_f32(result))
+        if keepdims(kw) {
+            Ok(Value::tensor_f32(result.insert_axis(ndarray::Axis(ax))))
+        } else {
+            Ok(Value::tensor_f32(result))
+        }
     } else {
         Ok(Value::Float(arr.iter().copied().fold(f32::INFINITY, f32::min)))
     }
@@ -88,7 +92,11 @@ fn builtin_max(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if let Some(axis) = get_axis(kw) {
         let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
         let result = reduce_along_axis(&arr, ax, |v| v.iter().copied().fold(f32::NEG_INFINITY, f32::max));
-        Ok(Value::tensor_f32(result))
+        if keepdims(kw) {
+            Ok(Value::tensor_f32(result.insert_axis(ndarray::Axis(ax))))
+        } else {
+            Ok(Value::tensor_f32(result))
+        }
     } else {
         Ok(Value::Float(arr.iter().copied().fold(f32::NEG_INFINITY, f32::max)))
     }

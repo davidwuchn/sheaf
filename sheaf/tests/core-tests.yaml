@@ -687,3 +687,23 @@
 - name: matmul-dot
   test: (@ [1 2 3] [4 5 6])
   expected: '32.0'
+
+# Regression: keepdims on reductions (stdlib softmax depends on this)
+- name: max-axis-keepdims
+  test: (shape (max [[1 2 3] [4 5 6]] :axis -1 :keepdims))
+  expected: '[2 1]'
+- name: min-axis-keepdims
+  test: (shape (min [[1 2 3] [4 5 6]] :axis -1 :keepdims))
+  expected: '[2 1]'
+- name: sum-axis-keepdims
+  test: (shape (sum [[1 2 3] [4 5 6]] :axis -1 :keepdims))
+  expected: '[2 1]'
+- name: mean-axis-keepdims
+  test: (shape (mean [[1 2 3] [4 5 6]] :axis -1 :keepdims))
+  expected: '[2 1]'
+- name: max-axis-keepdims-value
+  test: (max [[1 2 3] [4 5 6]] :axis -1 :keepdims)
+  expected: '[[3.] [6.]]'
+- name: min-axis-keepdims-value
+  test: (min [[1 2 3] [4 5 6]] :axis -1 :keepdims)
+  expected: '[[1.] [4.]]'
