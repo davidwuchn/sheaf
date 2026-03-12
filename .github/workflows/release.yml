@@ -15,7 +15,7 @@ jobs:
     outputs:
       version: ${{ steps.read.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Read IREE version from Cargo.toml
         id: read
         run: |
@@ -44,10 +44,10 @@ jobs:
     steps:
       - name: Cache IREE runtime
         id: cache-iree
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: iree-install
-          key: iree-runtime-${{ needs.read-iree-version.outputs.version }}-${{ matrix.target }}-v3
+          key: iree-runtime-${{ needs.read-iree-version.outputs.version }}-${{ matrix.target }}-v7
 
       - name: Install cross-compilation toolchain (linux-aarch64)
         if: steps.cache-iree.outputs.cache-hit != 'true' && matrix.target == 'linux-aarch64'
@@ -115,14 +115,15 @@ jobs:
             -DIREE_HAL_DRIVER_VULKAN=OFF \
             $METAL_FLAG \
             $EXTRA_FLAGS
+          cmake --build iree-build --target iree_runtime_unified flatcc_parsing flatcc_runtime || \
           cmake --build iree-build --target iree_runtime_unified
           mkdir -p iree-install/lib
           find iree-build -name "libiree_runtime_unified.a" -exec cp {} iree-install/lib/ \;
-          find iree-build -name "libflatcc_parsing.a" -exec cp {} iree-install/lib/ \; 2>/dev/null || true
-          find iree-build -name "libflatcc_runtime.a" -exec cp {} iree-install/lib/ \; 2>/dev/null || true
+          find iree-build -name "libflatcc*" -type f -exec cp {} iree-install/lib/ \; 2>/dev/null || true
+          ls -la iree-install/lib/
 
       - name: Upload IREE runtime
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: iree-runtime-${{ matrix.target }}
           path: iree-install/lib/
@@ -149,7 +150,7 @@ jobs:
             linker: ""
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -163,10 +164,13 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Download IREE runtime
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: ${{ matrix.iree_artifact }}
           path: iree-runtime-lib
+
+      - name: List IREE runtime libs
+        run: find iree-runtime-lib -type f
 
       - name: Build sheaf
         env:
@@ -193,7 +197,7 @@ jobs:
           tar czf sheaf-${{ matrix.target }}.tar.gz -C sheaf/target/${{ matrix.rust_target }}/release sheaf
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sheaf-${{ matrix.target }}
           path: sheaf-${{ matrix.target }}.tar.gz
@@ -206,7 +210,7 @@ jobs:
       contents: write
     steps:
       - name: Download all binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: sheaf-*
           merge-multiple: true

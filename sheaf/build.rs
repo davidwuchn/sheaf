@@ -131,11 +131,20 @@ fn link_from_dir(lib_dir: &PathBuf) -> bool {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static:+whole-archive=iree_runtime_unified");
 
-    if lib_dir.join("libflatcc_parsing.a").exists() {
+    let flatcc_parsing = lib_dir.join("libflatcc_parsing.a");
+    let flatcc_runtime = lib_dir.join("libflatcc_runtime.a");
+    if flatcc_parsing.exists() {
         println!("cargo:rustc-link-lib=static=flatcc_parsing");
     }
-    if lib_dir.join("libflatcc_runtime.a").exists() {
+    if flatcc_runtime.exists() {
         println!("cargo:rustc-link-lib=static=flatcc_runtime");
+    }
+    // Force flatcc onto linker command line for GNU ld cross-compilation
+    if flatcc_parsing.exists() {
+        println!("cargo:rustc-link-arg={}", flatcc_parsing.display());
+    }
+    if flatcc_runtime.exists() {
+        println!("cargo:rustc-link-arg={}", flatcc_runtime.display());
     }
 
     true
