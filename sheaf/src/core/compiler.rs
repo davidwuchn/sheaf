@@ -198,46 +198,24 @@ impl CompilerContext {
         ctx
     }
 
-    /// Load core macros from the standard library (macros.shf).
-    /// These are always available without explicit `(use macros)`.
+    /// Load the standard library embedded in the binary.
+    /// Macros first (other modules depend on them), then nn, optim.
     fn load_prelude(&mut self) {
-        let dirs = self.load_path.clone();
-        for dir in &dirs {
-            let path = dir.join("macros.shf");
-            if path.exists() {
-                self.load_stdlib_file(&path);
-                break;
-            }
-        }
-        // Load all remaining .shf files in stdlib dirs
-        for dir in &dirs {
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                let mut paths: Vec<_> = entries
-                    .flatten()
-                    .map(|e| e.path())
-                    .filter(|p| p.extension().is_some_and(|e| e == "shf"))
-                    .collect();
-                paths.sort();
-                for path in paths {
-                    if !self.loaded_modules.contains(&path) {
-                        self.load_stdlib_file(&path);
-                    }
+        const STDLIB: &[(&str, &str)] = &[
+            ("macros.shf", include_str!("../../lib/macros.shf")),
+            ("nn.shf", include_str!("../../lib/nn.shf")),
+            ("optim.shf", include_str!("../../lib/optim.shf")),
+        ];
+        for (name, source) in STDLIB {
+            if let Ok(exprs) = crate::core::parse(source, *name) {
+                for expr in &exprs {
+                    let _ = self.compile(expr);
                 }
             }
         }
     }
 
-    fn load_stdlib_file(&mut self, path: &std::path::Path) {
-        if let Ok(source) = std::fs::read_to_string(path) {
-            let filename = path.to_str().unwrap_or("<stdlib>");
-            if let Ok(exprs) = crate::core::parse(&source, filename) {
-                for expr in &exprs {
-                    let _ = self.compile(expr);
-                }
-            }
-            self.loaded_modules.insert(path.to_path_buf());
-        }
-    }
+
 
     /// Build the default load path: stdlib dir (relative to binary) + cwd.
     fn default_load_path() -> Vec<PathBuf> {
