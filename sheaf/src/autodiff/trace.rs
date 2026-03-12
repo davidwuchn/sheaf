@@ -43,7 +43,7 @@ fn is_differentiable_op(name: &str) -> bool {
     matches!(name,
         "+" | "-" | "*" | "/" | "@" | "**"
         | "relu" | "sigmoid" | "exp" | "log" | "sqrt" | "tanh"
-        | "sum" | "softmax" | "transpose"
+        | "sum" | "softmax" | "transpose" | "tr"
     )
 }
 

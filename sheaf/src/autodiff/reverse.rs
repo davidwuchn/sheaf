@@ -373,7 +373,7 @@ fn distribute_fn_adjoint_named(
             acc_arg(&args[1], db_ub, adj_names, bindings);
         }
 
-        "transpose" => {
+        "transpose" | "tr" => {
             let dt = emit_binding(bindings, call("transpose", vec![adj.clone()]));
             acc_arg(&args[0], sym(&dt), adj_names, bindings);
         }

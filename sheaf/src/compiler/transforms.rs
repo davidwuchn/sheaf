@@ -501,7 +501,7 @@ fn try_infer_shape(
             | "where" => args.iter().find_map(|a| try_infer_shape(a, shapes)),
             "layer-norm" | "softmax" | "normalize" | "log-softmax"
                 => args.first().and_then(|a| try_infer_shape(a, shapes)),
-            "transpose" if args.len() == 1 || args.len() == 2 => {
+            "transpose" | "tr" if args.len() == 1 || args.len() == 2 => {
                 let sh = try_infer_shape(&args[0], shapes)?;
                 if sh.len() >= 2 {
                     let mut out = sh;

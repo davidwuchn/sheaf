@@ -4,6 +4,7 @@ use std::sync::Arc;
 pub(super) fn register(env: &mut Env) {
     env.set_builtin("reshape", builtin_reshape);
     env.set_builtin("transpose", builtin_transpose);
+    env.set_builtin("tr", builtin_transpose);
     env.set_builtin("concat", builtin_concat);
     env.set_builtin("slice", builtin_slice);
     env.set_builtin("get", builtin_get);

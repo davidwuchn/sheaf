@@ -631,8 +631,9 @@ Gives a new shape to a tensor without changing its underlying data. The total nu
 
 ### transpose
 
-**Type:** function  
+**Type:** function
 **Signature:** `(transpose x [perm])`
+**Alias:** `tr`
 
 Permutes the dimensions of a tensor according to the sequence of axes provided. This is a zero-copy operation in XLA that is critical for reordering dimensions (e.g., swapping batch and sequence axes or head dimensions).
 
@@ -646,12 +647,12 @@ Permutes the dimensions of a tensor according to the sequence of axes provided. 
                     [11 12]]])) ; => (2 3 2)
 
 ;; Custom permutation '[2 0 1]: (2 3 2) -> (2 2 3)
-(shape (transpose [[[1 2]
-                    [3 4]
-                    [5 6]]
-                   [[7 8]
-                    [9 10]
-                    [11 12]]] '[2 0 1])) ; => (2 2 3)
+(shape (tr [[[1 2]
+             [3 4]
+             [5 6]]
+             [[7 8]
+             [9 10]
+             [11 12]]] '[2 0 1])) ; => (2 2 3)
 ```
 
 ---

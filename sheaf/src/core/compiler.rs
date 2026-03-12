@@ -166,7 +166,7 @@ fn is_builtin_name(name: &str) -> bool {
         | "sum" | "mean" | "product" | "min" | "max" | "minimum" | "maximum"
         | "argmax" | "argmin"
         | "zeros" | "ones" | "arange" | "eye" | "one-hot" | "tril"
-        | "reshape" | "transpose" | "concat" | "slice" | "where" | "roll" | "index-update"
+        | "reshape" | "transpose" | "tr" | "concat" | "slice" | "where" | "roll" | "index-update"
         | "first" | "second" | "last" | "rest" | "nth" | "cons" | "append" | "empty?"
         | "get" | "get-in" | "assoc" | "dissoc" | "merge" | "keys" | "vals" | "dict"
         | "map" | "filter" | "reduce" | "scan" | "apply" | "find"

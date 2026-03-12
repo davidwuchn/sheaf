@@ -333,7 +333,7 @@ fn grad_function_call(
             add(grad_with(a, wrt, g_a), grad_with(b, wrt, g_b))
         }
 
-        "transpose" => {
+        "transpose" | "tr" => {
             // d/dx transpose(f) = transpose(df/dx)
             grad_with(&args[0], wrt, transpose(g))
         }

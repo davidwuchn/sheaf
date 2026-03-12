@@ -598,7 +598,7 @@ impl CodeGenerator {
             }
         }
         // transpose: (transpose tensor [1 0]) or (transpose tensor), default perm [1 0]
-        else if name == "transpose" && (args.len() == 1 || args.len() == 2) {
+        else if (name == "transpose" || name == "tr") && (args.len() == 1 || args.len() == 2) {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             let permutation: Vec<i64> = if args.len() == 2 {
                 if let CompiledExpr::Vector(perm_elems) = &args[1] {
