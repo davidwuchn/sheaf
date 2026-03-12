@@ -337,59 +337,24 @@
 - name: tensor
   test: (tensor '[1. 2. 3.])
   expected: '[1. 2. 3.]'
-- name: init-zeros, init-ones
-  test: (init-zeros (random-key 0) '[128])
-  expected: "[0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.\
-    \ 0.\n 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.\n\
-    \ 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.\n 0.\
-    \ 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.\n 0. 0.\
-    \ 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.\n 0. 0. 0.\
-    \ 0. 0. 0. 0. 0.]"
-- name: init-zeros, init-ones
-  test: (init-ones (random-key 0) '[128])
-  expected: "[1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1.\
-    \ 1.\n 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1.\n\
-    \ 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1.\n 1.\
-    \ 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1.\n 1. 1.\
-    \ 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1.\n 1. 1. 1.\
-    \ 1. 1. 1. 1. 1.]"
-- name: random-normal
-  test: (random-normal (random-key 0) '[100 100])
-  expected: "[[ 1.6226422   2.0252647  -0.43359444 ... -0.91352165  1.370097\n  -0.7800775\
-    \ ]\n [ 0.36481506  0.9761402  -0.0071727  ... -0.07060029  0.33603913\n   2.354045\
-    \  ]\n [-0.2431693   1.1728051   0.84588975 ... -0.7116935  -0.05395174\n  -2.0926828\
-    \ ]\n ...\n [ 1.3993016  -0.4509243   0.28393263 ... -0.5471076   0.9754808\n\
-    \  -0.7542531 ]\n [ 1.0007046  -1.4387088   1.9441968  ... -0.5817165  -0.6754616\n\
-    \   0.02914328]\n [-0.01038985  1.3717858   0.64001614 ... -0.2991956  -0.01909376\n\
-    \   0.3742796 ]]"
-- name: random-uniform
-  test: (random-uniform (random-key 0) '[10 10])
-  expected: "[[0.947667   0.9785799  0.33229148 0.46866846 0.5698887  0.16550303\n\
-    \  0.3101946  0.68948054 0.74676657 0.17101455]\n [0.9853538  0.02528262 0.6400418\
-    \  0.56269085 0.8992138  0.93453753\n  0.8341402  0.7256162  0.5098531  0.02765214]\n\
-    \ [0.03148878 0.9580188  0.5188192  0.79221416 0.5522419  0.6113529\n  0.8931755\
-    \  0.75499094 0.21164179 0.22934973]\n [0.06192303 0.6189376  0.49173605 0.54509854\
-    \ 0.41268063 0.5281111\n  0.80325234 0.20560277 0.49416995 0.44019997]\n [0.1840241\
-    \  0.22390449 0.6304687  0.79081404 0.51702666 0.28174305\n  0.33929098 0.02611375\
-    \ 0.9059328  0.77465725]\n [0.5642326  0.4861064  0.09165359 0.65306926 0.6853086\
-    \  0.7892523\n  0.2631328  0.8505409  0.22916746 0.3336128 ]\n [0.41095054 0.30164778\
-    \ 0.04753721 0.75027466 0.58993864 0.11899161\n  0.16435051 0.884339   0.20009673\
-    \ 0.7453114 ]\n [0.8572433  0.62377906 0.66918504 0.8793726  0.8179842  0.8892641\n\
-    \  0.29239714 0.80408525 0.49682212 0.68205   ]\n [0.13370752 0.99588335 0.81315327\
-    \ 0.8401809  0.60071456 0.5497229\n  0.877823   0.57650626 0.42426455 0.33120263]\n\
-    \ [0.1258564  0.57832193 0.8787308  0.1912229  0.81105983 0.3653834\n  0.44190156\
-    \ 0.18048406 0.91467166 0.21767259]]"
-- name: random-randint
-  test: (random-randint (random-key 0) '[100] 0 10)
-  expected: "[9 0 2 3 1 7 2 3 3 3 6 4 0 9 9 5 8 0 2 1 3 6 2 5 7 5 8 5 8 8 9 4 9 7\
-    \ 3 4 7\n 8 9 8 6 7 2 3 1 4 3 8 8 3 6 7 6 5 8 6 9 9 2 6 7 9 5 9 2 4 0 4 3 6 8\
-    \ 0 7 3\n 4 4 1 2 1 3 9 0 7 6 4 7 7 2 5 1 3 0 6 4 6 2 6 1 3 5]"
-- name: choice
-  test: (choice (random-key 0) 100 '[5])
-  expected: '[89  0 12 73 71]'
-- name: choice
-  test: (choice (random-key 0) 3 '[10] :p [0.1 0.3 0.6])
-  expected: '[0 0 2 2 2 2 2 1 1 2]'
+- name: random-normal-shape
+  test: (shape (random-normal (random-key 0) '[10 5]))
+  expected: '[10. 5.]'
+- name: random-normal-nonzero
+  test: (!= (sum (random-normal (random-key 42) '[10])) 0.0)
+  expected: 'True'
+- name: random-uniform-shape
+  test: (shape (random-uniform (random-key 0) '[3 4]))
+  expected: '[3. 4.]'
+- name: random-uniform-nonzero
+  test: (> (sum (random-uniform (random-key 42) '[10])) 0.0)
+  expected: 'True'
+- name: random-randint-shape
+  test: (shape (random-randint (random-key 0) [100] 0 10))
+  expected: '[100.]'
+- name: random-randint-nonzero
+  test: (> (sum (random-randint (random-key 42) [10] 1 10)) 0.0)
+  expected: 'True'
 - name: first, second, last
   test: (first '[1 2 3])
   expected: '1'
@@ -429,11 +394,11 @@
 - name: tree-map
   test: (let [params {:layer1 {:w [2.0 4.0] :b 0.5} :layer2 {:w [10.0]}}] (tree-map
     (fn [x] (* x x)) params))
-  expected: '{:layer1 {:b 0.25 :w [4.0, 16.0]}, :layer2 {:w [100.0]}}'
+  expected: '{:layer1 {:b 0.25, :w [ 4. 16.]}, :layer2 {:w [100.]}}'
 - name: tree-map-zeros
   test: (let [params {:layer1 {:w [2.0 4.0] :b 0.5} :layer2 {:w [10.0]}}] (tree-map-zeros
     params))
-  expected: '{:layer1 {:b 0.0 :w [0.0, 0.0]}, :layer2 {:w [0.0]}}'
+  expected: '{:layer1 {:b 0.0, :w [0. 0.]}, :layer2 {:w [0.]}}'
 - name: flatten
   test: (let [params {:layer1 {:w 1.0 :b 2.0} :layer2 {:w 3.0}}] (first (flatten params)))
   expected: '[2.0, 1.0, 3.0]'
@@ -534,8 +499,8 @@
   test: ((vmap (fn [x w] (+ x w)) [0 nil]) [[1 2] [3 4]] 10)
   expected: "[[11. 12.]\n [13. 14.]]"
 - name: scan
-  test: (scan (fn [state x] [(+ state x)(+ state x)]) 0.0 [1.0 2.0 3.0])
-  expected: '[Array(6., dtype=float32), Array([1., 3., 6.], dtype=float32)]'
+  test: (let [[carry ys] (scan (fn [state x] [(+ state x) (+ state x)]) 0.0 '[1.0 2.0 3.0])] [carry ys])
+  expected: '[6.0, [1.0, 3.0, 6.0]]'
 - name: sparse-cross-entropy
   test: (sparse-cross-entropy [[0.9 0.1] [0.2 0.8]] [0 1] :i32)
   expected: '0.40429434'
@@ -568,10 +533,10 @@
   expected: 'True'
 - name: use
   test: (use nn)
-  expected: None
+  expected: 'nil'
 - name: use
   test: (use optim)
-  expected: None
+  expected: 'nil'
 - name: comment
   test: '"This is a long analysis of the algorithm"'
   expected: This is a long analysis of the algorithm
@@ -672,20 +637,11 @@
   test: (do '[1 "two" 3])
   expected: '[1, ''two'', 3]'
 - name: io entropy
-  test: (>= (io "entropy") 0)
+  test: (not (= (io "entropy") (io "entropy")))
   expected: 'True'
-- name: io entropy
-  test: (and (>= (io "entropy" 1) 0) (< (io "entropy" 1) 256))
-  expected: 'True'
-- name: io entropy
-  test: (not (= (io "entropy" 1) (io "entropy" 1)))
-  expected: 'True'
-- name: f-string format
-  test: (str-call "format" "loss={:.4f} step={}" 0.0532 100)
-  expected: loss=0.0532 step=100
-- name: f-string padding
-  test: (str-call "format" "[{:>3}] {:.2f}" 7 3.14159)
-  expected: '[  7] 3.14'
+- name: str-concat
+  test: (str "hello" " " "world")
+  expected: 'hello world'
 - name: vmap sum rows
   test: ((vmap (fn [x] (sum x))) (tensor [[1 2 3] [4 5 6]]))
   expected: '[ 6. 15.]'

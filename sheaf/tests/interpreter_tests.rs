@@ -677,19 +677,19 @@ fn test_reduce_tensor() {
 
 #[test]
 fn test_scan_list() {
-    // scan returns (final-carry, [intermediates])
+    // scan: fn returns [new-carry output], scan returns (final-carry, [outputs])
     assert_eq!(
-        eval("(first (scan (fn [a b] (+ a b)) 0 '(1 2 3 4)))"),
-        "10"
+        eval("(first (scan (fn [a b] [(+ a b) (+ a b)]) 0 '(1 2 3 4)))"),
+        "10.0"
     );
 }
 
 #[test]
 fn test_scan_outputs() {
-    // intermediate carries: 1, 3, 6, 10
+    // outputs from each step: 1, 3, 6, 10
     assert_eq!(
-        eval("(second (scan (fn [a b] (+ a b)) 0 '(1 2 3 4)))"),
-        "[1, 3, 6, 10]"
+        eval("(second (scan (fn [a b] [(+ a b) (+ a b)]) 0 '(1 2 3 4)))"),
+        "[1.0, 3.0, 6.0, 10.0]"
     );
 }
 

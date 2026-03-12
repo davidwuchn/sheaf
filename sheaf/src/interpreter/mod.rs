@@ -772,37 +772,56 @@ fn eval_scan(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
     let func = &args[0];
     let mut carry = args[1].clone();
     let mut outputs = Vec::new();
+
+    // Destructure [new_carry, output] from each step
+    let step = |func: &Value, carry: Value, x: Value, env: &mut Env|
+        -> Result<(Value, Value), SheafError>
+    {
+        let result = call_function(func, &[carry, x], env)?;
+        match &result {
+            Value::List(items) | Value::Tuple(items) if items.len() == 2 => {
+                Ok((items[0].clone(), items[1].clone()))
+            }
+            Value::Tensor { data, .. } if data.ndim() == 1 && data.shape()[0] == 2 => {
+                Ok((Value::Float(data[[0]]), Value::Float(data[[1]])))
+            }
+            _ => Err(runtime_error("scan: fn must return [new-carry output]")),
+        }
+    };
+
     match &args[2] {
         Value::List(items) => {
             for item in items {
-                carry = call_function(func, &[carry, item.clone()], env)?;
-                outputs.push(carry.clone());
+                let (new_carry, output) = step(func, carry, item.clone(), env)?;
+                carry = new_carry;
+                outputs.push(output);
             }
             Ok(Value::Tuple(vec![carry, Value::List(outputs)]))
         }
         Value::Tensor { data, .. } => {
             if data.ndim() == 1 {
                 for &x in data.iter() {
-                    carry = call_function(func, &[carry, Value::Float(x)], env)?;
-                    outputs.push(carry.clone());
+                    let (new_carry, output) = step(func, carry, Value::Float(x), env)?;
+                    carry = new_carry;
+                    outputs.push(output);
                 }
             } else {
                 for i in 0..data.shape()[0] {
                     let row = data.index_axis(ndarray::Axis(0), i).to_owned();
-                    carry = call_function(func, &[carry, Value::tensor_f32(row)], env)?;
-                    outputs.push(carry.clone());
+                    let (new_carry, output) = step(func, carry, Value::tensor_f32(row), env)?;
+                    carry = new_carry;
+                    outputs.push(output);
                 }
             }
             Ok(Value::Tuple(vec![carry, Value::List(outputs)]))
         }
         Value::Dict(map) => {
-            // Scan over a dict of stacked tensors (pytree-style).
-            // Each value is sliced along dim-0; the lambda receives a dict of slices.
             let n = dict_scan_length(map)?;
             for i in 0..n {
                 let slice = slice_dict(map, i)?;
-                carry = call_function(func, &[carry, slice], env)?;
-                outputs.push(carry.clone());
+                let (new_carry, output) = step(func, carry, slice, env)?;
+                carry = new_carry;
+                outputs.push(output);
             }
             Ok(Value::Tuple(vec![carry, Value::List(outputs)]))
         }

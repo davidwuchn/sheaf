@@ -80,24 +80,13 @@ def eval_expr(binary: str, expr: str) -> tuple[bool, str]:
 
 # Tests to skip: not yet implemented in the V2 interpreter.
 SKIP_PATTERNS = [
-    r"^(scan|random-key|random-normal|random-uniform|random-randint|choice|init-zeros|init-ones|io|use|str-call)\b",
-    r"\(str-call\b",
+    r"^choice\b",
 ]
 
 # Tests whose expected value reflects V1-Python/JAX artefacts that differ
 # from V2-native Sheaf output. These should be updated in core-tests.yaml
 # rather than worked around in the runner.
-V1_FORMAT_SKIP = {
-    # V1 returns Python repr of JAX arrays: Array(2., dtype=float32)
-    "map",
-    "fn",
-    # V1 returns Python dict repr {'key': val}, V2 uses {:key val}
-    "tree-map",
-    "tree-map-zeros",
-    "dict",
-    # V1 returns (3, 2) JAX shape tuple, V2 returns [3. 2.] tensor
-    "swapaxes",
-}
+V1_FORMAT_SKIP = set()
 
 
 def should_skip(name: str, expr: str) -> str | None:
