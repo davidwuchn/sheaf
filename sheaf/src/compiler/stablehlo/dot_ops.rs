@@ -7,7 +7,13 @@ use super::{Register, StableHLOEmitter, StableHLOType};
 
 impl StableHLOEmitter {
     /// Emit a matrix multiply (dot_general)
-    /// For simple 2D matrix multiply: [M, K] @ [K, N] -> [M, N]
+    /// Follows NumPy @ semantics:
+    ///   [K] @ [K]               -> scalar   (dot product)
+    ///   [K] @ [K, N]            -> [N]      (vec-mat)
+    ///   [M, K] @ [K]            -> [M]      (mat-vec)
+    ///   [M, K] @ [K, N]         -> [M, N]   (matmul)
+    ///   [..., M, K] @ [K, N]    -> [..., M, N]  (batched, rhs broadcast)
+    ///   [..., M, K] @ [..., K, N] -> [..., M, N] (batched)
     pub fn emit_matmul(
         &mut self,
         lhs: &Register,
@@ -20,18 +26,63 @@ impl StableHLOEmitter {
         let lhs_rank = lhs_shape.len();
         let rhs_rank = rhs_shape.len();
 
-        // NumPy broadcasting rule for @:
-        //   [...batch, M, K] @ [K, N]            → [...batch, M, N]   (rhs 2D: no batch dims)
-        //   [...batch, M, K] @ [...batch, K, N]  → [...batch, M, N]   (same rank: batch the prefix)
+        // Scalar operand: broadcast multiply instead of matmul
+        if lhs_rank == 0 || rhs_rank == 0 {
+            return self.emit_binop("*", lhs, rhs, lhs_ty, rhs_ty);
+        }
+
+        // Both 1D: dot product [K] @ [K] -> scalar
+        if lhs_rank == 1 && rhs_rank == 1 {
+            let result_ty = StableHLOType::f32_tensor(vec![]);
+            let reg = self.fresh_register();
+            self.body.push(format!(
+                "    {} = stablehlo.dot_general {}, {}, contracting_dims = [0] x [0] : ({}, {}) -> {}",
+                reg.to_mlir(), lhs.to_mlir(), rhs.to_mlir(),
+                lhs_ty.to_mlir(), rhs_ty.to_mlir(), result_ty.to_mlir()
+            ));
+            return (reg, result_ty);
+        }
+
+        // 1D lhs: [K] @ [K, N] -> [N] (vec-mat)
+        if lhs_rank == 1 && rhs_rank >= 2 {
+            let mut result_shape: Vec<i64> = rhs_shape[..rhs_rank - 2].to_vec();
+            result_shape.extend_from_slice(&rhs_shape[rhs_rank - 1..]);
+            let result_ty = StableHLOType::f32_tensor(result_shape);
+            let reg = self.fresh_register();
+            let rhs_contract = (rhs_rank as i64) - 2;
+            self.body.push(format!(
+                "    {} = stablehlo.dot_general {}, {}, contracting_dims = [0] x [{}] : ({}, {}) -> {}",
+                reg.to_mlir(), lhs.to_mlir(), rhs.to_mlir(),
+                rhs_contract,
+                lhs_ty.to_mlir(), rhs_ty.to_mlir(), result_ty.to_mlir()
+            ));
+            return (reg, result_ty);
+        }
+
+        // 1D rhs: [M, K] @ [K] -> [M] (mat-vec), or [..., M, K] @ [K] -> [..., M]
+        if rhs_rank == 1 {
+            let result_shape: Vec<i64> = lhs_shape[..lhs_rank - 1].to_vec();
+            let result_ty = StableHLOType::f32_tensor(result_shape);
+            let reg = self.fresh_register();
+            let lhs_contract = lhs_rank as i64 - 1;
+            self.body.push(format!(
+                "    {} = stablehlo.dot_general {}, {}, contracting_dims = [{}] x [0] : ({}, {}) -> {}",
+                reg.to_mlir(), lhs.to_mlir(), rhs.to_mlir(),
+                lhs_contract,
+                lhs_ty.to_mlir(), rhs_ty.to_mlir(), result_ty.to_mlir()
+            ));
+            return (reg, result_ty);
+        }
+
+        // General case: both rank >= 2
         let n_batch = if rhs_rank <= 2 {
             0
         } else {
             lhs_rank.min(rhs_rank).saturating_sub(2)
         };
-        let lhs_contract = lhs_rank as i64 - 1;   // last dim of LHS
-        let rhs_contract = n_batch as i64;          // first non-batch dim of RHS
+        let lhs_contract = lhs_rank as i64 - 1;
+        let rhs_contract = n_batch as i64;
 
-        // Result shape: batch dims + lhs free dims + rhs free dims
         let mut result_shape: Vec<i64> = lhs_shape[..n_batch].to_vec();
         result_shape.extend_from_slice(&lhs_shape[n_batch..lhs_rank - 1]);
         result_shape.extend_from_slice(&rhs_shape[n_batch + 1..]);

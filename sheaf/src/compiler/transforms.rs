@@ -543,12 +543,20 @@ fn try_infer_shape(
             "@" if args.len() == 2 => {
                 let lhs = try_infer_shape(&args[0], shapes)?;
                 let rhs = try_infer_shape(&args[1], shapes)?;
-                if lhs.len() >= 2 && rhs.len() >= 2 {
-                    let mut out = lhs[..lhs.len()-1].to_vec();
-                    out.push(*rhs.last().unwrap());
-                    Some(out)
-                } else {
-                    None
+                match (lhs.len(), rhs.len()) {
+                    (1, 1) => Some(vec![]),
+                    (1, r) if r >= 2 => {
+                        let mut out = rhs[..r-2].to_vec();
+                        out.extend_from_slice(&rhs[r-1..]);
+                        Some(out)
+                    }
+                    (_, 1) => Some(lhs[..lhs.len()-1].to_vec()),
+                    (l, r) if l >= 2 && r >= 2 => {
+                        let mut out = lhs[..lhs.len()-1].to_vec();
+                        out.push(*rhs.last().unwrap());
+                        Some(out)
+                    }
+                    _ => None,
                 }
             }
             // get: tensor indexing, (get tensor idx)
