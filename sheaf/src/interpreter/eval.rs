@@ -194,4 +194,8 @@ impl Interpreter {
     pub fn env_mut(&mut self) -> &mut Env {
         &mut self.env
     }
+
+    pub fn load_path(&self) -> &[std::path::PathBuf] {
+        &self.compiler.load_path
+    }
 }

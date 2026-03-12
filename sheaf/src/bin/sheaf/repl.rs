@@ -32,6 +32,8 @@ const REPL_COMMANDS: &[&str] = &[
 
 struct SheafHelper {
     names: Vec<String>,
+    term_cols: usize,
+    last_was_empty_tab: std::cell::Cell<bool>,
 }
 
 impl SheafHelper {
@@ -41,7 +43,7 @@ impl SheafHelper {
             .map(|k| k.to_string())
             .collect();
         names.sort();
-        Self { names }
+        Self { names, term_cols: 80, last_was_empty_tab: std::cell::Cell::new(false) }
     }
 
     fn refresh(&mut self, interp: &Interpreter) {
@@ -78,14 +80,24 @@ impl Completer for SheafHelper {
         let word = &line[start..pos];
 
         let matches = if word.is_empty() {
-            self.names.clone()
+            if self.last_was_empty_tab.get() {
+                print_columns(&self.names, self.term_cols);
+                print!("sheaf> ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                self.last_was_empty_tab.set(false);
+            } else {
+                self.last_was_empty_tab.set(true);
+            }
+            vec![]
         } else if word.starts_with(':') {
+            self.last_was_empty_tab.set(false);
             REPL_COMMANDS
                 .iter()
                 .filter(|cmd| cmd.starts_with(word))
                 .map(|s| s.to_string())
                 .collect()
         } else {
+            self.last_was_empty_tab.set(false);
             self.names
                 .iter()
                 .filter(|name| name.starts_with(word))
@@ -126,6 +138,23 @@ impl Highlighter for SheafHelper {
 }
 
 impl Helper for SheafHelper {}
+
+fn print_columns(names: &[String], term_width: usize) {
+    if names.is_empty() { return; }
+    let col_width = names.iter().map(|n| n.len()).max().unwrap_or(4) + 2;
+    let num_cols = (term_width / col_width).max(1);
+    let num_rows = (names.len() + num_cols - 1) / num_cols;
+    println!();
+    for row in 0..num_rows {
+        for col in 0..num_cols {
+            let idx = col * num_rows + row;
+            if idx < names.len() {
+                print!("{:<width$}", names[idx], width = col_width);
+            }
+        }
+        println!();
+    }
+}
 
 fn is_balanced(input: &str) -> bool {
     let mut depth = 0i32;
@@ -168,8 +197,12 @@ pub fn run() {
     let helper = SheafHelper::new();
     let config = rustyline::Config::builder()
         .completion_type(rustyline::CompletionType::List)
+        .completion_prompt_limit(500)
         .build();
     let mut rl = Editor::with_config(config).expect("failed to init line editor");
+    let term_cols = rl.dimensions().map(|(c, _)| c).unwrap_or(80);
+    let mut helper = helper;
+    helper.term_cols = term_cols;
     rl.set_helper(Some(helper));
     rl.bind_sequence(
         rustyline::KeyEvent(rustyline::KeyCode::Char('d'), rustyline::Modifiers::CTRL),
@@ -180,7 +213,23 @@ pub fn run() {
     }
 
     let mut interp = Interpreter::new();
-    // Initial refresh with builtins
+
+    // Load all stdlib modules (macros.shf is already loaded as prelude)
+    for dir in interp.load_path().to_vec() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "shf") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        if stem == "macros" { continue; }
+                        let _ = interp.eval(&format!("(use {})", stem));
+                    }
+                }
+            }
+        }
+    }
+
+    // Initial refresh with builtins + stdlib
     rl.helper_mut().unwrap().refresh(&interp);
 
     loop {
@@ -416,6 +465,7 @@ fn handle_command(input: &str, interp: &mut Interpreter) -> bool {
 
         ":clear" => {
             print!("\x1b[2J\x1b[H");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
         }
 
         _ => {
@@ -446,7 +496,7 @@ fn print_general_help() {
     println!("Sheaf REPL commands:
 
   :help, :h              Show this help
-  :help <name>, :? <name>  Help for a specific function or form
+  :help, :h <name>       Help for a specific function or form
   :env                   List all functions and variables
   :registry, :reg        List user-defined functions
   :show <name>           Show a variable's value
@@ -454,12 +504,7 @@ fn print_general_help() {
   :scope [name|off]      Filter tracing to specific functions
   :blame [on|off|report] Profile execution and print timing report
   :clear                 Clear the screen
-  :quit, :q              Exit the REPL
-
-Keyboard:
-  Tab                    Autocomplete
-  Ctrl-D                 Exit
-  Enter on incomplete    Continue on next line");
+  :quit, :q              Exit the REPL");
 }
 
 fn print_symbol_help(name: &str) {
