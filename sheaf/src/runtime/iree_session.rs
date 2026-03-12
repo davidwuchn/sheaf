@@ -492,50 +492,68 @@ impl IreeSession {
             }
 
             // Build input buffer views: DeviceBuffers pass through, others use cache.
-            const MAX_CACHE_ENTRIES: usize = 8;
-            let mut cache = self.buffer_cache.lock().unwrap();
-            let cached_fn = cache.entry(fn_name.to_string()).or_default();
-            if cached_fn.len() < flat_inputs.len() {
-                cached_fn.resize_with(flat_inputs.len(), Vec::new);
-            }
+            let all_device = flat_inputs.iter().all(|v| matches!(v, Value::DeviceBuffer(_)));
 
-            for (i, val) in flat_inputs.iter().enumerate() {
-                let bv = match val {
-                    Value::DeviceBuffer(db) => {
+            if all_device {
+                // Fast path: all inputs already on device, skip cache entirely
+                for val in flat_inputs.iter() {
+                    if let Value::DeviceBuffer(db) = val {
                         if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
-                        db.buffer_view()
-                    }
-                    _ => {
-                        let hit_idx = cached_fn[i].iter().position(|entry| entry.fingerprint.matches(val));
-                        if let Some(idx) = hit_idx {
-                            if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
-                            if idx > 0 { cached_fn[i].swap(0, idx); }
-                            cached_fn[i][0].bv
-                        } else {
-                            if self.profile { self.n_cache_misses.fetch_add(1, Ordering::Relaxed); }
-                            let new_bv = value_to_buffer_view(device, device_alloc, val)?;
-                            if let Some(fp) = TensorFingerprint::from_value(val) {
-                                if cached_fn[i].len() >= MAX_CACHE_ENTRIES {
-                                    let evicted = cached_fn[i].pop().unwrap();
-                                    iree_hal_buffer_view_release(evicted.bv);
-                                }
-                                cached_fn[i].insert(0, CachedBufferView { fingerprint: fp, bv: new_bv });
-                            }
-                            new_bv
+                        let mut ref_ = iree_hal_buffer_view_retain_ref(db.buffer_view());
+                        let status = iree_vm_list_push_ref_retain(input_list, &ref_);
+                        iree_vm_ref_release(&mut ref_);
+                        if !iree_status_is_ok(status) {
+                            iree_vm_list_release(input_list);
+                            return Err(iree_err("failed to push input to list"));
                         }
                     }
-                };
-
-                let mut ref_ = iree_hal_buffer_view_retain_ref(bv);
-                let status = iree_vm_list_push_ref_retain(input_list, &ref_);
-                iree_vm_ref_release(&mut ref_);
-                if !iree_status_is_ok(status) {
-                    iree_vm_list_release(input_list);
-                    return Err(iree_err("failed to push input to list"));
                 }
-            }
+            } else {
+                const MAX_CACHE_ENTRIES: usize = 8;
+                let mut cache = self.buffer_cache.lock().unwrap();
+                let cached_fn = cache.entry(fn_name.to_string()).or_default();
+                if cached_fn.len() < flat_inputs.len() {
+                    cached_fn.resize_with(flat_inputs.len(), Vec::new);
+                }
 
-            drop(cache);
+                for (i, val) in flat_inputs.iter().enumerate() {
+                    let bv = match val {
+                        Value::DeviceBuffer(db) => {
+                            if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
+                            db.buffer_view()
+                        }
+                        _ => {
+                            let hit_idx = cached_fn[i].iter().position(|entry| entry.fingerprint.matches(val));
+                            if let Some(idx) = hit_idx {
+                                if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
+                                if idx > 0 { cached_fn[i].swap(0, idx); }
+                                cached_fn[i][0].bv
+                            } else {
+                                if self.profile { self.n_cache_misses.fetch_add(1, Ordering::Relaxed); }
+                                let new_bv = value_to_buffer_view(device, device_alloc, val)?;
+                                if let Some(fp) = TensorFingerprint::from_value(val) {
+                                    if cached_fn[i].len() >= MAX_CACHE_ENTRIES {
+                                        let evicted = cached_fn[i].pop().unwrap();
+                                        iree_hal_buffer_view_release(evicted.bv);
+                                    }
+                                    cached_fn[i].insert(0, CachedBufferView { fingerprint: fp, bv: new_bv });
+                                }
+                                new_bv
+                            }
+                        }
+                    };
+
+                    let mut ref_ = iree_hal_buffer_view_retain_ref(bv);
+                    let status = iree_vm_list_push_ref_retain(input_list, &ref_);
+                    iree_vm_ref_release(&mut ref_);
+                    if !iree_status_is_ok(status) {
+                        iree_vm_list_release(input_list);
+                        return Err(iree_err("failed to push input to list"));
+                    }
+                }
+
+                drop(cache);
+            }
 
             let t2 = t0.map(|_| std::time::Instant::now());
 
