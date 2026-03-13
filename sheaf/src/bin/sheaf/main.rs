@@ -14,31 +14,56 @@ use std::process::exit;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let tail = &args[1..];
 
-    match args.get(1).map(|s| s.as_str()) {
+    // Handle early-exit flags anywhere in args
+    if tail.iter().any(|a| a == "--help" || a == "-h") {
+        print_help();
+        return;
+    }
+    if tail.iter().any(|a| a == "--version") {
+        println!("Sheaf {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
+    // Find the first positional argument (not starting with '-')
+    let first_positional = tail.iter().position(|a| !a.starts_with('-'));
+
+    match first_positional.map(|i| tail[i].as_str()) {
         Some("init-ai") => run_init_ai(),
 
-        Some("-c") => {
-            let expr = args[2..].join(" ");
-            if expr.is_empty() {
-                eprintln!("sheaf: -c requires an expression");
-                exit(1);
+        Some("-c") => unreachable!(), // -c starts with '-', won't match
+
+        Some(file) if file.ends_with(".shf") || std::path::Path::new(file).exists() => {
+            // Collect all args, putting the file first for run_file
+            let pos = first_positional.unwrap();
+            let mut reordered = vec![tail[pos].clone()];
+            for (i, a) in tail.iter().enumerate() {
+                if i != pos { reordered.push(a.clone()); }
             }
-            run_expr(&expr);
+            run_file(&reordered);
         }
 
-        Some("--help") | Some("-h") => print_help(),
-
-        Some("--version") => println!("Sheaf {}", env!("CARGO_PKG_VERSION")),
-
-        Some(arg) if !arg.starts_with('-') => run_file(&args[1..]),
-
-        None => run_repl(),
-
-        Some(arg) => {
-            eprintln!("sheaf: unknown command '{}'", arg);
-            eprintln!("Run 'sheaf --help' for usage.");
-            exit(1);
+        _ => {
+            // Check for -c anywhere
+            if let Some(ci) = tail.iter().position(|a| a == "-c") {
+                let expr = tail[ci + 1..].iter()
+                    .filter(|a| !a.starts_with('-') || a.parse::<f64>().is_ok())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if expr.is_empty() {
+                    eprintln!("sheaf: -c requires an expression");
+                    exit(1);
+                }
+                run_expr(&expr);
+            } else if tail.is_empty() {
+                run_repl();
+            } else {
+                eprintln!("sheaf: unknown command '{}'", tail[0]);
+                eprintln!("Run 'sheaf --help' for usage.");
+                exit(1);
+            }
         }
     }
 }
@@ -49,8 +74,8 @@ fn print_help() {
 
 Usage:
     sheaf                              Launch interactive REPL
-    sheaf FILE [OPTIONS]               Run a Sheaf file
-    sheaf -c EXPR [OPTIONS]            Evaluate an expression
+    sheaf [OPTIONS] FILE               Run a Sheaf file
+    sheaf -c EXPR                      Evaluate an expression
     sheaf init-ai                      Generate context file for AI assistants
 
 Options:
@@ -63,7 +88,9 @@ Options:
 Examples:
     sheaf script.shf
     sheaf -c '(+ 1 2)'
-    sheaf train.shf --blame
+    sheaf --blame train.shf
+    sheaf --guard no-nan train.shf
+    sheaf train.shf --guard loss:range:0:20
 
 Set SHEAF_JIT_VERBOSE=1 for compilation details.",
         env!("CARGO_PKG_VERSION")
