@@ -17,6 +17,7 @@ use std::sync::Arc;
 /// IREE compiler version, single source of truth in Cargo.toml [package.metadata]
 const IREE_COMPILER_VERSION: &str = env!("IREE_VERSION");
 
+use crate::sheaf_msg;
 use crate::autodiff::reverse::{to_anf, reverse_grad};
 use crate::compiler::codegen::{
     collect_tuple_leaves, expand_tuple_to_symbols, CodeGenerator,
@@ -40,19 +41,17 @@ pub struct JitCompiler {
     failed_fns: HashSet<String>,
     /// Cache compiled VAG sessions: vag_key → (session_idx, signature, param_names)
     vag_cache: HashMap<String, (usize, FunctionSignature, Vec<String>)>,
-    verbose: bool,
 }
 
 impl JitCompiler {
     pub fn new() -> Self {
-        let verbose = std::env::var("SHEAF_JIT_VERBOSE").is_ok();
         let target_backend = Self::detect_target_backend();
         let iree_compile_path = find_iree_compile().or_else(|| {
             match ensure_toolchain() {
                 Ok(path) => Some(path),
                 Err(e) => {
-                    eprintln!("sheaf: JIT compilation unavailable — {}", e);
-                    eprintln!("sheaf: functions without cached .vmfb will run in interpreter (slow)");
+                    sheaf_msg!("sheaf: JIT compilation unavailable — {}", e);
+                    sheaf_msg!("sheaf: functions without cached .vmfb will run in interpreter (slow)");
                     None
                 }
             }
@@ -62,22 +61,18 @@ impl JitCompiler {
             target_backend,
             failed_fns: HashSet::new(),
             vag_cache: HashMap::new(),
-            verbose,
         }
     }
 
     fn detect_target_backend() -> String {
-        match std::env::var("SHEAF_DEVICE") {
-            Ok(ref d) if d == "cpu" => return "llvm-cpu".to_string(),
-            Ok(ref d) => {
-                return match d.as_str() {
-                    "metal" => "metal-spirv",
-                    "cuda" => "cuda",
-                    "vulkan" => "vulkan-spirv",
-                    _ => "llvm-cpu",
-                }.to_string();
-            }
-            Err(_) => {}
+        if let Some(d) = crate::core::config::device_override() {
+            return match d {
+                "cpu" => "llvm-cpu",
+                "metal" => "metal-spirv",
+                "cuda" => "cuda",
+                "vulkan" => "vulkan-spirv",
+                _ => "llvm-cpu",
+            }.to_string();
         }
         // Use cached backend from the first IreeSession::new() call
         if let Some(backend) = crate::runtime::iree_session::IreeSession::cached_target_backend() {
@@ -184,6 +179,50 @@ impl JitCompiler {
             if let Some(idx) = func_def.params.iter().position(|p| p == param_name) {
                 sig.param_types[idx] = ty.clone();
             }
+        }
+
+        // -vv: log signature and lowered params
+        if crate::core::config::verbosity() >= 2 {
+            for (pname, pty) in func_def.params.iter().zip(sig.param_types.iter()) {
+                if let Some((_, imap)) = param_index_maps.iter().find(|(n, _)| n == pname) {
+                    // Collect top-level fields with their types from the tuple
+                    let mut top_fields: BTreeMap<usize, (String, String)> = BTreeMap::new();
+                    for (path, indices) in imap.iter() {
+                        if path.len() == 1 {
+                            // Leaf field: resolve type from tuple
+                            let ty_str = if let StableHLOType::Tuple(elems) = pty {
+                                if let Some(t) = elems.get(indices[0]) {
+                                    t.to_mlir()
+                                } else {
+                                    "?".to_string()
+                                }
+                            } else {
+                                "?".to_string()
+                            };
+                            top_fields.entry(indices[0])
+                                .or_insert((path[0].clone(), ty_str));
+                        } else if !top_fields.contains_key(&indices[0]) {
+                            // Nested field: show as tuple<...>
+                            let ty_str = if let StableHLOType::Tuple(elems) = pty {
+                                if let Some(StableHLOType::Tuple(sub)) = elems.get(indices[0]) {
+                                    format!("tuple<...> ({} fields)", sub.len())
+                                } else {
+                                    "tuple<...>".to_string()
+                                }
+                            } else {
+                                "tuple<...>".to_string()
+                            };
+                            top_fields.insert(indices[0], (path[0].clone(), ty_str));
+                        }
+                    }
+                    for (_, (key, ty_str)) in &top_fields {
+                        sheaf_msg!("jit: {} | {}.{}: {}", name, pname, key, ty_str);
+                    }
+                } else {
+                    sheaf_msg!("jit: {} | {}: {}", name, pname, pty.to_mlir());
+                }
+            }
+            sheaf_msg!("jit: {} | return: {}", name, sig.return_type.to_mlir());
         }
 
         // Capture value layouts for dict/tuple args (for return value reconstruction)
@@ -308,6 +347,10 @@ impl JitCompiler {
         // Emit MLIR module
         let mlir = StableHLOEmitter::emit_module(&[mlir_decl]);
 
+        if crate::core::config::verbosity() >= 2 {
+            sheaf_msg!("jit: {} | MLIR {} lines", name, mlir.lines().count());
+        }
+
         // Content hash for staleness check
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -319,12 +362,15 @@ impl JitCompiler {
         let cache_dir = PathBuf::from("__sheaf__");
         let cached_vmfb = cache_dir.join(format!("{}.vmfb", name));
 
-        // Check manifest for staleness
-        let vmfb_data = if cached_vmfb.exists() && manifest_hash_matches(&cache_dir, name, &content_hash) {
+        // Check manifest for staleness (-vv forces recompile for full debug output)
+        let force_recompile = crate::core::config::verbosity() >= 2;
+        let vmfb_data = if !force_recompile && cached_vmfb.exists() && manifest_hash_matches(&cache_dir, name, &content_hash) {
             match std::fs::read(&cached_vmfb) {
                 Ok(d) => {
-                    if self.verbose {
-                        eprintln!("jit: {} (cached)", name);
+                    if crate::core::config::verbosity() >= 2 {
+                        sheaf_msg!("jit: {} (cached, {}KB, {})", name, d.len() / 1024, target_backend);
+                    } else if crate::core::config::verbosity() >= 1 {
+                        sheaf_msg!("jit: {} (cached)", name);
                     }
                     d
                 }
@@ -334,8 +380,8 @@ impl JitCompiler {
                 }
             }
         } else {
-            if self.verbose {
-                eprintln!("jit: compiling {}...", name);
+            if crate::core::config::verbosity() >= 1 {
+                sheaf_msg!("jit: compiling {} [{}]...", name, target_backend);
             }
 
             let tmp_dir = std::env::temp_dir();
@@ -348,7 +394,7 @@ impl JitCompiler {
                 return None;
             }
 
-            let stderr_cfg = if self.verbose {
+            let stderr_cfg = if crate::core::config::verbosity() >= 2 {
                 std::process::Stdio::inherit()
             } else {
                 std::process::Stdio::null()
@@ -368,8 +414,10 @@ impl JitCompiler {
                 cmd.arg("--iree-llvmcpu-enable-ukernels=all");
             }
             let status = cmd.status();
-            if self.verbose {
-                let _ = std::fs::rename(&mlir_path, format!("__sheaf__/{}-debug.mlir", name));
+            if crate::core::config::verbosity() >= 2 {
+                let debug_mlir = format!("__sheaf__/{}-debug.mlir", name);
+                let _ = std::fs::rename(&mlir_path, &debug_mlir);
+                sheaf_msg!("jit: {} | saved {}", name, debug_mlir);
             } else {
                 let _ = std::fs::remove_file(&mlir_path);
             }
@@ -564,6 +612,49 @@ impl JitCompiler {
             }
         }
 
+        // -vv: log VAG signature and captures
+        if crate::core::config::verbosity() >= 2 {
+            for (pname, pty) in all_param_names.iter().zip(sig.param_types.iter()) {
+                if let Some((_, imap)) = param_index_maps.iter().find(|(n, _)| n == pname) {
+                    let mut top_fields: BTreeMap<usize, (String, String)> = BTreeMap::new();
+                    for (path, indices) in imap.iter() {
+                        if path.len() == 1 {
+                            let ty_str = if let StableHLOType::Tuple(elems) = pty {
+                                if let Some(t) = elems.get(indices[0]) {
+                                    t.to_mlir()
+                                } else {
+                                    "?".to_string()
+                                }
+                            } else {
+                                "?".to_string()
+                            };
+                            top_fields.entry(indices[0])
+                                .or_insert((path[0].clone(), ty_str));
+                        } else if !top_fields.contains_key(&indices[0]) {
+                            let ty_str = if let StableHLOType::Tuple(elems) = pty {
+                                if let Some(StableHLOType::Tuple(sub)) = elems.get(indices[0]) {
+                                    format!("tuple<...> ({} fields)", sub.len())
+                                } else {
+                                    "tuple<...>".to_string()
+                                }
+                            } else {
+                                "tuple<...>".to_string()
+                            };
+                            top_fields.insert(indices[0], (path[0].clone(), ty_str));
+                        }
+                    }
+                    for (_, (key, ty_str)) in &top_fields {
+                        sheaf_msg!("jit: value-and-grad | {}.{}: {}", pname, key, ty_str);
+                    }
+                } else {
+                    sheaf_msg!("jit: value-and-grad | {}: {}", pname, pty.to_mlir());
+                }
+            }
+            if !scalar_substitutions.is_empty() {
+                sheaf_msg!("jit: value-and-grad | {} scalar captures", scalar_substitutions.len());
+            }
+        }
+
         // Inline user-defined function calls
         body = crate::autodiff::inline_function_calls(&body, registry);
 
@@ -581,13 +672,13 @@ impl JitCompiler {
             .map(|(i, ty)| (all_param_names[i].clone(), ty.clone()))
             .collect();
         // Debug: log remaining reduces before unrolling
-        if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
-            eprintln!("jit: [vag] param_index_maps keys: {:?}",
+        if crate::core::config::verbosity() >= 2 {
+            sheaf_msg!("jit: [vag] param_index_maps keys: {:?}",
                 param_index_maps.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>());
             log_remaining_reduces(&body, "before unroll");
         }
         body = unroll_reduces(&body, &known_types_vec);
-        if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
+        if crate::core::config::verbosity() >= 2 {
             log_remaining_reduces(&body, "after unroll");
         }
 
@@ -643,7 +734,7 @@ impl JitCompiler {
         propagate_let_layouts(&body, &idx_to_key, &mut tuple_key_layouts);
 
         // Debug: log unresolved shapes
-        if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
+        if crate::core::config::verbosity() >= 2 {
             log_unresolved_shapes(&body, "before codegen");
         }
 
@@ -677,8 +768,8 @@ impl JitCompiler {
                     match param_ty {
                         StableHLOType::Tuple(_) => {
                             let leaves = collect_tuple_leaves(&expanded_body, param_name);
-                            if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
-                                eprintln!("jit: [vag] param '{}': {} tuple leaves", param_name, leaves.len());
+                            if crate::core::config::verbosity() >= 2 {
+                                sheaf_msg!("jit: [vag] param '{}': {} tuple leaves", param_name, leaves.len());
                             }
                             expanded_body = expand_tuple_to_symbols(&expanded_body, param_name);
                             for leaf in &leaves {
@@ -731,8 +822,8 @@ impl JitCompiler {
                 let (backward_bindings, grad_sym_map) =
                     reverse_grad(&anf_bindings, &anf_body, &all_wrt_symbols, &shape_map);
 
-                if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
-                    eprintln!("jit: [vag] ANF: {} fwd bindings, {} bwd bindings, {} wrt symbols",
+                if crate::core::config::verbosity() >= 2 {
+                    sheaf_msg!("jit: [vag] ANF: {} fwd bindings, {} bwd bindings, {} wrt symbols",
                         anf_bindings.len(), backward_bindings.len(), all_wrt_symbols.len());
                 }
 
@@ -855,6 +946,10 @@ impl JitCompiler {
         // Emit MLIR module
         let mlir = StableHLOEmitter::emit_module(&[mlir_decl]);
 
+        if crate::core::config::verbosity() >= 2 {
+            sheaf_msg!("jit: value-and-grad | MLIR {} lines", mlir.lines().count());
+        }
+
         // Content hash for staleness check
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -867,11 +962,14 @@ impl JitCompiler {
         let vag_cache_name = format!("{}-vag", vag_fn_name);
         let cached_vmfb = cache_dir.join(format!("{}.vmfb", vag_cache_name));
 
-        let vmfb_data = if cached_vmfb.exists() && manifest_hash_matches(&cache_dir, &vag_cache_name, &content_hash) {
+        let force_recompile = crate::core::config::verbosity() >= 2;
+        let vmfb_data = if !force_recompile && cached_vmfb.exists() && manifest_hash_matches(&cache_dir, &vag_cache_name, &content_hash) {
             match std::fs::read(&cached_vmfb) {
                 Ok(d) => {
-                    if self.verbose {
-                        eprintln!("jit: value_and_grad (cached)");
+                    if crate::core::config::verbosity() >= 2 {
+                        sheaf_msg!("jit: value_and_grad (cached, {}KB, {})", d.len() / 1024, backend);
+                    } else if crate::core::config::verbosity() >= 1 {
+                        sheaf_msg!("jit: value_and_grad (cached)");
                     }
                     d
                 }
@@ -881,8 +979,8 @@ impl JitCompiler {
                 }
             }
         } else {
-            if self.verbose {
-                eprintln!("jit: compiling value_and_grad...");
+            if crate::core::config::verbosity() >= 1 {
+                sheaf_msg!("jit: compiling value_and_grad [{}]...", backend);
             }
 
             let tmp_dir = std::env::temp_dir();
@@ -890,9 +988,10 @@ impl JitCompiler {
             let mlir_path = tmp_dir.join(format!("sheaf-jit-vag-{}.mlir", stamp));
 
             // Debug: save a copy for inspection
-            if self.verbose {
+            if crate::core::config::verbosity() >= 2 {
                 let debug_path = cache_dir.join(format!("{}-vag-debug.mlir", vag_fn_name));
                 let _ = std::fs::write(&debug_path, &mlir);
+                sheaf_msg!("jit: value-and-grad | saved {}", debug_path.display());
             }
             let vmfb_path = tmp_dir.join(format!("sheaf-jit-vag-{}.vmfb", stamp));
 
@@ -901,7 +1000,7 @@ impl JitCompiler {
                 return None;
             }
 
-            let stderr_cfg = if self.verbose {
+            let stderr_cfg = if crate::core::config::verbosity() >= 2 {
                 std::process::Stdio::inherit()
             } else {
                 std::process::Stdio::null()
@@ -976,14 +1075,14 @@ impl JitCompiler {
 
     fn jit_fail(&mut self, name: &str, reason: &str) {
         self.failed_fns.insert(name.to_string());
-        if self.verbose {
-            eprintln!("jit: {} skipped ({})", name, reason);
+        if crate::core::config::verbosity() >= 1 {
+            sheaf_msg!("jit: {} skipped ({})", name, reason);
         } else if reason.contains("compile failed")
             || reason.contains("compile exec")
             || reason.contains("init:")
             || reason.contains("load:")
         {
-            eprintln!("sheaf: '{}' will run in interpreter mode (compilation failed)", name);
+            sheaf_msg!("sheaf: '{}' will run in interpreter mode (compilation failed)", name);
 
         }
     }
@@ -1122,7 +1221,7 @@ pub fn ensure_toolchain() -> Result<String, Box<dyn std::error::Error>> {
         }
     }
 
-    eprintln!("sheaf: downloading compiler toolchain...");
+    sheaf_msg!("sheaf: downloading compiler toolchain...");
 
     // Fetch PyPI JSON metadata to find the wheel URL
     let pypi_url = format!(
@@ -1208,7 +1307,7 @@ pub fn ensure_toolchain() -> Result<String, Box<dyn std::error::Error>> {
     std::fs::write(dir.join("version"), IREE_COMPILER_VERSION)?;
 
     let binary = dir.join("iree-compile");
-    eprintln!("sheaf: compiler successfully installed in {}", dir.display());
+    sheaf_msg!("sheaf: compiler successfully installed in {}", dir.display());
     Ok(binary.to_string_lossy().to_string())
 }
 
@@ -1259,7 +1358,7 @@ fn log_remaining_reduces(expr: &CompiledExpr, label: &str) {
             } else {
                 "missing".to_string()
             };
-            eprintln!("jit: [{}] reduce with coll={}", label, coll_desc);
+            sheaf_msg!("jit: [{}] reduce with coll={}", label, coll_desc);
         }
         CompiledExpr::FunctionCall { args, .. } => {
             for a in args { log_remaining_reduces(a, label); }
@@ -1285,11 +1384,11 @@ fn log_unresolved_shapes(expr: &CompiledExpr, label: &str) {
                         .map(|e| format!("{:?}", e))
                         .collect();
                     if !unresolved.is_empty() {
-                        eprintln!("jit: [{}] reshape with unresolved shape elements: {:?}", label, unresolved);
+                        sheaf_msg!("jit: [{}] reshape with unresolved shape elements: {:?}", label, unresolved);
                     }
                 }
                 other => {
-                    eprintln!("jit: [{}] reshape with non-vector shape: {:?}", label, other);
+                    sheaf_msg!("jit: [{}] reshape with non-vector shape: {:?}", label, other);
                 }
             }
         }

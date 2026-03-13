@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 static CACHED_BACKEND: OnceLock<String> = OnceLock::new();
 
 use crate::core::error::SheafError;
+use crate::sheaf_msg;
 use crate::interpreter::value::{Dtype, Value};
 use crate::runtime::iree_ffi::*;
 use ndarray::ArrayD;
@@ -150,7 +151,7 @@ pub struct IreeSession {
     /// Each position holds up to MAX_CACHE_ENTRIES entries to avoid thrashing when
     /// the same function is called with different weight sets (e.g. transformer layers).
     buffer_cache: Mutex<HashMap<String, Vec<Vec<CachedBufferView>>>>,
-    /// Dispatch timing (nanoseconds, accumulated). Enabled by SHEAF_JIT_PROFILE=1.
+    /// Dispatch timing (nanoseconds, accumulated). Enabled by --jit-profile.
     profile: bool,
     t_flatten_ns: AtomicU64,
     t_buffers_ns: AtomicU64,
@@ -180,16 +181,14 @@ impl IreeSession {
             }
 
             // Try drivers in preference order: GPU > CPU
-            // SHEAF_DEVICE overrides: "cpu", "metal", "cuda", "vulkan", etc.
-            let device_override = std::env::var("SHEAF_DEVICE").ok();
-            let driver_names: Vec<&str> = match device_override.as_deref() {
+            let device_override = crate::core::config::device_override();
+            let driver_names: Vec<&str> = match device_override {
                 Some("cpu") => vec!["local-task"],
                 Some(d) => vec![d, "local-task"],
                 None => vec!["cuda", "metal", "vulkan", "local-task"],
             };
             let mut device: *mut iree_hal_device_t = std::ptr::null_mut();
             let mut chosen_driver = "";
-            let verbose = std::env::var("SHEAF_JIT_VERBOSE").is_ok();
             for name in &driver_names {
                 let driver = iree_string_view_t::from_str(name);
                 let status =
@@ -197,8 +196,8 @@ impl IreeSession {
                 if iree_status_is_ok(status) {
                     chosen_driver = name;
                     break;
-                } else if verbose {
-                    eprintln!("iree: driver '{}' not available", name);
+                } else if crate::core::config::verbosity() >= 2 {
+                    sheaf_msg!("jit: driver '{}' not available", name);
                 }
             }
             if device.is_null() {
@@ -216,23 +215,6 @@ impl IreeSession {
                 _ => "llvm-cpu",
             };
             let _ = CACHED_BACKEND.set(backend.to_string());
-
-            {
-                use std::sync::atomic::AtomicBool;
-                static PRINTED: AtomicBool = AtomicBool::new(false);
-                if std::env::var("SHEAF_JIT_VERBOSE").is_ok()
-                    && !PRINTED.swap(true, Ordering::Relaxed)
-                {
-                    let display = match chosen_driver {
-                        "local-task" => "CPU",
-                        "metal" => "Metal GPU",
-                        "cuda" => "CUDA GPU",
-                        "vulkan" => "Vulkan GPU",
-                        other => other,
-                    };
-                    eprintln!("sheaf: running on {}", display);
-                }
-            }
 
             // Retain the device for our Arc handle (session also holds its own ref)
             iree_hal_device_retain(device);
@@ -263,7 +245,7 @@ impl IreeSession {
                 _vmfb_data: None,
                 driver_name: chosen_driver.to_string(),
                 buffer_cache: Mutex::new(HashMap::new()),
-                profile: std::env::var("SHEAF_JIT_PROFILE").is_ok(),
+                profile: crate::core::config::jit_profile(),
                 t_flatten_ns: AtomicU64::new(0),
                 t_buffers_ns: AtomicU64::new(0),
                 t_call_ns: AtomicU64::new(0),
@@ -319,6 +301,23 @@ impl IreeSession {
                 unsafe { iree_status_fprint(libc_stderr(), status); }
                 return Err(iree_err("failed to load VMFB module"));
             }
+
+            // Print backend once, after first successful VMFB load
+            {
+                use std::sync::atomic::AtomicBool;
+                static PRINTED: AtomicBool = AtomicBool::new(false);
+                if !PRINTED.swap(true, Ordering::Relaxed) {
+                    let display = match self.driver_name.as_str() {
+                        "local-task" => "CPU",
+                        "metal" => "Metal GPU",
+                        "cuda" => "CUDA GPU",
+                        "vulkan" => "Vulkan GPU",
+                        other => other,
+                    };
+                    sheaf_msg!("sheaf: running on {}", display);
+                }
+            }
+
             Ok(())
         }
     }
@@ -659,12 +658,12 @@ impl Drop for IreeSession {
                 let total = flatten + buffers + call + output;
                 let hits = self.n_cache_hits.load(Ordering::Relaxed);
                 let misses = self.n_cache_misses.load(Ordering::Relaxed);
-                eprintln!("\nIREE dispatch profile ({} calls, {:.1}ms total):", n, total);
-                eprintln!("  flatten:  {:7.1}ms ({:4.1}%)", flatten, flatten / total * 100.0);
-                eprintln!("  buffers:  {:7.1}ms ({:4.1}%)  [hits: {}, misses: {}]",
+                sheaf_msg!("\njit: dispatch profile ({} calls, {:.1}ms total):", n, total);
+                sheaf_msg!("  flatten:  {:7.1}ms ({:4.1}%)", flatten, flatten / total * 100.0);
+                sheaf_msg!("  buffers:  {:7.1}ms ({:4.1}%)  [hits: {}, misses: {}]",
                     buffers, buffers / total * 100.0, hits, misses);
-                eprintln!("  call:     {:7.1}ms ({:4.1}%)", call, call / total * 100.0);
-                eprintln!("  output:   {:7.1}ms ({:4.1}%)", output, output / total * 100.0);
+                sheaf_msg!("  call:     {:7.1}ms ({:4.1}%)", call, call / total * 100.0);
+                sheaf_msg!("  output:   {:7.1}ms ({:4.1}%)", output, output / total * 100.0);
             }
         }
         unsafe {
