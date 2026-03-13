@@ -419,6 +419,75 @@ pub fn propagate_let_layouts(
     }
 }
 
+/// Replace all free occurrences of Symbol(name) with a constant value.
+/// Respects lambda scoping: if a lambda rebinds the same name, the inner
+/// occurrences are left untouched.
+pub fn substitute_scalar_param(expr: &CompiledExpr, name: &str, value: f64) -> CompiledExpr {
+    match expr {
+        CompiledExpr::Symbol(s) if s == name => f64_to_const(value),
+        CompiledExpr::Lambda { params, body } => {
+            if params.iter().any(|p| p == name) {
+                // Lambda shadows this name -> don't recurse
+                expr.clone()
+            } else {
+                CompiledExpr::Lambda {
+                    params: params.clone(),
+                    body: Box::new(substitute_scalar_param(body, name, value)),
+                }
+            }
+        }
+        CompiledExpr::Let { bindings, body } => {
+            let mut new_bindings = Vec::new();
+            let mut shadowed = false;
+            for (bname, bexpr) in bindings {
+                let new_expr = if shadowed {
+                    bexpr.clone()
+                } else {
+                    substitute_scalar_param(bexpr, name, value)
+                };
+                if bname == name { shadowed = true; }
+                new_bindings.push((bname.clone(), new_expr));
+            }
+            CompiledExpr::Let {
+                bindings: new_bindings,
+                body: if shadowed { body.clone() } else {
+                    Box::new(substitute_scalar_param(body, name, value))
+                },
+            }
+        }
+        CompiledExpr::FunctionCall { name: fn_name, args } => CompiledExpr::FunctionCall {
+            name: fn_name.clone(),
+            args: args.iter().map(|a| substitute_scalar_param(a, name, value)).collect(),
+        },
+        CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
+            callee: Box::new(substitute_scalar_param(callee, name, value)),
+            args: args.iter().map(|a| substitute_scalar_param(a, name, value)).collect(),
+        },
+        CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
+            condition: Box::new(substitute_scalar_param(condition, name, value)),
+            then_branch: Box::new(substitute_scalar_param(then_branch, name, value)),
+            else_branch: else_branch.as_ref().map(|e| Box::new(substitute_scalar_param(e, name, value))),
+        },
+        CompiledExpr::Vector(elems) => CompiledExpr::Vector(
+            elems.iter().map(|e| substitute_scalar_param(e, name, value)).collect(),
+        ),
+        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => {
+            let new_init = Box::new(substitute_scalar_param(acc_init, name, value));
+            let shadowed = index_var == name || acc_var == name;
+            CompiledExpr::Repeat {
+                index_var: index_var.clone(),
+                count: count.clone(),
+                acc_var: acc_var.clone(),
+                acc_init: new_init,
+                body: if shadowed { body.clone() } else {
+                    Box::new(substitute_scalar_param(body, name, value))
+                },
+            }
+        }
+        _ => expr.clone(),
+    }
+}
+
 /// Extract scalar values from a dict Value for compile-time constant propagation.
 pub fn extract_scalar_constants(
     val: &Value,
