@@ -142,7 +142,7 @@ impl JitCompiler {
         let mut constants: HashMap<(String, Vec<usize>), f64> = HashMap::new();
 
         for (param_name, arg_val) in func_def.params.iter().zip(args) {
-            let mut ty = match value_to_stablehlo_type(arg_val) {
+            let ty = match value_to_stablehlo_type(arg_val) {
                 Ok(ty) => ty,
                 Err(e) => {
                     self.jit_fail(name, &format!("type inference: {}", e));

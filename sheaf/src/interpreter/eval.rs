@@ -6,7 +6,6 @@
 //! Provides stateless (`eval_source`) and stateful (`Interpreter`) interfaces,
 //! the latter being used by the REPL to persist bindings across inputs.
 
-use crate::compiler::effects::has_side_effects;
 use crate::core::compiler::{CompiledExpr, CompilerContext};
 use crate::core::error::SheafError;
 use crate::interpreter::builtins::register_builtins;

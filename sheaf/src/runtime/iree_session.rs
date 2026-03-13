@@ -298,7 +298,7 @@ impl IreeSession {
                 null_alloc,
             );
             if !iree_status_is_ok(status) {
-                unsafe { iree_status_fprint(libc_stderr(), status); }
+                iree_status_fprint(libc_stderr(), status);
                 return Err(iree_err("failed to load VMFB module"));
             }
 
@@ -696,7 +696,7 @@ unsafe fn value_to_buffer_view(
 ) -> Result<*mut iree_hal_buffer_view_t, SheafError> {
     unsafe {
         match val {
-            Value::Tensor { data, dtype } => {
+            Value::Tensor { data, dtype: _ } => {
                 let shape: Vec<iree_hal_dim_t> =
                     data.shape().iter().map(|&d| d as iree_hal_dim_t).collect();
 
@@ -794,7 +794,7 @@ unsafe fn buffer_view_to_value(
                 byte_len as u64, 0, iree_timeout_t::infinite(),
             );
             if !iree_status_is_ok(status) {
-                unsafe { iree_status_fprint(libc_stderr(), status); }
+                iree_status_fprint(libc_stderr(), status);
                 return Err(iree_err("failed to read IREE buffer data"));
             }
             (f32_buf, Dtype::F32)
@@ -806,7 +806,7 @@ unsafe fn buffer_view_to_value(
                 byte_len as u64, 0, iree_timeout_t::infinite(),
             );
             if !iree_status_is_ok(status) {
-                unsafe { iree_status_fprint(libc_stderr(), status); }
+                iree_status_fprint(libc_stderr(), status);
                 return Err(iree_err("failed to read IREE buffer data"));
             }
             (i32_buf.iter().map(|&x| x as f32).collect::<Vec<f32>>(), Dtype::I32)
