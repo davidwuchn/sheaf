@@ -6,6 +6,7 @@
 //! Tracks per-function cumulative time (total and self), call count,
 //! and prints a sorted summary at the end of execution.
 
+use crate::sheaf_msg;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -86,7 +87,7 @@ impl Profiler {
 
     pub fn report(&self) {
         let wall_ns = self.wall_start.elapsed().as_nanos() as u64;
-        eprintln!("\nProfiler: {} wall\n", format_duration(wall_ns));
+        sheaf_msg!("\nProfiler: {} wall\n", format_duration(wall_ns));
 
         let mut entries: Vec<(&String, &ProfileEntry)> = self.stats.iter().collect();
         entries.sort_by(|a, b| b.1.self_ns.cmp(&a.1.self_ns));

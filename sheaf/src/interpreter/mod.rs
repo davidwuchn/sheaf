@@ -10,6 +10,7 @@ pub mod profiler;
 pub mod tracer;
 pub mod value;
 
+use crate::sheaf_msg;
 use crate::ast::SheafValue;
 use crate::core::compiler::{CompiledExpr, CompilerContext};
 use crate::core::error::SheafError;
@@ -1187,11 +1188,11 @@ fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Resu
                             return Ok(Value::List(vec![Value::Float(loss), grad_tree]));
                         }
                         env.pop_scope();
-                        eprintln!("warning: value-and-grad: tracing incomplete, falling back to finite differences");
+                        sheaf_msg!("warning: value-and-grad: tracing incomplete, falling back to finite differences");
                     }
                     Err(e) => {
                         env.pop_scope();
-                        eprintln!("warning: value-and-grad: tracing failed ({:?}), falling back to finite differences", e);
+                        sheaf_msg!("warning: value-and-grad: tracing failed ({:?}), falling back to finite differences", e);
                     }
                 }
             }
@@ -1529,11 +1530,11 @@ fn try_iree_dispatch(
         if env.iree_mismatch_warned.insert(func_def.name.clone()) {
             let expected = crate::runtime::iree_session::count_signature_tensors(&sig.param_types);
             let actual = crate::runtime::iree_session::count_arg_tensors(args);
-            eprintln!(
+            sheaf_msg!(
                 "warning: '{}' compiled for {} tensors but called with {} — falling back to interpreted",
                 func_def.name, expected, actual,
             );
-            eprintln!(
+            sheaf_msg!(
                 "hint: rerun `sheaf build` to recompile with current shapes",
             );
         }
@@ -1541,11 +1542,11 @@ fn try_iree_dispatch(
     }
     if let Err(mismatch) = crate::runtime::iree_session::check_shapes_match(args, &sig.param_types) {
         if env.iree_mismatch_warned.insert(func_def.name.clone()) {
-            eprintln!(
+            sheaf_msg!(
                 "warning: '{}': {}. Falling back to interpreted mode.",
                 func_def.name, mismatch,
             );
-            eprintln!(
+            sheaf_msg!(
                 "hint: rerun `sheaf build` to recompile with current shapes",
             );
         }
@@ -1558,7 +1559,7 @@ fn try_iree_dispatch(
         Err(_e) => {
             // Unexpected IREE error → fall back to interpreter with warning.
             if env.iree_mismatch_warned.insert(format!("{}:call", func_def.name)) {
-                eprintln!(
+                sheaf_msg!(
                     "warning: '{}' IREE call failed — falling back to interpreted: {}",
                     func_def.name, _e,
                 );
@@ -1634,22 +1635,22 @@ fn try_jit_vag(
     let result = match iree_session.call_typed_device("module.value_and_grad", &args, &sig.return_type) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("warning: value-and-grad JIT dispatch failed: {}", e);
+            sheaf_msg!("warning: value-and-grad JIT dispatch failed: {}", e);
             return None;
         }
     };
 
     // Unpack: IREE returns Tuple([loss_tensor, grad_elements...])
     // We need to return List([Float(loss), grad_value])
-    if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
+    if crate::core::config::verbosity() >= 2 {
         let desc = match &result {
             Value::Tuple(elems) => format!("Tuple(len={})", elems.len()),
             other => format!("{}", other.type_name()),
         };
-        eprintln!("jit: [vag] result structure: {}", desc);
+        sheaf_msg!("jit: [vag] result structure: {}", desc);
         if let Value::Tuple(elems) = &result {
             for (i, e) in elems.iter().enumerate() {
-                eprintln!("jit: [vag]   elem[{}]: {}", i, e.type_name());
+                sheaf_msg!("jit: [vag]   elem[{}]: {}", i, e.type_name());
             }
         }
     }
@@ -1658,11 +1659,11 @@ fn try_jit_vag(
     })) {
         Ok(Some(v)) => v,
         Ok(None) => {
-            eprintln!("warning: value-and-grad result unpacking failed");
+            sheaf_msg!("warning: value-and-grad result unpacking failed");
             return None;
         }
         Err(e) => {
-            eprintln!("warning: value-and-grad result unpacking panicked: {:?}",
+            sheaf_msg!("warning: value-and-grad result unpacking panicked: {:?}",
                 e.downcast_ref::<String>().map(|s| s.as_str())
                     .or_else(|| e.downcast_ref::<&str>().copied()));
             return None;
@@ -1825,8 +1826,8 @@ fn tuple_to_dict(tuple_val: &Value, original: &BTreeMap<String, Value>) -> Optio
     };
 
     if elems.len() != original.len() {
-        if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
-            eprintln!("jit: [vag] tuple_to_dict: tuple len {} != dict keys {} ({:?})",
+        if crate::core::config::verbosity() >= 2 {
+            sheaf_msg!("jit: [vag] tuple_to_dict: tuple len {} != dict keys {} ({:?})",
                 elems.len(), original.len(), original.keys().collect::<Vec<_>>());
         }
         return None;
@@ -1855,8 +1856,8 @@ fn tuple_to_list(tuple_val: &Value, original: &[Value]) -> Option<Value> {
     };
 
     if elems.len() != original.len() {
-        if std::env::var("SHEAF_JIT_VERBOSE").is_ok() {
-            eprintln!("jit: [vag] tuple_to_list: tuple len {} != list len {}",
+        if crate::core::config::verbosity() >= 2 {
+            sheaf_msg!("jit: [vag] tuple_to_list: tuple len {} != list len {}",
                 elems.len(), original.len());
         }
         return None;

@@ -4,6 +4,7 @@
 //! Runtime tracer: function call logging, ring-buffer backtrace, and CLI guards.
 
 use crate::core::compiler::GuardCheck;
+use crate::sheaf_msg;
 use crate::interpreter::value::Value;
 use std::collections::{HashSet, VecDeque};
 use std::time::Instant;
@@ -104,7 +105,7 @@ impl Tracer {
         self.push_ring(&line);
         if self.should_trace(name) {
             match self.log_format {
-                LogFormat::Console => eprintln!("\x1b[94m{}\x1b[0m", line),
+                LogFormat::Console => sheaf_msg!("{}", line),
                 LogFormat::Json => {
                     eprintln!("{{\"type\":\"call\",\"fn\":\"{}\",\"dispatch\":\"compiled\",\"depth\":{}}}", name, self.depth);
                 }
@@ -120,7 +121,7 @@ impl Tracer {
         self.push_ring(&line);
         if self.should_trace(name) {
             match self.log_format {
-                LogFormat::Console => eprintln!("\x1b[94m{}\x1b[0m", line),
+                LogFormat::Console => sheaf_msg!("{}", line),
                 LogFormat::Json => {
                     eprintln!("{{\"type\":\"call\",\"fn\":\"{}\",\"depth\":{}}}", name, self.depth);
                 }
@@ -150,7 +151,7 @@ impl Tracer {
         self.push_ring(&line);
         if self.should_trace(name) {
             match self.log_format {
-                LogFormat::Console => eprintln!("{}", line),
+                LogFormat::Console => sheaf_msg!("{}", line),
                 LogFormat::Json => {
                     eprintln!("{{\"type\":\"return\",\"fn\":\"{}\",\"elapsed_us\":{}}}", name, elapsed.as_micros());
                 }
@@ -168,9 +169,9 @@ impl Tracer {
                 }
             }
             if let Err(msg) = super::apply_guard_check(&guard.check, val) {
-                eprintln!("\x1b[91m/!\\ Guard Breached: {:?}\x1b[0m", guard.check);
-                eprintln!("Function: {}", fn_name);
-                eprintln!("{}", msg);
+                sheaf_msg!("/!\\ Guard Breached: {:?}", guard.check);
+                sheaf_msg!("Function: {}", fn_name);
+                sheaf_msg!("{}", msg);
                 self.dump_ring_buffer();
                 std::process::exit(1);
             }
@@ -179,14 +180,14 @@ impl Tracer {
 
     pub fn dump_ring_buffer(&self) {
         if self.ring_buffer.is_empty() {
-            eprintln!("\n\x1b[93m(No backtrace available)\x1b[0m\n");
+            sheaf_msg!("\n(No backtrace available)\n");
             return;
         }
-        eprintln!("\nBacktrace (last {} operations):\n", self.ring_buffer.len());
+        sheaf_msg!("\nBacktrace (last {} operations):\n", self.ring_buffer.len());
         for entry in &self.ring_buffer {
-            eprintln!("{}", entry);
+            sheaf_msg!("{}", entry);
         }
-        eprintln!("\n--- End of Backtrace ---\n");
+        sheaf_msg!("\n--- End of Backtrace ---\n");
     }
 
     fn push_ring(&mut self, line: &str) {
@@ -219,7 +220,7 @@ fn format_value(val: &Value, level: TraceLevel) -> String {
                     let finite = data.iter().all(|x| x.is_finite());
                     let mut s = format!("f32[{}] [min:{:.2e} max:{:.2e}] ({})", shape_str, v_min, v_max, mem);
                     if !finite {
-                        s.push_str(" \x1b[91m[NaN DETECTED]\x1b[0m");
+                        s.push_str(" [NaN DETECTED]");
                     }
                     s
                 }
@@ -230,7 +231,7 @@ fn format_value(val: &Value, level: TraceLevel) -> String {
                     let finite = data.iter().all(|x| x.is_finite());
                     let mut s = format!("f32[{}] [μ:{:.2e} min:{:.2e} max:{:.2e}] ({})", shape_str, v_mean, v_min, v_max, mem);
                     if !finite {
-                        s.push_str(" \x1b[91m[NaN DETECTED]\x1b[0m");
+                        s.push_str(" [NaN DETECTED]");
                     }
                     s
                 }

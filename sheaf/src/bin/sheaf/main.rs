@@ -10,6 +10,7 @@
 
 mod repl;
 
+use sheaf_compiler::sheaf_msg;
 use std::process::exit;
 
 fn main() {
@@ -26,41 +27,66 @@ fn main() {
         return;
     }
 
-    // Find the first positional argument (not starting with '-')
-    let first_positional = tail.iter().position(|a| !a.starts_with('-'));
+    // Parse global flags and strip them from args
+    let mut verbosity: u8 = 0;
+    let mut device: Option<String> = None;
+    let mut jit_profile = false;
+    let mut remaining: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < tail.len() {
+        match tail[i].as_str() {
+            "-v" | "--verbose" => verbosity += 1,
+            "-vv" => verbosity = 2,
+            "--device" => {
+                i += 1;
+                match tail.get(i) {
+                    Some(d) => device = Some(d.clone()),
+                    None => {
+                        sheaf_msg!("sheaf: --device requires an argument");
+                        exit(1);
+                    }
+                }
+            }
+            "--jit-profile" => jit_profile = true,
+            other => remaining.push(other.to_string()),
+        }
+        i += 1;
+    }
+    sheaf_compiler::core::config::init(verbosity, device, jit_profile);
 
-    match first_positional.map(|i| tail[i].as_str()) {
+    // Find the first positional argument (not starting with '-')
+    let first_positional = remaining.iter().position(|a| !a.starts_with('-'));
+
+    match first_positional.map(|i| remaining[i].as_str()) {
         Some("init-ai") => run_init_ai(),
 
         Some("-c") => unreachable!(), // -c starts with '-', won't match
 
         Some(file) if file.ends_with(".shf") || std::path::Path::new(file).exists() => {
-            // Collect all args, putting the file first for run_file
             let pos = first_positional.unwrap();
-            let mut reordered = vec![tail[pos].clone()];
-            for (i, a) in tail.iter().enumerate() {
-                if i != pos { reordered.push(a.clone()); }
+            let mut reordered = vec![remaining[pos].clone()];
+            for (j, a) in remaining.iter().enumerate() {
+                if j != pos { reordered.push(a.clone()); }
             }
             run_file(&reordered);
         }
 
         _ => {
-            // Check for -c anywhere
-            if let Some(ci) = tail.iter().position(|a| a == "-c") {
-                let expr = tail[ci + 1..].iter()
+            if let Some(ci) = remaining.iter().position(|a| a == "-c") {
+                let expr = remaining[ci + 1..].iter()
                     .filter(|a| !a.starts_with('-') || a.parse::<f64>().is_ok())
                     .cloned()
                     .collect::<Vec<_>>()
                     .join(" ");
                 if expr.is_empty() {
-                    eprintln!("sheaf: -c requires an expression");
+                    sheaf_msg!("sheaf: -c requires an expression");
                     exit(1);
                 }
                 run_expr(&expr);
-            } else if tail.is_empty() {
+            } else if remaining.is_empty() {
                 run_repl();
             } else {
-                eprintln!("sheaf: unknown command '{}'", tail[0]);
+                sheaf_msg!("sheaf: unknown command '{}'", remaining[0]);
                 eprintln!("Run 'sheaf --help' for usage.");
                 exit(1);
             }
@@ -79,20 +105,23 @@ Usage:
     sheaf init-ai                      Generate context file for AI assistants
 
 Options:
-    --trace [FUNCTIONS]    Trace execution (optionally scoped to functions)
+    --trace [FUNCTIONS]    Log calls with tensor shapes and timing
     --trace-level LEVEL    Trace verbosity: fast, normal (default), verbose
     --trace-out FORMAT     Trace output: console (default), json
     --guard SPEC           Runtime guard: [scope:]variable:check (repeatable)
     --blame                Profile execution and print timing report
+
+Advanced options:
+    --device DEVICE        Run on specific device: cpu, metal, cuda, vulkan (default: auto)
+    -v / -vv               Verbose JIT output (-vv for full MLIR dumps)
+    --jit-profile          Show JIT dispatch timing breakdown
 
 Examples:
     sheaf script.shf
     sheaf -c '(+ 1 2)'
     sheaf --blame train.shf
     sheaf --guard no-nan train.shf
-    sheaf train.shf --guard loss:range:0:20
-
-Set SHEAF_JIT_VERBOSE=1 for compilation details.",
+    sheaf train.shf --guard loss:range:0:20",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -111,7 +140,7 @@ fn run_expr(source: &str) {
     match eval_source(source) {
         Ok(val) => println!("{}", val),
         Err(e) => {
-            eprint!("{}", sheaf_compiler::core::error_format::format_error(&e));
+            sheaf_msg!("{}", sheaf_compiler::core::error_format::format_error(&e));
             exit(1);
         }
     }
@@ -149,7 +178,7 @@ fn run_file(args: &[String]) {
                     Some("normal") => trace_level = TraceLevel::Normal,
                     Some("verbose") => trace_level = TraceLevel::Verbose,
                     _ => {
-                        eprintln!("sheaf: --trace-level expects fast|normal|verbose");
+                        sheaf_msg!("sheaf: --trace-level expects fast|normal|verbose");
                         exit(1);
                     }
                 }
@@ -160,7 +189,7 @@ fn run_file(args: &[String]) {
                     Some("console") => trace_format = LogFormat::Console,
                     Some("json") => trace_format = LogFormat::Json,
                     _ => {
-                        eprintln!("sheaf: --trace-out expects console|json");
+                        sheaf_msg!("sheaf: --trace-out expects console|json");
                         exit(1);
                     }
                 }
@@ -171,12 +200,12 @@ fn run_file(args: &[String]) {
                     Some(spec) => match parse_guard_spec(spec) {
                         Ok(guard) => cli_guards.push(guard),
                         Err(msg) => {
-                            eprintln!("sheaf: invalid guard spec '{}': {}", spec, msg);
+                            sheaf_msg!("sheaf: invalid guard spec '{}': {}", spec, msg);
                             exit(1);
                         }
                     }
                     None => {
-                        eprintln!("sheaf: --guard requires a SPEC argument");
+                        sheaf_msg!("sheaf: --guard requires a SPEC argument");
                         exit(1);
                     }
                 }
@@ -185,7 +214,7 @@ fn run_file(args: &[String]) {
                 blame = true;
             }
             arg => {
-                eprintln!("sheaf: unknown option '{}' for file mode", arg);
+                sheaf_msg!("sheaf: unknown option '{}' for file mode", arg);
                 eprintln!("Run 'sheaf --help' for usage.");
                 exit(1);
             }
@@ -200,7 +229,7 @@ fn run_file(args: &[String]) {
     let source = match std::fs::read_to_string(&abs_path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("sheaf: cannot read '{}': {}", path, e);
+            sheaf_msg!("sheaf: cannot read '{}': {}", path, e);
             exit(1);
         }
     };
@@ -243,7 +272,7 @@ fn run_file(args: &[String]) {
             }
         }
         Err(e) => {
-            eprint!("{}", sheaf_compiler::core::error_format::format_error(&e));
+            sheaf_msg!("{}", sheaf_compiler::core::error_format::format_error(&e));
             exit(1);
         }
     }
@@ -293,10 +322,10 @@ fn run_init_ai() {
 
     let combined = format!("{}\n\n---\n\n## REFERENCE\n\n{}", CONTEXT, REFERENCE);
     std::fs::write(output, &combined).unwrap_or_else(|e| {
-        eprintln!("sheaf: cannot write '{}': {}", output.display(), e);
+        sheaf_msg!("sheaf: cannot write '{}': {}", output.display(), e);
         exit(1);
     });
 
-    eprintln!("Wrote sheaf-context.md ({} bytes)", combined.len());
-    eprintln!("Add this file to your AI assistant context (e.g. CLAUDE.md, .cursorrules, etc.)");
+    sheaf_msg!("Wrote sheaf-context.md ({} bytes)", combined.len());
+    sheaf_msg!("Add this file to your AI assistant context (e.g. CLAUDE.md, .cursorrules, etc.)");
 }

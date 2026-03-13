@@ -3,7 +3,9 @@
 
 //! Core compiler components
 
+pub mod color;
 pub mod compiler;
+pub mod config;
 pub mod error;
 pub mod error_format;
 pub mod inference;
