@@ -38,9 +38,6 @@ fn resolve_constants_rec(
         CompiledExpr::Symbol(name) => {
             locals.get(name).cloned().unwrap_or_else(|| expr.clone())
         }
-        CompiledExpr::FunctionCall { name, args } if name == "static" && args.len() == 1 => {
-            resolve_constants_rec(&args[0], constants, locals, shapes)
-        }
         CompiledExpr::FunctionCall { name, args } if name == "shape" && args.len() == 1 => {
             let shape_from_sym = match &args[0] {
                 CompiledExpr::Symbol(s) => shapes.get(s.as_str()).cloned(),

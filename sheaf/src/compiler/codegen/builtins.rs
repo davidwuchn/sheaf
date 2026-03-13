@@ -1279,10 +1279,6 @@ impl CodeGenerator {
             let reg = self.emitter.emit_constant_f32(len as f64);
             Ok((reg, StableHLOType::ScalarF32))
         }
-        // static: deprecated identity, evaluate inner expression directly
-        else if name == "static" && args.len() == 1 {
-            self.generate(&args[0])
-        }
         // assoc: (assoc tuple :k1 v1 :k2 v2 ...), create new tuple with replaced elements
         else if name == "assoc" && args.len() >= 3 && args.len() % 2 == 1 {
             let sym_name = if let CompiledExpr::Symbol(s) = &args[0] { Some(s.clone()) } else { None };

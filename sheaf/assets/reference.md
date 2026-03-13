@@ -2316,22 +2316,6 @@ Quote with selective evaluation using `~` and `~@`.
 
 ---
 
-### static
-
-**Type:** special-form  
-**Signature:** `(static expr)`
-
-Forces the evaluation of an expression at compile-time. The result is embedded into the code as a literal constant. This is essential for JIT backends (like XLA) that require tensor shapes and axis indices to be fixed and known before execution starts.
-
-```sheaf
-;; Example: 128 is computed once at compile time, not at every forward pass.
-(let [x (arange 128)]
-  (reshape x (static (* 4 32)) -1))  ; 128 computed at compile time
-                                     ; => reshaped to [ 4. 32.]
-```
-
----
-
 ## Additional
 
 ### append-and-roll

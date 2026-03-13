@@ -8,7 +8,6 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("io", builtin_io);
     env.set_builtin("gensym", builtin_gensym);
     env.set_builtin("symbol?", builtin_symbol_q);
-    env.set_builtin("static", builtin_static);
 }
 
 fn builtin_print(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
@@ -364,9 +363,3 @@ fn builtin_symbol_q(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     }
 }
 
-fn builtin_static(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    match args.first() {
-        Some(v) => Ok(v.clone()),
-        None => Err(runtime_error("static: expected one argument")),
-    }
-}
