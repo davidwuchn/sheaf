@@ -470,47 +470,34 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
 
         if let Some(ref mut p) = env.profiler { p.enter(name); }
 
-        // VMFB dispatch: pure compiled functions run via IREE
+        // VMFB/JIT dispatch: skip when tracing so the interpreter runs
+        // and exposes the full call tree
         #[cfg(iree_runtime)]
-        if let Some(result) = try_iree_dispatch(&func_def, &pos_args, env) {
-            if let Some(ref mut tracer) = env.tracer {
-                if tracer.should_trace(name) {
-                    tracer.log_compiled_dispatch(name);
-                }
-                if let Ok(ref val) = result {
-                    tracer.check_cli_guards(name, val);
-                }
+        if env.tracer.is_none() {
+            // VMFB dispatch: pure compiled functions run via IREE
+            if let Some(result) = try_iree_dispatch(&func_def, &pos_args, env) {
+                if let Some(ref mut p) = env.profiler { p.exit(); }
+                return result;
             }
-            if let Some(ref mut p) = env.profiler { p.exit(); }
-            return result;
-        }
 
-        // JIT: try to compile on first call if no VMFB exists
-        #[cfg(iree_runtime)]
-        if func_def.vmfb_session_idx.is_none() {
-            if let Some(jit) = &mut env.jit_compiler {
-                if let Some((session_idx, sig)) = jit.try_jit_compile(
-                    &func_def,
-                    &pos_args,
-                    &env.registry,
-                    &mut env.vmfb_sessions,
-                ) {
-                    if let Some(fd) = env.registry.get_mut(name) {
-                        fd.vmfb_session_idx = Some(session_idx);
-                        fd.signature = Some(sig);
-                    }
-                    let func_def = env.registry.get(name).unwrap().clone();
-                    if let Some(result) = try_iree_dispatch(&func_def, &pos_args, env) {
-                        if let Some(ref mut tracer) = env.tracer {
-                            if tracer.should_trace(name) {
-                                tracer.log_compiled_dispatch(name);
-                            }
-                            if let Ok(ref val) = result {
-                                tracer.check_cli_guards(name, val);
-                            }
+            // JIT: try to compile on first call if no VMFB exists
+            if func_def.vmfb_session_idx.is_none() {
+                if let Some(jit) = &mut env.jit_compiler {
+                    if let Some((session_idx, sig)) = jit.try_jit_compile(
+                        &func_def,
+                        &pos_args,
+                        &env.registry,
+                        &mut env.vmfb_sessions,
+                    ) {
+                        if let Some(fd) = env.registry.get_mut(name) {
+                            fd.vmfb_session_idx = Some(session_idx);
+                            fd.signature = Some(sig);
                         }
-                        if let Some(ref mut p) = env.profiler { p.exit(); }
-                        return result;
+                        let func_def = env.registry.get(name).unwrap().clone();
+                        if let Some(result) = try_iree_dispatch(&func_def, &pos_args, env) {
+                            if let Some(ref mut p) = env.profiler { p.exit(); }
+                            return result;
+                        }
                     }
                 }
             }
@@ -1128,9 +1115,12 @@ fn eval_value_and_grad_hof(args: &[Value], _env: &mut Env) -> Result<Value, Shea
 /// if the function body contains ops the AD engine cannot handle (get, reduce, etc.).
 fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Result<Value, SheafError> {
     // Try JIT compilation first: compile forward+backward into a single VMFB
+    // Skip when tracing — interpreter must run to expose the autodiff call tree
     #[cfg(iree_runtime)]
-    if let Some(result) = try_jit_vag(func, params, env) {
-        return result;
+    if env.tracer.is_none() {
+        if let Some(result) = try_jit_vag(func, params, env) {
+            return result;
+        }
     }
 
     use crate::autodiff::{contains_undiffable_ops, grad_simplified, inline_function_calls};
