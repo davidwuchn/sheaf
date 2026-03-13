@@ -845,6 +845,287 @@ impl StableHLOEmitter {
 
         (result_reg, result_ty)
     }
+
+    /// Emit top_k: sort descending + slice first K elements.
+    /// Returns (values: tensor<Kxf32>, indices: tensor<Kxf32>).
+    pub fn emit_top_k(
+        &mut self,
+        input: &Register,
+        input_ty: &StableHLOType,
+        k: i64,
+    ) -> (Register, StableHLOType) {
+        let shape = input_ty.shape();
+        assert!(!shape.is_empty(), "top_k requires at least 1D input");
+        let last_axis = shape.len() - 1;
+
+        // Create iota indices [0, 1, ..., N-1] as f32 (matching Sheaf f32-only convention)
+        let (iota_reg, iota_ty) = self.emit_iota(shape, last_axis as i64);
+
+        // Sort descending along last axis: returns (sorted_values, sorted_indices)
+        let sorted_vals = self.fresh_register();
+        let sorted_idxs = self.fresh_register();
+
+        self.body.push(format!(
+            "    {}, {} = \"stablehlo.sort\"({}, {}) ({{\n\
+             \x20   ^bb0(%arg0: tensor<f32>, %arg1: tensor<f32>, %arg2: tensor<f32>, %arg3: tensor<f32>):\n\
+             \x20     %pred = \"stablehlo.compare\"(%arg0, %arg1) {{comparison_direction = #stablehlo<comparison_direction GT>}} : (tensor<f32>, tensor<f32>) -> tensor<i1>\n\
+             \x20     \"stablehlo.return\"(%pred) : (tensor<i1>) -> ()\n\
+             \x20   }}) {{dimension = {} : i64, is_stable = true}} : ({}, {}) -> ({}, {})",
+            sorted_vals.to_mlir(),
+            sorted_idxs.to_mlir(),
+            input.to_mlir(),
+            iota_reg.to_mlir(),
+            last_axis,
+            input_ty.to_mlir(),
+            iota_ty.to_mlir(),
+            input_ty.to_mlir(),
+            iota_ty.to_mlir(),
+        ));
+
+        // Slice first K elements along last axis
+        let (top_vals, top_vals_ty) = self.emit_slice_axis(
+            &sorted_vals, input_ty, 0, k, last_axis,
+        );
+        let (top_idxs, top_idxs_ty) = self.emit_slice_axis(
+            &sorted_idxs, &iota_ty, 0, k, last_axis,
+        );
+
+        // Pack into virtual tuple
+        self.emit_tuple(
+            &[top_vals, top_idxs],
+            &[top_vals_ty, top_idxs_ty],
+        )
+    }
+
+    /// Emit bitcast_convert: reinterpret bits between f32 and i32.
+    pub fn emit_bitcast_convert(
+        &mut self,
+        reg: &Register,
+        from_ty: &StableHLOType,
+        to_dtype: &str,
+    ) -> (Register, StableHLOType) {
+        let result_reg = self.fresh_register();
+        let result_ty = match from_ty {
+            StableHLOType::ScalarF32 => StableHLOType::Tensor { shape: vec![], dtype: to_dtype.to_string() },
+            StableHLOType::Tensor { shape, .. } => StableHLOType::Tensor { shape: shape.clone(), dtype: to_dtype.to_string() },
+            _ => panic!("bitcast_convert: unsupported type {:?}", from_ty),
+        };
+        self.body.push(format!(
+            "    {} = stablehlo.bitcast_convert {} : ({}) -> {}",
+            result_reg.to_mlir(),
+            reg.to_mlir(),
+            from_ty.to_mlir(),
+            result_ty.to_mlir(),
+        ));
+        (result_reg, result_ty)
+    }
+
+    /// Emit random-split: deterministic key splitting using i32 hash.
+    /// Key is tensor<2xf32> (stores 2 i32 values via bitcast).
+    /// Returns tuple<tensor<2xf32>, tensor<2xf32>> (two sub-keys).
+    pub fn emit_random_split(
+        &mut self,
+        key: &Register,
+        key_ty: &StableHLOType,
+    ) -> (Register, StableHLOType) {
+        let i32_ty = StableHLOType::i32_tensor(vec![2]);
+
+        // Bitcast f32 key to i32 for integer arithmetic
+        let (key_i32, _) = self.emit_bitcast_convert(key, key_ty, "i32");
+
+        // Extract lo and hi as scalar i32
+        let lo = self.fresh_register();
+        let hi = self.fresh_register();
+        let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+        self.body.push(format!(
+            "    {} = stablehlo.slice {} [0:1:1] : ({}) -> tensor<1xi32>",
+            lo.to_mlir(), key_i32.to_mlir(), i32_ty.to_mlir(),
+        ));
+        let lo_scalar = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.reshape {} : (tensor<1xi32>) -> {}",
+            lo_scalar.to_mlir(), lo.to_mlir(), scalar_i32.to_mlir(),
+        ));
+        self.body.push(format!(
+            "    {} = stablehlo.slice {} [1:2:1] : ({}) -> tensor<1xi32>",
+            hi.to_mlir(), key_i32.to_mlir(), i32_ty.to_mlir(),
+        ));
+        let hi_scalar = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.reshape {} : (tensor<1xi32>) -> {}",
+            hi_scalar.to_mlir(), hi.to_mlir(), scalar_i32.to_mlir(),
+        ));
+
+        // Splitmix-like constants (mod 2^32)
+        // 6364136223846793005 mod 2^32 = 2069105475
+        // 1442695040888963407 mod 2^32 = 1013904223
+        let c_mult = self.emit_constant_i32(2069105475);
+        let c_add1 = self.emit_constant_i32(1013904223);
+        let c_add2 = self.emit_constant_i32(1442695041);
+
+        // Key 1: lo' = lo * c_mult + c_add1, hi' = hi + lo
+        let lo1 = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.multiply {}, {} : {}",
+            lo1.to_mlir(), lo_scalar.to_mlir(), c_mult.to_mlir(), scalar_i32.to_mlir(),
+        ));
+        let lo1_add = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.add {}, {} : {}",
+            lo1_add.to_mlir(), lo1.to_mlir(), c_add1.to_mlir(), scalar_i32.to_mlir(),
+        ));
+        let hi1 = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.add {}, {} : {}",
+            hi1.to_mlir(), hi_scalar.to_mlir(), lo_scalar.to_mlir(), scalar_i32.to_mlir(),
+        ));
+
+        // Key 2: lo' = hi * c_mult + c_add2, hi' = lo + hi
+        let lo2 = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.multiply {}, {} : {}",
+            lo2.to_mlir(), hi_scalar.to_mlir(), c_mult.to_mlir(), scalar_i32.to_mlir(),
+        ));
+        let lo2_add = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.add {}, {} : {}",
+            lo2_add.to_mlir(), lo2.to_mlir(), c_add2.to_mlir(), scalar_i32.to_mlir(),
+        ));
+        let hi2 = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.add {}, {} : {}",
+            hi2.to_mlir(), lo_scalar.to_mlir(), hi_scalar.to_mlir(), scalar_i32.to_mlir(),
+        ));
+
+        // Reshape scalars to tensor<1xi32> then concatenate to tensor<2xi32>
+        let one_i32 = StableHLOType::i32_tensor(vec![1]);
+        let lo1_1d = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.reshape {} : ({}) -> {}",
+            lo1_1d.to_mlir(), lo1_add.to_mlir(), scalar_i32.to_mlir(), one_i32.to_mlir(),
+        ));
+        let hi1_1d = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.reshape {} : ({}) -> {}",
+            hi1_1d.to_mlir(), hi1.to_mlir(), scalar_i32.to_mlir(), one_i32.to_mlir(),
+        ));
+        let key1_i32 = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.concatenate {}, {}, dim = 0 : ({}, {}) -> {}",
+            key1_i32.to_mlir(), lo1_1d.to_mlir(), hi1_1d.to_mlir(),
+            one_i32.to_mlir(), one_i32.to_mlir(), i32_ty.to_mlir(),
+        ));
+
+        let lo2_1d = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.reshape {} : ({}) -> {}",
+            lo2_1d.to_mlir(), lo2_add.to_mlir(), scalar_i32.to_mlir(), one_i32.to_mlir(),
+        ));
+        let hi2_1d = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.reshape {} : ({}) -> {}",
+            hi2_1d.to_mlir(), hi2.to_mlir(), scalar_i32.to_mlir(), one_i32.to_mlir(),
+        ));
+        let key2_i32 = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.concatenate {}, {}, dim = 0 : ({}, {}) -> {}",
+            key2_i32.to_mlir(), lo2_1d.to_mlir(), hi2_1d.to_mlir(),
+            one_i32.to_mlir(), one_i32.to_mlir(), i32_ty.to_mlir(),
+        ));
+
+        // Bitcast back to f32
+        let (key1_f32, key1_ty) = self.emit_bitcast_convert(&key1_i32, &i32_ty, "f32");
+        let (key2_f32, key2_ty) = self.emit_bitcast_convert(&key2_i32, &i32_ty, "f32");
+
+        self.emit_tuple(
+            &[key1_f32, key2_f32],
+            &[key1_ty, key2_ty],
+        )
+    }
+
+    /// Emit choice: categorical sampling from probabilities.
+    /// key: tensor<2xf32>, probs: tensor<Kxf32>
+    /// Returns scalar f32 (selected index).
+    ///
+    /// Algorithm:
+    /// 1. Hash key to uniform float u in [0, 1)
+    /// 2. Compute cumsum via tril(ones(K,K)) @ probs
+    /// 3. mask = (cumsum >= u), count = sum(mask), index = K - count
+    pub fn emit_choice(
+        &mut self,
+        key: &Register,
+        key_ty: &StableHLOType,
+        probs: &Register,
+        probs_ty: &StableHLOType,
+    ) -> (Register, StableHLOType) {
+        let k = probs_ty.shape()[0];
+
+        // Step 1: Hash key to uniform float
+        // Bitcast to i32, take lo, abs, convert to f32, divide by 2^31
+        let i32_2_ty = StableHLOType::i32_tensor(vec![2]);
+        let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+        let (key_i32, _) = self.emit_bitcast_convert(key, key_ty, "i32");
+
+        let lo_1d = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.slice {} [0:1:1] : ({}) -> tensor<1xi32>",
+            lo_1d.to_mlir(), key_i32.to_mlir(), i32_2_ty.to_mlir(),
+        ));
+        let lo = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.reshape {} : (tensor<1xi32>) -> {}",
+            lo.to_mlir(), lo_1d.to_mlir(), scalar_i32.to_mlir(),
+        ));
+        let abs_lo = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.abs {} : {}",
+            abs_lo.to_mlir(), lo.to_mlir(), scalar_i32.to_mlir(),
+        ));
+        // Convert i32 to f32
+        let u_raw = self.fresh_register();
+        let scalar_f32_ty = StableHLOType::ScalarF32;
+        self.body.push(format!(
+            "    {} = stablehlo.convert {} : ({}) -> {}",
+            u_raw.to_mlir(), abs_lo.to_mlir(), scalar_i32.to_mlir(), scalar_f32_ty.to_mlir(),
+        ));
+        // Divide by 2^31 to get [0, 1)
+        let max_i31 = self.emit_constant_f32(2147483648.0);
+        let u = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.divide {}, {} : {}",
+            u.to_mlir(), u_raw.to_mlir(), max_i31.to_mlir(), scalar_f32_ty.to_mlir(),
+        ));
+
+        // Step 2: Compute cumulative sum via tril(ones(K,K)) @ probs
+        let (ones_kk, ones_kk_ty) = self.emit_ones(&[k, k]);
+        let (tril_kk, tril_kk_ty) = self.emit_tril(&ones_kk, &ones_kk_ty);
+        let (cumsum, cumsum_ty) = self.emit_matmul(&tril_kk, probs, &tril_kk_ty, probs_ty);
+
+        // Step 3: mask = (cumsum >= u), broadcast u to match cumsum shape
+        let u_bc = self.emit_broadcast(&u, &scalar_f32_ty, &cumsum_ty);
+        let (mask, _mask_ty) = self.emit_compare(">=", &cumsum, &u_bc, &cumsum_ty, &cumsum_ty);
+
+        // count = sum(mask), index = K - count
+        let (count, _) = self.emit_reduce_sum(&mask, &cumsum_ty, 0, false);
+        let k_const = self.emit_constant_f32(k as f64);
+        let index = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.subtract {}, {} : {}",
+            index.to_mlir(), k_const.to_mlir(), count.to_mlir(), scalar_f32_ty.to_mlir(),
+        ));
+
+        // Clamp to [0, K-1]
+        let zero = self.emit_constant_f32(0.0);
+        let k_minus_1 = self.emit_constant_f32((k - 1) as f64);
+        let clamped = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.clamp {}, {}, {} : {}",
+            clamped.to_mlir(), zero.to_mlir(), index.to_mlir(), k_minus_1.to_mlir(),
+            scalar_f32_ty.to_mlir(),
+        ));
+
+        (clamped, scalar_f32_ty)
+    }
 }
 
 /// Format slice dimensions as `start:limit:stride, ...` for StableHLO assembly.

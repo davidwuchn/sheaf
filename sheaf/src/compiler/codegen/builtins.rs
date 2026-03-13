@@ -1349,6 +1349,56 @@ impl CodeGenerator {
             }
             Ok(self.emitter.emit_tuple(&new_regs, &new_tys))
         }
+        // top_k: (top_k tensor k)
+        else if name == "top_k" && args.len() == 2 {
+            let (input_reg, input_ty) = self.generate(&args[0])?;
+            let k = match &args[1] {
+                CompiledExpr::Integer(n) => *n,
+                CompiledExpr::Float(f) => *f as i64,
+                _ => {
+                    return Err(SheafError::Compile {
+                        message: "top_k: k must be a constant integer".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    });
+                }
+            };
+            Ok(self.emitter.emit_top_k(&input_reg, &input_ty, k))
+        }
+        // random-split: (random-split key) -> [key1, key2]
+        else if name == "random-split" && args.len() == 1 {
+            let (key_reg, key_ty) = self.generate(&args[0])?;
+            Ok(self.emitter.emit_random_split(&key_reg, &key_ty))
+        }
+        // choice: (choice key n :p probs) -> index
+        else if name == "choice" {
+            let (key_reg, key_ty) = self.generate(&args[0])?;
+            // Parse keyword :p to find probabilities
+            let mut probs_expr = None;
+            let mut i = 1;
+            while i < args.len() {
+                if let CompiledExpr::Keyword(k) = &args[i] {
+                    if k == "p" && i + 1 < args.len() {
+                        probs_expr = Some(&args[i + 1]);
+                        i += 2;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+            match probs_expr {
+                Some(expr) => {
+                    let (probs_reg, probs_ty) = self.generate(expr)?;
+                    let (reg, ty) = self.emitter.emit_choice(
+                        &key_reg, &key_ty, &probs_reg, &probs_ty,
+                    );
+                    Ok((reg, ty))
+                }
+                None => Err(SheafError::Compile {
+                    message: "choice: requires :p probs argument for codegen".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                }),
+            }
+        }
         else {
             Err(SheafError::Compile {
                 message: format!("Function call not yet supported: {} (arity {})", name, args.len()),

@@ -16,17 +16,13 @@ use crate::core::compiler::CompiledExpr;
 ///
 /// These are calls that cannot be emitted as StableHLO:
 /// - I/O: `print`, `io`
-/// - Randomness: all `random-*` variants
+///
+/// Random functions (random-split, choice, etc.) are NOT listed here:
+/// they use JAX-style functional PRNG (key in, deterministic result out)
+/// and are compiled to StableHLO via i32 hash arithmetic.
 const EFFECTFUL_BUILTINS: &[&str] = &[
     "print",
     "io",
-    "random-key",
-    "random-split",
-    "random-normal",
-    "random-uniform",
-    "random-randint",
-    "random-bernoulli",
-    "random-choice",
 ];
 
 /// Names of higher-order functions that cannot be compiled to StableHLO.
