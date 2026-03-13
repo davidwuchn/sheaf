@@ -490,10 +490,10 @@ impl CodeGenerator {
     fn parse_shape_vec(elems: &[CompiledExpr]) -> SheafResult<Vec<i64>> {
         elems.iter().map(|e| match e {
             CompiledExpr::Integer(n) => Ok(*n),
+            CompiledExpr::Float(f) if *f == f.floor() => Ok(*f as i64),
             other => Err(SheafError::Compile {
                 message: format!(
-                    "shape element must be a constant integer, got: {:?} \
-                     (use (static ...) or --trace-with to resolve)",
+                    "shape element must be a constant integer, got: {:?}",
                     other
                 ),
                 location: crate::core::error::SourceLocation::unknown(),
