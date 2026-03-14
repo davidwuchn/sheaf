@@ -141,6 +141,17 @@ impl CodeGenerator {
         self.scalar_constants = constants;
     }
 
+    /// Register known scalar parameter values for constant propagation.
+    /// For scalar f32 params, this records their compile-time value in the emitter
+    /// so that shape-critical ops (e.g. top_k) can resolve K at codegen time.
+    pub fn set_scalar_param_values(&mut self, values: &[(String, f64)]) {
+        for (name, value) in values {
+            if let Some(&(reg, _)) = self.bindings.get(name) {
+                self.emitter.set_known_scalar(reg, *value);
+            }
+        }
+    }
+
     pub fn set_param_index_maps(&mut self, maps: Vec<(String, std::collections::BTreeMap<Vec<String>, Vec<usize>>)>) {
         self.param_index_maps = maps;
     }
@@ -487,10 +498,34 @@ impl CodeGenerator {
     /// Extract a static shape Vec<i64> from a Vector of Integer literals.
     /// Returns a compile error (not panic) if any element is non-constant,
     /// so the function can be gracefully skipped rather than crashing.
-    fn parse_shape_vec(elems: &[CompiledExpr]) -> SheafResult<Vec<i64>> {
+    /// Resolves Symbol references via bindings + known_scalars.
+    fn parse_shape_vec(&self, elems: &[CompiledExpr]) -> SheafResult<Vec<i64>> {
         elems.iter().map(|e| match e {
             CompiledExpr::Integer(n) => Ok(*n),
             CompiledExpr::Float(f) if *f == f.floor() => Ok(*f as i64),
+            CompiledExpr::Symbol(name) => {
+                if let Some(&(reg, _)) = self.bindings.get(name.as_str()) {
+                    if let Some(v) = self.emitter.known_scalar_value(&reg) {
+                        Ok(v as i64)
+                    } else {
+                        Err(SheafError::Compile {
+                            message: format!(
+                                "shape element must be a constant integer, got: Symbol({:?}) (not a known constant)",
+                                name
+                            ),
+                            location: crate::core::error::SourceLocation::unknown(),
+                        })
+                    }
+                } else {
+                    Err(SheafError::Compile {
+                        message: format!(
+                            "shape element must be a constant integer, got: Symbol({:?}) (not bound)",
+                            name
+                        ),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })
+                }
+            }
             other => Err(SheafError::Compile {
                 message: format!(
                     "shape element must be a constant integer, got: {:?}",

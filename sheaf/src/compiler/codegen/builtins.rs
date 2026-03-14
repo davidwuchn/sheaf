@@ -276,7 +276,7 @@ impl CodeGenerator {
         // zeros: (zeros [M N])
         else if name == "zeros" && args.len() == 1 {
             if let CompiledExpr::Vector(shape_elems) = &args[0] {
-                let shape = Self::parse_shape_vec(shape_elems)?;
+                let shape = self.parse_shape_vec(shape_elems)?;
                 let (reg, ty) = tensor_ops::emit_zeros(&mut self.emitter, &shape);
                 Ok((reg, ty))
             } else {
@@ -292,7 +292,7 @@ impl CodeGenerator {
         else if name == "sum_to_shape" && args.len() == 2 {
             let (mut reg, mut ty) = self.generate(&args[0])?;
             if let CompiledExpr::Vector(shape_elems) = &args[1] {
-                let target_shape = Self::parse_shape_vec(shape_elems)?;
+                let target_shape = self.parse_shape_vec(shape_elems)?;
                 let from_shape = ty.shape().to_vec();
 
                 if from_shape == target_shape {
@@ -339,7 +339,7 @@ impl CodeGenerator {
             if let (CompiledExpr::Vector(shape_elems), CompiledExpr::Integer(start)) =
                 (&args[1], &args[2])
             {
-                let target_shape = Self::parse_shape_vec(shape_elems)?;
+                let target_shape = self.parse_shape_vec(shape_elems)?;
                 let adj_shape = adj_ty.shape().to_vec();
 
                 // Determine which axis was sliced: find the first axis where
@@ -396,7 +396,7 @@ impl CodeGenerator {
         else if name == "broadcast" && args.len() == 2 {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             if let CompiledExpr::Vector(shape_elems) = &args[1] {
-                let target_shape = Self::parse_shape_vec(shape_elems)?;
+                let target_shape = self.parse_shape_vec(shape_elems)?;
                 let target_ty = StableHLOType::f32_tensor(target_shape);
                 let reg = self.emitter.emit_broadcast(&operand_reg, &operand_ty, &target_ty);
                 Ok((reg, target_ty))
@@ -410,7 +410,7 @@ impl CodeGenerator {
         // random-normal: (random-normal key [M N])
         else if name == "random-normal" && args.len() == 2 {
             if let CompiledExpr::Vector(shape_elems) = &args[1] {
-                let shape = Self::parse_shape_vec(shape_elems)?;
+                let shape = self.parse_shape_vec(shape_elems)?;
                 let (reg, ty) = tensor_ops::emit_random_normal(&mut self.emitter, &shape);
                 Ok((reg, ty))
             } else {
@@ -423,7 +423,7 @@ impl CodeGenerator {
         // ones: (ones [M N])
         else if name == "ones" && args.len() == 1 {
             if let CompiledExpr::Vector(shape_elems) = &args[0] {
-                let shape = Self::parse_shape_vec(shape_elems)?;
+                let shape = self.parse_shape_vec(shape_elems)?;
                 let (reg, ty) = tensor_ops::emit_ones(&mut self.emitter, &shape);
                 Ok((reg, ty))
             } else {
@@ -470,7 +470,7 @@ impl CodeGenerator {
         else if name == "reshape" && args.len() == 2 {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             if let CompiledExpr::Vector(shape_elems) = &args[1] {
-                let mut new_shape = Self::parse_shape_vec(shape_elems)?;
+                let mut new_shape = self.parse_shape_vec(shape_elems)?;
                 // Resolve -1 dimensions: infer from input total size
                 if let Some(neg_idx) = new_shape.iter().position(|&d| d < 0) {
                     let input_size: i64 = operand_ty.shape().iter().product();
@@ -996,10 +996,22 @@ impl CodeGenerator {
                                 );
                                 Ok((reg, ty))
                             } else {
-                                Err(SheafError::Compile {
-                                    message: "get on tensor: index must be integer, ellipsis, or tensor".to_string(),
-                                    location: crate::core::error::SourceLocation::unknown(),
-                                })
+                                // Scalar index (shape []): reshape to [1], gather, squeeze
+                                let (idx_1d_reg, idx_1d_ty) = self.emitter.emit_reshape(
+                                    &idx_reg, &idx_ty, &[1],
+                                );
+                                let (gathered_reg, gathered_ty) = tensor_ops::emit_gather_axis0(
+                                    &mut self.emitter,
+                                    &operand_reg, &operand_ty,
+                                    &idx_1d_reg, &idx_1d_ty,
+                                );
+                                // Remove leading dim of 1: [1, D1, D2, ...] -> [D1, D2, ...]
+                                let gathered_shape = gathered_ty.shape();
+                                let squeezed_shape: Vec<i64> = gathered_shape[1..].to_vec();
+                                let (squeezed_reg, squeezed_ty) = self.emitter.emit_reshape(
+                                    &gathered_reg, &gathered_ty, &squeezed_shape,
+                                );
+                                Ok((squeezed_reg, squeezed_ty))
                             }
                         }
                     }
@@ -1352,14 +1364,21 @@ impl CodeGenerator {
         // top_k: (top_k tensor k)
         else if name == "top_k" && args.len() == 2 {
             let (input_reg, input_ty) = self.generate(&args[0])?;
+            // Try literal first, then generate and look up propagated constant
             let k = match &args[1] {
                 CompiledExpr::Integer(n) => *n,
                 CompiledExpr::Float(f) => *f as i64,
                 _ => {
-                    return Err(SheafError::Compile {
-                        message: "top_k: k must be a constant integer".to_string(),
-                        location: crate::core::error::SourceLocation::unknown(),
-                    });
+                    let (k_reg, _k_ty) = self.generate(&args[1])?;
+                    match self.emitter.known_scalar_value(&k_reg) {
+                        Some(v) => v as i64,
+                        None => {
+                            return Err(SheafError::Compile {
+                                message: "top_k: k must be a compile-time constant".to_string(),
+                                location: crate::core::error::SourceLocation::unknown(),
+                            });
+                        }
+                    }
                 }
             };
             Ok(self.emitter.emit_top_k(&input_reg, &input_ty, k))
