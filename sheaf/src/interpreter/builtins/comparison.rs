@@ -159,7 +159,20 @@ fn builtin_int(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::Int(n) => Ok(Value::Int(*n)),
         Value::Bool(b) => Ok(Value::Int(if *b { 1 } else { 0 })),
         Value::Tensor { data, .. } => {
-            Ok(Value::tensor_i32(data.mapv(|x| x.floor())))
+            if data.ndim() == 0 {
+                // Scalar tensor: extract as integer
+                Ok(Value::Int(*data.first().unwrap() as i64))
+            } else {
+                Ok(Value::tensor_i32(data.mapv(|x| x.floor())))
+            }
+        }
+        Value::DeviceBuffer(db) => {
+            let data = db.to_host().map_err(|e| runtime_error(format!("int: {}", e)))?;
+            if data.ndim() == 0 {
+                Ok(Value::Int(*data.first().unwrap() as i64))
+            } else {
+                Ok(Value::tensor_i32(data.mapv(|x| x.floor())))
+            }
         }
         _ => Err(runtime_error(format!("int: cannot convert {}", args[0].type_name()))),
     }

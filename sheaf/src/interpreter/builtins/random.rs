@@ -11,19 +11,29 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("top_k", builtin_top_k);
 }
 
+fn seed_to_key(seed: u64) -> Value {
+    let lo = (seed & 0xFFFFFFFF) as f32;
+    let hi = ((seed >> 32) & 0xFFFFFFFF) as f32;
+    let arr = ArrayD::from_shape_vec(IxDyn(&[2]), vec![lo, hi]).unwrap();
+    Value::tensor_f32(arr)
+}
+
 fn builtin_random_key(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let seed = match args.first() {
         Some(Value::Int(n)) => *n as u64,
         Some(Value::Float(f)) => *f as u64,
         _ => return Err(runtime_error("random-key: expected integer seed")),
     };
-    let lo = (seed & 0xFFFFFFFF) as i64;
-    let hi = ((seed >> 32) & 0xFFFFFFFF) as i64;
-    Ok(Value::List(vec![Value::Int(lo), Value::Int(hi)]))
+    Ok(seed_to_key(seed))
 }
 
 fn key_to_seed(key: &Value) -> u64 {
     match key {
+        Value::Tensor { data, .. } if data.len() >= 2 => {
+            let lo = data[IxDyn(&[0])] as u64;
+            let hi = data[IxDyn(&[1])] as u64;
+            lo | (hi << 32)
+        }
         Value::List(items) => {
             let lo = items.first().and_then(|v| if let Value::Int(n) = v { Some(*n as u64) } else { None }).unwrap_or(0);
             let hi = items.get(1).and_then(|v| if let Value::Int(n) = v { Some(*n as u64) } else { None }).unwrap_or(0);
@@ -50,9 +60,7 @@ fn builtin_random_split(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let mut keys = Vec::with_capacity(n);
     for i in 0..n {
         let child_seed = seed.wrapping_add(i as u64).wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let lo = (child_seed & 0xFFFFFFFF) as i64;
-        let hi = ((child_seed >> 32) & 0xFFFFFFFF) as i64;
-        keys.push(Value::List(vec![Value::Int(lo), Value::Int(hi)]));
+        keys.push(seed_to_key(child_seed));
     }
     Ok(Value::List(keys))
 }
