@@ -120,7 +120,7 @@ impl SpecialForm for DefnForm {
         // Multiple body forms get an implicit (do ...) wrapper.
         let body_start = if let SheafValue::Keyword(k, _) = &args[2] {
             if k == "jit" && args.len() > 3 {
-                eprintln!("warning: :jit annotation is deprecated in Sheaf v2 (all functions are AOT-compiled via `sheaf build`)");
+                eprintln!("warning: :jit annotation is not required and deprecated in Sheaf v2");
                 3
             } else {
                 2
