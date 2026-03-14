@@ -291,6 +291,20 @@ impl JitCompiler {
         }
         propagate_let_layouts(&body, &idx_to_key, &mut tuple_key_layouts);
 
+        // Collect scalar param values for constant propagation in codegen.
+        // Scalar f32 params (e.g. top-k=40, temp=0.8) get their values recorded
+        // so shape-critical ops (top_k slice sizes) can resolve K at compile time.
+        let scalar_param_values: Vec<(String, f64)> = func_def
+            .params
+            .iter()
+            .zip(args.iter())
+            .filter_map(|(name, val)| match val {
+                Value::Float(f) => Some((name.clone(), *f as f64)),
+                Value::Int(n) => Some((name.clone(), *n as f64)),
+                _ => None,
+            })
+            .collect();
+
         // Codegen (catch panics gracefully)
         let codegen_result = {
             let registry_clone = registry.clone();
@@ -301,6 +315,7 @@ impl JitCompiler {
             let name_clone = name.clone();
             let constants_clone = constants.clone();
             let param_index_maps_clone = param_index_maps.clone();
+            let scalar_values_clone = scalar_param_values.clone();
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 let mut codegen = CodeGenerator::with_function_params(
                     registry_clone,
@@ -311,6 +326,7 @@ impl JitCompiler {
                 codegen.set_idx_to_key(idx_to_key);
                 codegen.set_scalar_constants(constants_clone);
                 codegen.set_param_index_maps(param_index_maps_clone);
+                codegen.set_scalar_param_values(&scalar_values_clone);
                 codegen.emit_func_declaration(&name_clone, &body_clone, &param_types, &return_type)
             }))
         };
@@ -328,6 +344,11 @@ impl JitCompiler {
         };
 
         sig.return_type = actual_return_ty;
+
+        if crate::core::config::verbosity() >= 2 {
+            sheaf_msg!("jit: {} | codegen return: {}", name, sig.return_type.to_mlir());
+            sheaf_msg!("jit: {} | return_dict_keys: {:?}", name, sig.return_dict_keys);
+        }
 
         // Register layout for return type (may differ from param type due to
         // scalar promotion, e.g. ScalarI64→scalar_f32 after adam-step)
