@@ -308,6 +308,7 @@ impl CodeGenerator {
                                             args: vec![CompiledExpr::Vector(
                                                 shape.iter().map(|&d| CompiledExpr::Integer(d)).collect()
                                             )],
+                                            loc: None,
                                         }
                                     }
                                 });
@@ -429,23 +430,31 @@ impl CodeGenerator {
                 }
                 Ok(self.emitter.emit_tuple(&sub_regs, &sub_tys))
             }
-            _leaf_ty => {
-                let leaf = leaves
-                    .iter()
-                    .find(|l| l.indices == prefix)
-                    .ok_or_else(|| SheafError::Compile {
-                        message: format!(
-                            "build_grad_tuple_from_map: no leaf for {:?}",
-                            prefix
-                        ),
-                        location: crate::core::error::SourceLocation::unknown(),
-                    })?;
-                let grad_expr = grad_map
-                    .get(&leaf.symbol)
-                    .cloned()
-                    .unwrap_or(CompiledExpr::Float(0.0));
-                let (grad_reg, grad_ty) = self.generate(&grad_expr)?;
-                self.reduce_broadcast_grad(grad_reg, &grad_ty, ty)
+            leaf_ty => {
+                if let Some(leaf) = leaves.iter().find(|l| l.indices == prefix) {
+                    let grad_expr = grad_map
+                        .get(&leaf.symbol)
+                        .cloned()
+                        .unwrap_or(CompiledExpr::Float(0.0));
+                    let (grad_reg, grad_ty) = self.generate(&grad_expr)?;
+                    self.reduce_broadcast_grad(grad_reg, &grad_ty, ty)
+                } else {
+                    // No leaf found: parameter not directly accessed (e.g. passed
+                    // to scan as a whole). Emit zeros of the correct shape.
+                    let shape = leaf_ty.shape();
+                    let zeros_expr = if shape.is_empty() {
+                        CompiledExpr::Float(0.0)
+                    } else {
+                        CompiledExpr::FunctionCall {
+                            name: "zeros".to_string(),
+                            args: vec![CompiledExpr::Vector(
+                                shape.iter().map(|&d| CompiledExpr::Integer(d)).collect()
+                            )],
+                            loc: None,
+                        }
+                    };
+                    self.generate(&zeros_expr)
+                }
             }
         }
     }
@@ -464,7 +473,7 @@ impl CodeGenerator {
             }
             CompiledExpr::Symbol(name) => Some(name.clone()),
             // Handle unlowered (get sym :key) chains
-            CompiledExpr::FunctionCall { name, args } if name == "get" && args.len() >= 2 => {
+            CompiledExpr::FunctionCall { name, args, .. } if name == "get" && args.len() >= 2 => {
                 let base_key = self.resolve_arg_layout_key(&args[0])?;
                 let mut current_key = base_key;
                 for kw in &args[1..] {
@@ -524,6 +533,14 @@ impl CodeGenerator {
 
         if grad_shape == param_shape {
             return Ok((grad_reg, grad_ty.clone()));
+        }
+
+        // Same number of elements but different shape → reshape (e.g. [32] → [32,1])
+        let grad_elems: i64 = grad_shape.iter().product();
+        let param_elems: i64 = param_shape.iter().product();
+        if grad_elems == param_elems && grad_elems > 0 && grad_shape != param_shape {
+            let (r, t) = self.emitter.emit_reshape(&grad_reg, grad_ty, &param_shape);
+            return Ok((r, t));
         }
 
         let extra = grad_shape.len().saturating_sub(param_shape.len());

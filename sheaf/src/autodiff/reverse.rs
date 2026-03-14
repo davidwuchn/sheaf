@@ -66,11 +66,12 @@ fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(String, CompiledExpr)>) -> Compil
         _ if is_trivial(expr) => expr.clone(),
 
         // FunctionCall: ANF-ify all args, then bind the call
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             let anf_args: Vec<CompiledExpr> = args.iter().map(|a| anf_rec(a, out)).collect();
             let result = CompiledExpr::FunctionCall {
                 name: name.clone(),
                 args: anf_args,
+                loc: None,
             };
             let sym = fresh_anf_name();
             out.push((sym.clone(), result));
@@ -223,6 +224,7 @@ fn accumulate_named(
                         CompiledExpr::Symbol(existing.clone()),
                         CompiledExpr::Symbol(contrib_name),
                     ],
+                    loc: None,
                 },
             ));
             adj_names.insert(var_name.to_string(), sum_name);
@@ -247,6 +249,7 @@ fn call(name: &str, args: Vec<CompiledExpr>) -> CompiledExpr {
     CompiledExpr::FunctionCall {
         name: name.to_string(),
         args,
+        loc: None,
     }
 }
 
@@ -303,7 +306,7 @@ fn distribute_adjoint_named(
             accumulate_named(param, adj_sym.clone(), adj_names, bindings);
         }
 
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             distribute_fn_adjoint_named(name, args, adj_sym, adj_names, bindings, shapes);
         }
 
@@ -363,14 +366,48 @@ fn distribute_fn_adjoint_named(
         }
 
         "@" => {
-            let bt = emit_binding(bindings, call("transpose", vec![args[1].clone()]));
-            let da = emit_binding(bindings, call("@", vec![adj.clone(), sym(&bt)]));
-            let da_ub = maybe_unbroadcast(sym(&da), &args[0], shapes, bindings);
-            acc_arg(&args[0], da_ub, adj_names, bindings);
-            let at = emit_binding(bindings, call("transpose", vec![args[0].clone()]));
-            let db = emit_binding(bindings, call("@", vec![sym(&at), adj.clone()]));
-            let db_ub = maybe_unbroadcast(sym(&db), &args[1], shapes, bindings);
-            acc_arg(&args[1], db_ub, adj_names, bindings);
+            let a_ndim = arg_shape(&args[0], shapes).map(|s| s.len()).unwrap_or(2);
+            let b_ndim = arg_shape(&args[1], shapes).map(|s| s.len()).unwrap_or(2);
+
+            // dL/dA = G @ B^T
+            if b_ndim == 1 {
+                // B is 1D [n], adj is scalar or matching: dL/dA = adj * B (broadcast)
+                let da = emit_binding(bindings, call("*", vec![adj.clone(), args[1].clone()]));
+                let da_ub = maybe_unbroadcast(sym(&da), &args[0], shapes, bindings);
+                acc_arg(&args[0], da_ub, adj_names, bindings);
+            } else {
+                let bt = emit_binding(bindings, call("transpose", vec![args[1].clone()]));
+                let da = emit_binding(bindings, call("@", vec![adj.clone(), sym(&bt)]));
+                let da_ub = maybe_unbroadcast(sym(&da), &args[0], shapes, bindings);
+                acc_arg(&args[0], da_ub, adj_names, bindings);
+            }
+
+            // dL/dB = A^T @ G
+            if a_ndim == 1 {
+                // A is 1D [m], G is 1D [n] → outer product → [m, n]
+                // Use reshape to promote: reshape(A,[m,1]) @ reshape(G,[1,n])
+                if let Some(a_shape) = arg_shape(&args[0], shapes) {
+                    let m = a_shape[0];
+                    let a_col = emit_binding(bindings, call("reshape", vec![
+                        args[0].clone(),
+                        CompiledExpr::Vector(vec![CompiledExpr::Integer(m), CompiledExpr::Integer(1)]),
+                    ]));
+                    let db = emit_binding(bindings, call("@", vec![sym(&a_col), adj.clone()]));
+                    let db_ub = maybe_unbroadcast(sym(&db), &args[1], shapes, bindings);
+                    acc_arg(&args[1], db_ub, adj_names, bindings);
+                } else {
+                    // Fallback: emit A^T @ G (may fail for 1D, but no shape info)
+                    let at = emit_binding(bindings, call("transpose", vec![args[0].clone()]));
+                    let db = emit_binding(bindings, call("@", vec![sym(&at), adj.clone()]));
+                    let db_ub = maybe_unbroadcast(sym(&db), &args[1], shapes, bindings);
+                    acc_arg(&args[1], db_ub, adj_names, bindings);
+                }
+            } else {
+                let at = emit_binding(bindings, call("transpose", vec![args[0].clone()]));
+                let db = emit_binding(bindings, call("@", vec![sym(&at), adj.clone()]));
+                let db_ub = maybe_unbroadcast(sym(&db), &args[1], shapes, bindings);
+                acc_arg(&args[1], db_ub, adj_names, bindings);
+            }
         }
 
         "transpose" | "tr" => {
