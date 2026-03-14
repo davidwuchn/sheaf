@@ -65,7 +65,7 @@ pub fn collect_hof_calls(expr: &CompiledExpr) -> Vec<String> {
 
 fn collect_hof_rec(expr: &CompiledExpr, out: &mut Vec<String>) {
     match expr {
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             if HOF_BUILTINS.contains(&name.as_str()) {
                 out.push(name.clone());
             }
@@ -114,7 +114,7 @@ pub fn collect_effects(expr: &CompiledExpr) -> Vec<EffectSite> {
 
 fn collect_effects_rec(expr: &CompiledExpr, out: &mut Vec<EffectSite>) {
     match expr {
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             if EFFECTFUL_BUILTINS.contains(&name.as_str()) {
                 out.push(EffectSite::new(name));
             }

@@ -149,12 +149,13 @@ pub fn lower_get_calls(
 
     // Recurse into sub-expressions
     match expr {
-        CompiledExpr::FunctionCall { name, args } => CompiledExpr::FunctionCall {
+        CompiledExpr::FunctionCall { name, args, .. } => CompiledExpr::FunctionCall {
             name: name.clone(),
             args: args
                 .iter()
                 .map(|a| lower_get_calls(a, param_name, index_map))
                 .collect(),
+            loc: None,
         },
         CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
             bindings: bindings
@@ -228,7 +229,7 @@ fn try_extract_get_chain(
 fn extract_key_path(expr: &CompiledExpr, param_name: &str) -> Option<Vec<String>> {
     match expr {
         CompiledExpr::Symbol(name) if name == param_name => Some(vec![]),
-        CompiledExpr::FunctionCall { name, args } if name == "get" && args.len() >= 2 => {
+        CompiledExpr::FunctionCall { name, args, .. } if name == "get" && args.len() >= 2 => {
             // args[0] is the receiver — recurse
             let mut path = extract_key_path(&args[0], param_name)?;
             // args[1..] are keyword keys: (get x :k1 :k2) → path ["k1", "k2"]
@@ -241,7 +242,7 @@ fn extract_key_path(expr: &CompiledExpr, param_name: &str) -> Option<Vec<String>
             Some(path)
         }
         // (get-in params [:k1 :k2 ...]) → key path from the vector
-        CompiledExpr::FunctionCall { name, args } if name == "get-in" && args.len() >= 2 => {
+        CompiledExpr::FunctionCall { name, args, .. } if name == "get-in" && args.len() >= 2 => {
             // args[0] must resolve to param_name
             let base_path = extract_key_path(&args[0], param_name)?;
             // args[1] must be a Vector of Keywords

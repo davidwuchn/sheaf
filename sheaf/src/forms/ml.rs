@@ -444,6 +444,7 @@ impl SpecialForm for ValueAndGradForm {
             return Ok(CompiledExpr::FunctionCall {
                 name: "__value-and-grad-hof__".to_string(),
                 args: vec![f],
+                loc: None,
             });
         }
 

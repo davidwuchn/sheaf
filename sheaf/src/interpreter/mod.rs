@@ -58,7 +58,15 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
             Err(runtime_error(format!("Undefined function: {}", name)))
         }
 
-        CompiledExpr::FunctionCall { name, args } => eval_call(name, args, env),
+        CompiledExpr::FunctionCall { name, args, loc } => {
+            eval_call(name, args, env).map_err(|e| match e {
+                SheafError::Runtime { message, location: None } => SheafError::Runtime {
+                    message,
+                    location: loc.clone(),
+                },
+                other => other,
+            })
+        }
 
         CompiledExpr::Let { bindings, body } => {
             env.push_scope();

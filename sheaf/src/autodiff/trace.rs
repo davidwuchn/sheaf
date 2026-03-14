@@ -99,7 +99,7 @@ fn trace_rec(
             }
         }
 
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             if name == "mean" && args.len() == 1 {
                 // Rewrite mean(x) → sum(x) / N
                 let traced_arg = trace_rec(&args[0], env, leaf_map, sym_env)?;
@@ -115,9 +115,11 @@ fn trace_rec(
                         CompiledExpr::FunctionCall {
                             name: "sum".to_string(),
                             args: vec![traced_arg],
+                            loc: None,
                         },
                         CompiledExpr::Float(n),
                     ],
+                    loc: None,
                 });
             }
 
@@ -127,12 +129,13 @@ fn trace_rec(
                 return Ok(CompiledExpr::FunctionCall {
                     name: name.clone(),
                     args: traced_args?,
+                    loc: None,
                 });
             }
 
             // (first (scan f init coll)) -> unroll scan, return carry only
             if name == "first" && args.len() == 1 {
-                if let CompiledExpr::FunctionCall { name: inner, args: inner_args } = &args[0] {
+                if let CompiledExpr::FunctionCall { name: inner, args: inner_args, .. } = &args[0] {
                     if inner == "scan" {
                         return trace_reduce(inner_args, env, leaf_map, sym_env, true);
                     }
@@ -238,6 +241,7 @@ fn trace_get(
     let get_expr = CompiledExpr::FunctionCall {
         name: "get".to_string(),
         args: args.to_vec(),
+        loc: None,
     };
     let val = eval(&get_expr, env)?;
 

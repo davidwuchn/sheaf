@@ -863,6 +863,7 @@ impl JitCompiler {
                                                     args: vec![CompiledExpr::Vector(
                                                         shape.iter().map(|&d| CompiledExpr::Integer(d)).collect()
                                                     )],
+                                                    loc: None,
                                                 }
                                             }
                                         });
@@ -1128,10 +1129,10 @@ fn substitute_scalar(expr: &CompiledExpr, name: &str, val: f64) -> CompiledExpr 
         CompiledExpr::Symbol(s) if s == name => CompiledExpr::Float(val),
         CompiledExpr::FunctionCall {
             name: fn_name,
-            args,
-        } => CompiledExpr::FunctionCall {
+            args, .. } => CompiledExpr::FunctionCall {
             name: fn_name.clone(),
             args: args.iter().map(|a| substitute_scalar(a, name, val)).collect(),
+            loc: None,
         },
         CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
             bindings: bindings
@@ -1369,7 +1370,7 @@ fn inject_tuple_shapes(
 #[cfg(iree_runtime)]
 fn log_remaining_reduces(expr: &CompiledExpr, label: &str) {
     match expr {
-        CompiledExpr::FunctionCall { name, args } if name == "reduce" => {
+        CompiledExpr::FunctionCall { name, args, .. } if name == "reduce" => {
             let coll_desc = if let Some(coll) = args.get(2) {
                 format!("{:?}", coll)
             } else {
@@ -1393,7 +1394,7 @@ fn log_remaining_reduces(expr: &CompiledExpr, label: &str) {
 #[cfg(iree_runtime)]
 fn log_unresolved_shapes(expr: &CompiledExpr, label: &str) {
     match expr {
-        CompiledExpr::FunctionCall { name, args } if name == "reshape" && args.len() == 2 => {
+        CompiledExpr::FunctionCall { name, args, .. } if name == "reshape" && args.len() == 2 => {
             match &args[1] {
                 CompiledExpr::Vector(elems) => {
                     let unresolved: Vec<_> = elems.iter()

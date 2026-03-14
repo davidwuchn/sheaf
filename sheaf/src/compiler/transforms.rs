@@ -38,7 +38,7 @@ fn resolve_constants_rec(
         CompiledExpr::Symbol(name) => {
             locals.get(name).cloned().unwrap_or_else(|| expr.clone())
         }
-        CompiledExpr::FunctionCall { name, args } if name == "shape" && args.len() == 1 => {
+        CompiledExpr::FunctionCall { name, args, .. } if name == "shape" && args.len() == 1 => {
             let shape_from_sym = match &args[0] {
                 CompiledExpr::Symbol(s) => shapes.get(s.as_str()).cloned(),
                 _ => None,
@@ -55,9 +55,10 @@ fn resolve_constants_rec(
             CompiledExpr::FunctionCall {
                 name: name.clone(),
                 args: args.iter().map(|a| resolve_constants_rec(a, constants, locals, shapes)).collect(),
+                loc: None,
             }
         }
-        CompiledExpr::FunctionCall { name, args } if name == "get" && args.len() == 2 => {
+        CompiledExpr::FunctionCall { name, args, .. } if name == "get" && args.len() == 2 => {
             let recv = resolve_constants_rec(&args[0], constants, locals, shapes);
             let idx = resolve_constants_rec(&args[1], constants, locals, shapes);
             if let (CompiledExpr::Vector(elems), CompiledExpr::Integer(i)) = (&recv, &idx) {
@@ -67,9 +68,9 @@ fn resolve_constants_rec(
                     return elems[norm as usize].clone();
                 }
             }
-            CompiledExpr::FunctionCall { name: name.clone(), args: vec![recv, idx] }
+            CompiledExpr::FunctionCall { name: name.clone(), args: vec![recv, idx], loc: None }
         }
-        CompiledExpr::FunctionCall { name, args } if name == "cons" && args.len() == 2 => {
+        CompiledExpr::FunctionCall { name, args, .. } if name == "cons" && args.len() == 2 => {
             let head = resolve_constants_rec(&args[0], constants, locals, shapes);
             let tail = resolve_constants_rec(&args[1], constants, locals, shapes);
             let tail_elems = match &tail {
@@ -95,29 +96,29 @@ fn resolve_constants_rec(
                 elems.insert(0, head);
                 CompiledExpr::Vector(elems)
             } else {
-                CompiledExpr::FunctionCall { name: name.clone(), args: vec![head, tail] }
+                CompiledExpr::FunctionCall { name: name.clone(), args: vec![head, tail], loc: None }
             }
         }
-        CompiledExpr::FunctionCall { name, args } if name == "int" && args.len() == 1 => {
+        CompiledExpr::FunctionCall { name, args, .. } if name == "int" && args.len() == 1 => {
             let inner = resolve_constants_rec(&args[0], constants, locals, shapes);
             match &inner {
                 CompiledExpr::Integer(_) => inner,
                 CompiledExpr::Float(f) => CompiledExpr::Integer(*f as i64),
-                _ => CompiledExpr::FunctionCall { name: name.clone(), args: vec![inner] },
+                _ => CompiledExpr::FunctionCall { name: name.clone(), args: vec![inner], loc: None },
             }
         }
-        CompiledExpr::FunctionCall { name, args }
+        CompiledExpr::FunctionCall { name, args, .. }
             if (name == "first" || name == "last") && args.len() == 1 =>
         {
             let recv = resolve_constants_rec(&args[0], constants, locals, shapes);
             push_first_last(name, recv)
         }
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             let resolved: Vec<_> = args.iter()
                 .map(|a| resolve_constants_rec(a, constants, locals, shapes))
                 .collect();
             try_fold_arithmetic(name, &resolved)
-                .unwrap_or_else(|| CompiledExpr::FunctionCall { name: name.clone(), args: resolved })
+                .unwrap_or_else(|| CompiledExpr::FunctionCall { name: name.clone(), args: resolved, loc: None })
         }
         CompiledExpr::Let { bindings, body } => {
             let new_bindings: Vec<_> = bindings.iter().map(|(k, v)| {
@@ -206,7 +207,7 @@ fn lower_inlined_gets_rec(
     reverse: &HashMap<(String, Vec<usize>), Vec<String>>,
 ) -> CompiledExpr {
     match expr {
-        CompiledExpr::FunctionCall { name, args }
+        CompiledExpr::FunctionCall { name, args, .. }
             if (name == "get" || name == "get-in") && args.len() >= 2 =>
         {
             if let CompiledExpr::Symbol(alias) = &args[0] {
@@ -297,6 +298,7 @@ fn lower_inlined_gets_rec(
             CompiledExpr::FunctionCall {
                 name: name.clone(),
                 args: resolved_args,
+                loc: None,
             }
         }
         CompiledExpr::Let { bindings, body } => {
@@ -328,9 +330,10 @@ fn lower_inlined_gets_rec(
                 body: Box::new(lower_inlined_gets_rec(body, index_maps, aliases, reverse)),
             }
         }
-        CompiledExpr::FunctionCall { name, args } => CompiledExpr::FunctionCall {
+        CompiledExpr::FunctionCall { name, args, .. } => CompiledExpr::FunctionCall {
             name: name.clone(),
             args: args.iter().map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse)).collect(),
+            loc: None,
         },
         CompiledExpr::Do(exprs) => CompiledExpr::Do(
             exprs.iter().map(|e| lower_inlined_gets_rec(e, index_maps, aliases, reverse)).collect(),
@@ -455,9 +458,10 @@ pub fn substitute_scalar_param(expr: &CompiledExpr, name: &str, value: f64) -> C
                 },
             }
         }
-        CompiledExpr::FunctionCall { name: fn_name, args } => CompiledExpr::FunctionCall {
+        CompiledExpr::FunctionCall { name: fn_name, args, .. } => CompiledExpr::FunctionCall {
             name: fn_name.clone(),
             args: args.iter().map(|a| substitute_scalar_param(a, name, value)).collect(),
+            loc: None,
         },
         CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
             callee: Box::new(substitute_scalar_param(callee, name, value)),
@@ -540,6 +544,7 @@ fn push_first_last(name: &str, expr: CompiledExpr) -> CompiledExpr {
         other => CompiledExpr::FunctionCall {
             name: name.to_string(),
             args: vec![other],
+            loc: None,
         },
     }
 }
@@ -559,7 +564,7 @@ fn try_infer_shape(
             }
             try_infer_shape(body, &inner)
         }
-        CompiledExpr::FunctionCall { name, args } => match name.as_str() {
+        CompiledExpr::FunctionCall { name, args, .. } => match name.as_str() {
             "+" | "-" | "*" | "/" | "**" | "sqrt" | "exp" | "log" | "abs"
             | "relu" | "gelu" | "tanh" | "sigmoid" | "neg"
             | "maximum" | "minimum" | "clamp"
@@ -747,7 +752,7 @@ pub fn unroll_reduces(
     param_types: &[(String, StableHLOType)],
 ) -> CompiledExpr {
     match expr {
-        CompiledExpr::FunctionCall { name, args }
+        CompiledExpr::FunctionCall { name, args, .. }
             if name == "reduce" && args.len() == 3 =>
         {
             // Extract lambda, init, coll
@@ -760,6 +765,7 @@ pub fn unroll_reduces(
                     return CompiledExpr::FunctionCall {
                         name: name.clone(),
                         args: args.iter().map(|a| unroll_reduces(a, param_types)).collect(),
+                        loc: None,
                     };
                 }
             };
@@ -795,6 +801,7 @@ pub fn unroll_reduces(
                     return CompiledExpr::FunctionCall {
                         name: name.clone(),
                         args: vec![args[0].clone(), init, coll],
+                        loc: None,
                     };
                 }
             };
@@ -848,9 +855,10 @@ pub fn unroll_reduces(
         }
 
         // Recurse into all other expression types
-        CompiledExpr::FunctionCall { name, args } => CompiledExpr::FunctionCall {
+        CompiledExpr::FunctionCall { name, args, .. } => CompiledExpr::FunctionCall {
             name: name.clone(),
             args: args.iter().map(|a| unroll_reduces(a, param_types)).collect(),
+            loc: None,
         },
         CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
             bindings: bindings

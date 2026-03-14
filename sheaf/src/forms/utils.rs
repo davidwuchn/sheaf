@@ -43,7 +43,7 @@ impl SpecialForm for GetForm {
     ) -> SheafResult<CompiledExpr> {
         let compiled: SheafResult<Vec<CompiledExpr>> =
             args.iter().map(|a| compiler.compile(a)).collect();
-        Ok(CompiledExpr::FunctionCall { name: "get".to_string(), args: compiled? })
+        Ok(CompiledExpr::FunctionCall { name: "get".to_string(), args: compiled?, loc: None })
     }
 }
 
@@ -70,6 +70,7 @@ impl SpecialForm for GetInForm {
                     result = CompiledExpr::FunctionCall {
                         name: "get".to_string(),
                         args: vec![result, compiled_key],
+                        loc: None,
                     };
                 }
                 return Ok(result);
@@ -78,7 +79,7 @@ impl SpecialForm for GetInForm {
         // Fallback: compile as function call
         let compiled: SheafResult<Vec<CompiledExpr>> =
             args.iter().map(|a| compiler.compile(a)).collect();
-        Ok(CompiledExpr::FunctionCall { name: "get-in".to_string(), args: compiled? })
+        Ok(CompiledExpr::FunctionCall { name: "get-in".to_string(), args: compiled?, loc: None })
     }
 }
 
@@ -98,7 +99,7 @@ impl SpecialForm for DictForm {
     ) -> SheafResult<CompiledExpr> {
         let compiled: SheafResult<Vec<CompiledExpr>> =
             args.iter().map(|a| compiler.compile(a)).collect();
-        Ok(CompiledExpr::FunctionCall { name: "dict".to_string(), args: compiled? })
+        Ok(CompiledExpr::FunctionCall { name: "dict".to_string(), args: compiled?, loc: None })
     }
 }
 
@@ -118,7 +119,7 @@ impl SpecialForm for AssocForm {
     ) -> SheafResult<CompiledExpr> {
         let compiled: SheafResult<Vec<CompiledExpr>> =
             args.iter().map(|a| compiler.compile(a)).collect();
-        Ok(CompiledExpr::FunctionCall { name: "assoc".to_string(), args: compiled? })
+        Ok(CompiledExpr::FunctionCall { name: "assoc".to_string(), args: compiled?, loc: None })
     }
 }
 
@@ -138,7 +139,7 @@ impl SpecialForm for LastForm {
     ) -> SheafResult<CompiledExpr> {
         let compiled: SheafResult<Vec<CompiledExpr>> =
             args.iter().map(|a| compiler.compile(a)).collect();
-        Ok(CompiledExpr::FunctionCall { name: "last".to_string(), args: compiled? })
+        Ok(CompiledExpr::FunctionCall { name: "last".to_string(), args: compiled?, loc: None })
     }
 }
 

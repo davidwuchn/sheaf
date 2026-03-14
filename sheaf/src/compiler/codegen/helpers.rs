@@ -83,9 +83,10 @@ pub(crate) fn expand_tuple_to_symbols(expr: &CompiledExpr, param_name: &str) -> 
             let symbol = format!("{}_{}", param_name, indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("_"));
             CompiledExpr::Symbol(symbol)
         }
-        CompiledExpr::FunctionCall { name, args } => CompiledExpr::FunctionCall {
+        CompiledExpr::FunctionCall { name, args, .. } => CompiledExpr::FunctionCall {
             name: name.clone(),
             args: args.iter().map(|a| expand_tuple_to_symbols(a, param_name)).collect(),
+            loc: None,
         },
         CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
             bindings: bindings.iter().map(|(k, v)| (k.clone(), expand_tuple_to_symbols(v, param_name))).collect(),

@@ -250,7 +250,7 @@ impl CodeGenerator {
         }
         // first: (first x), special case: (first (scan fn init coll)) = final carry
         else if name == "first" && args.len() == 1 {
-            if let CompiledExpr::FunctionCall { name: inner, args: inner_args } = &args[0] {
+            if let CompiledExpr::FunctionCall { name: inner, args: inner_args, .. } = &args[0] {
                 if inner == "scan" && inner_args.len() == 3 {
                     return self.generate_reduce_scan(&inner_args[0], &inner_args[1], &inner_args[2], true);
                 }

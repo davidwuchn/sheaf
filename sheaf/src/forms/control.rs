@@ -115,6 +115,7 @@ fn build_case_chain(
         condition: Box::new(CompiledExpr::FunctionCall {
             name: "=".to_string(),
             args: vec![target.clone(), val],
+            loc: None,
         }),
         then_branch: Box::new(result),
         else_branch: Some(Box::new(rest)),

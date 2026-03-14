@@ -329,7 +329,7 @@ impl CompilerContext {
                     let call_args = call_args?;
 
                     // Detect ((value-and-grad f) args) HOF pattern
-                    if let CompiledExpr::FunctionCall { name, args: inner } = &callee {
+                    if let CompiledExpr::FunctionCall { name, args: inner, .. } = &callee {
                         if name == "__value-and-grad-hof__" && inner.len() == 1 {
                             if let CompiledExpr::Lambda { params, .. } = &inner[0] {
                                 let wrt_indices = (0..params.len()).collect();
@@ -504,6 +504,7 @@ impl CompilerContext {
         Ok(CompiledExpr::FunctionCall {
             name: func_name.to_string(),
             args: compiled_args,
+            loc: Some(loc.clone()),
         })
     }
 }
@@ -524,6 +525,7 @@ pub enum CompiledExpr {
     FunctionCall {
         name: String,
         args: Vec<CompiledExpr>,
+        loc: Option<crate::core::error::SourceLocation>,
     },
     Let {
         bindings: Vec<(String, CompiledExpr)>,
@@ -653,7 +655,7 @@ mod tests {
         let result = ctx.compile(&expr).unwrap();
 
         match result {
-            CompiledExpr::FunctionCall { name, args } => {
+            CompiledExpr::FunctionCall { name, args, .. } => {
                 assert_eq!(name, "+");
                 assert_eq!(args.len(), 2);
             }

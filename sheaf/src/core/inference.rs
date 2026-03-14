@@ -256,7 +256,7 @@ fn infer_symbol_types(
     symbol_types: &mut std::collections::HashMap<String, StableHLOType>,
 ) -> SheafResult<()> {
     match expr {
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             // Infer types from function call context
             if name == "@" && args.len() == 2 {
                 // Matrix multiply: (@ lhs rhs)
@@ -373,7 +373,7 @@ fn infer_type_with_context(
             Ok(StableHLOType::scalar_f32())
         }
 
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             // Use context-aware inference for args
             let ctx_infer = |e: &CompiledExpr| infer_type_with_context(e, symbol_types);
             match name.as_str() {
@@ -462,7 +462,7 @@ fn infer_type(expr: &CompiledExpr) -> SheafResult<StableHLOType> {
             Ok(StableHLOType::f32_tensor(infer_vector_shape(elements)))
         }
 
-        CompiledExpr::FunctionCall { name, args } => infer_function_call_type(name, args),
+        CompiledExpr::FunctionCall { name, args, .. } => infer_function_call_type(name, args),
 
         CompiledExpr::Let { body, .. } => infer_type(body),
 
@@ -678,6 +678,7 @@ mod tests {
         CompiledExpr::FunctionCall {
             name: name.to_string(),
             args,
+            loc: None,
         }
     }
 

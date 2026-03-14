@@ -14,6 +14,7 @@ fn test_generate_binop() {
     let expr = CompiledExpr::FunctionCall {
         name: "+".to_string(),
         args: vec![CompiledExpr::Integer(1), CompiledExpr::Integer(2)],
+        loc: None,
     };
     let result = codegen.generate(&expr);
     assert!(result.is_ok());
@@ -25,6 +26,7 @@ fn test_emit_function() {
     let expr = CompiledExpr::FunctionCall {
         name: "+".to_string(),
         args: vec![CompiledExpr::Integer(1), CompiledExpr::Integer(2)],
+        loc: None,
     };
     let mlir = codegen.emit_function("test", &expr);
     assert!(mlir.is_ok());
@@ -39,6 +41,7 @@ fn test_generate_compare() {
     let expr = CompiledExpr::FunctionCall {
         name: ">".to_string(),
         args: vec![CompiledExpr::Float(5.0), CompiledExpr::Float(2.0)],
+        loc: None,
     };
     let result = codegen.generate(&expr);
     assert!(result.is_ok());
@@ -53,6 +56,7 @@ fn test_emit_compare() {
     let expr = CompiledExpr::FunctionCall {
         name: "=".to_string(),
         args: vec![CompiledExpr::Integer(1), CompiledExpr::Integer(1)],
+        loc: None,
     };
     let mlir = codegen.emit_function("test_eq", &expr);
     assert!(mlir.is_ok());
@@ -71,12 +75,15 @@ fn test_emit_boolean_and() {
             CompiledExpr::FunctionCall {
                 name: ">".to_string(),
                 args: vec![CompiledExpr::Float(5.0), CompiledExpr::Float(2.0)],
+                loc: None,
             },
             CompiledExpr::FunctionCall {
                 name: "<".to_string(),
                 args: vec![CompiledExpr::Float(1.0), CompiledExpr::Float(3.0)],
+                loc: None,
             },
         ],
+        loc: None,
     };
     let mlir = codegen.emit_function("test_and", &expr);
     assert!(mlir.is_ok());
@@ -94,7 +101,9 @@ fn test_emit_boolean_not() {
         args: vec![CompiledExpr::FunctionCall {
             name: ">".to_string(),
             args: vec![CompiledExpr::Float(5.0), CompiledExpr::Float(10.0)],
+            loc: None,
         }],
+        loc: None,
     };
     let mlir = codegen.emit_function("test_not", &expr);
     assert!(mlir.is_ok());

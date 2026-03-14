@@ -197,7 +197,7 @@ impl CodeGenerator {
         } else {
             let (reg, ty) = self.generate(value_expr)?;
             if matches!(&ty, StableHLOType::Tuple(_)) {
-                if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args } = value_expr {
+                if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args, .. } = value_expr {
                     if fn_name == "get" && fn_args.len() >= 2 {
                         if let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last() {
                             if let Some(sub_layout) = self.tuple_key_layouts.get(k).cloned() {
@@ -326,7 +326,7 @@ impl CodeGenerator {
                 Ok((current_reg, current_ty))
             }
 
-            CompiledExpr::FunctionCall { name, args } => self.generate_function_call(name, args),
+            CompiledExpr::FunctionCall { name, args, .. } => self.generate_function_call(name, args),
 
             CompiledExpr::Let { bindings, body } => {
                 let saved_bindings = self.bindings.clone();
@@ -367,7 +367,7 @@ impl CodeGenerator {
                         let (reg, ty) = self.generate(value_expr)?;
                         // Propagate sub-layout for Let-bound tuples
                         if matches!(&ty, StableHLOType::Tuple(_)) {
-                            if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args } = value_expr {
+                            if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args, .. } = value_expr {
                                 if fn_name == "get" && fn_args.len() >= 2 {
                                     // Use the last keyword arg as the layout key
                                     if let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last() {

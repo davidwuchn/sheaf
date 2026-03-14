@@ -18,6 +18,7 @@ fn call(name: &str, args: Vec<CompiledExpr>) -> CompiledExpr {
     CompiledExpr::FunctionCall {
         name: name.to_string(),
         args,
+        loc: None,
     }
 }
 
@@ -57,13 +58,13 @@ pub(crate) fn replace_symbol(expr: &CompiledExpr, name: &str, replacement: &Comp
         CompiledExpr::Symbol(s) if s == name => replacement.clone(),
         CompiledExpr::FunctionCall {
             name: fn_name,
-            args,
-        } => CompiledExpr::FunctionCall {
+            args, .. } => CompiledExpr::FunctionCall {
             name: fn_name.clone(),
             args: args
                 .iter()
                 .map(|a| replace_symbol(a, name, replacement))
                 .collect(),
+            loc: None,
         },
         CompiledExpr::Let { bindings, body } => {
             // Sequential scoping: once a binding shadows the name,
@@ -111,7 +112,7 @@ pub(crate) fn replace_symbol(expr: &CompiledExpr, name: &str, replacement: &Comp
 ///   1 * x  →  x,  x * 1  →  x
 pub fn simplify(expr: CompiledExpr) -> CompiledExpr {
     match expr {
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             let args: Vec<CompiledExpr> = args.into_iter().map(simplify).collect();
             match name.as_str() {
                 "+" => match (&args[0], &args[1]) {
@@ -174,7 +175,7 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
             }
         }
 
-        CompiledExpr::FunctionCall { name, args } => grad_function_call(name, args, wrt, g),
+        CompiledExpr::FunctionCall { name, args, .. } => grad_function_call(name, args, wrt, g),
 
         // Let: forward-mode AD through bindings without exponential expansion.
         //
@@ -464,7 +465,7 @@ pub fn find_undiffable_ops(expr: &CompiledExpr) -> Vec<String> {
 
 fn find_undiffable_rec(expr: &CompiledExpr, ops: &mut Vec<String>) {
     match expr {
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             match name.as_str() {
                 "get" | "reduce" | "map" | "filter" | "find"
                 | "range" | "len" | "first" | "last" | "rest"
@@ -501,7 +502,7 @@ fn find_undiffable_rec(expr: &CompiledExpr, ops: &mut Vec<String>) {
 
 pub fn contains_undiffable_ops(expr: &CompiledExpr) -> bool {
     match expr {
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             match name.as_str() {
                 "get" | "reduce" | "map" | "filter" | "find"
                 | "range" | "len" | "first" | "last" | "rest"
@@ -552,7 +553,7 @@ fn inline_calls_rec(
     }
 
     match expr {
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             // First, inline in arguments
             let inlined_args: Vec<CompiledExpr> = args
                 .iter()
@@ -580,6 +581,7 @@ fn inline_calls_rec(
             CompiledExpr::FunctionCall {
                 name: name.clone(),
                 args: inlined_args,
+                loc: None,
             }
         }
 
@@ -769,9 +771,9 @@ fn substitute(
         return CompiledExpr::Symbol(name.clone());
     }
     match expr {
-        CompiledExpr::FunctionCall { name, args } => {
+        CompiledExpr::FunctionCall { name, args, .. } => {
             let args = args.into_iter().map(|a| substitute(a, subst)).collect();
-            CompiledExpr::FunctionCall { name, args }
+            CompiledExpr::FunctionCall { name, args, loc: None }
         }
         CompiledExpr::Let { bindings, body } => {
             let bindings = bindings

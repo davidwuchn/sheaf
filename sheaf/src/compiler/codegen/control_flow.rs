@@ -193,6 +193,7 @@ impl CodeGenerator {
                                 CompiledExpr::Symbol("__tree_reduce_acc".to_string()),
                                 CompiledExpr::Symbol("__tree_reduce_leaf".to_string()),
                             ],
+                            loc: None,
                         };
                         let saved = self.bindings.clone();
                         self.bindings.insert("__tree_reduce_acc".to_string(), (acc_reg, acc_ty.clone()));
