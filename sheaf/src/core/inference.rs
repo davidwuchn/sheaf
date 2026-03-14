@@ -155,12 +155,38 @@ pub fn infer_function_signature_with_known(
     // Infer return type from body
     let return_type = infer_type_with_context(body_expr, &symbol_types)?;
 
+    // Detect dict return keys from body expression
+    let return_dict_keys = find_return_dict_keys(body_expr);
+
     Ok(FunctionSignature {
         param_types,
         return_type,
-        return_dict_keys: None,
+        return_dict_keys,
         arg_type_layouts: vec![],
     })
+}
+
+/// Walk through Let/Do wrappers to find a Dict return expression and extract its keys.
+fn find_return_dict_keys(expr: &CompiledExpr) -> Option<Vec<String>> {
+    match expr {
+        CompiledExpr::Dict(pairs) => {
+            let mut keys: Vec<String> = pairs
+                .iter()
+                .filter_map(|(k, _)| {
+                    if let CompiledExpr::Keyword(s) = k {
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            keys.sort();
+            Some(keys)
+        }
+        CompiledExpr::Let { body, .. } => find_return_dict_keys(body),
+        CompiledExpr::Do(exprs) => exprs.last().and_then(|e| find_return_dict_keys(e)),
+        _ => None,
+    }
 }
 
 /// Seed symbol_types with the resolved element types of GetTupleElement nodes.

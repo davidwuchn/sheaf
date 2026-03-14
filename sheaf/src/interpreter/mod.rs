@@ -1527,27 +1527,25 @@ fn try_iree_dispatch(
     // Validate tensor count AND shapes before calling into IREE.
     // This prevents the C runtime from printing ugly diagnostics to stderr.
     if !crate::runtime::iree_session::args_match_signature(args, &sig.param_types) {
-        if env.iree_mismatch_warned.insert(func_def.name.clone()) {
-            let expected = crate::runtime::iree_session::count_signature_tensors(&sig.param_types);
-            let actual = crate::runtime::iree_session::count_arg_tensors(args);
+        let expected = crate::runtime::iree_session::count_signature_tensors(&sig.param_types);
+        let actual = crate::runtime::iree_session::count_arg_tensors(args);
+        if env.iree_mismatch_warned.insert(func_def.name.clone())
+            || crate::core::config::verbosity() >= 2
+        {
             sheaf_msg!(
                 "warning: '{}' compiled for {} tensors but called with {} — falling back to interpreted",
                 func_def.name, expected, actual,
-            );
-            sheaf_msg!(
-                "hint: rerun `sheaf build` to recompile with current shapes",
             );
         }
         return None;
     }
     if let Err(mismatch) = crate::runtime::iree_session::check_shapes_match(args, &sig.param_types) {
-        if env.iree_mismatch_warned.insert(func_def.name.clone()) {
+        if env.iree_mismatch_warned.insert(func_def.name.clone())
+            || crate::core::config::verbosity() >= 2
+        {
             sheaf_msg!(
                 "warning: '{}': {}. Falling back to interpreted mode.",
                 func_def.name, mismatch,
-            );
-            sheaf_msg!(
-                "hint: rerun `sheaf build` to recompile with current shapes",
             );
         }
         return None;
@@ -1572,13 +1570,15 @@ fn try_iree_dispatch(
     let result = if !sig.arg_type_layouts.is_empty() {
         crate::core::inference::reconstruct_jit_result(result, &sig.return_type, &sig.arg_type_layouts)
     } else {
-        match (&sig.return_dict_keys, result) {
-            (Some(keys), Value::Tuple(elems)) if elems.len() == keys.len() => {
-                let map = keys.iter().cloned().zip(elems).collect();
-                Value::Dict(map)
-            }
-            (_, other) => other,
+        result
+    };
+    // Reconstruct top-level dict from tuple if the function originally returned a dict
+    let result = match (&sig.return_dict_keys, result) {
+        (Some(keys), Value::Tuple(elems)) if elems.len() == keys.len() => {
+            let map = keys.iter().cloned().zip(elems).collect();
+            Value::Dict(map)
         }
+        (_, other) => other,
     };
 
     Some(Ok(result))
