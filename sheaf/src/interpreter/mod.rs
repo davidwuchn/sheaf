@@ -825,8 +825,10 @@ fn eval_scan(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
 /// Get the scan length from a dict of tensors (dim-0 of first tensor found).
 pub(crate) fn dict_scan_length(map: &std::collections::BTreeMap<String, Value>) -> Result<usize, SheafError> {
     for val in map.values() {
-        if let Value::Tensor { data, .. } = val {
-            return Ok(data.shape()[0]);
+        match val {
+            Value::Tensor { data, .. } => return Ok(data.shape()[0]),
+            Value::DeviceBuffer(db) => return Ok(db.shape[0]),
+            _ => {}
         }
     }
     Err(runtime_error("scan: dict contains no tensors to iterate over"))
@@ -839,7 +841,9 @@ pub(crate) fn slice_dict(
 ) -> Result<Value, SheafError> {
     let mut result = std::collections::BTreeMap::new();
     for (key, val) in map {
-        let sliced = match val {
+        // Materialize DeviceBuffer to host tensor before slicing
+        let host_val = val.ensure_host()?;
+        let sliced = match &host_val {
             Value::Tensor { data, .. } => {
                 if data.ndim() == 1 {
                     Value::Float(data[[i]])
@@ -1185,12 +1189,18 @@ fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Resu
                                 env.set(sym, val.clone());
                             }
 
-                            let grad_tree = build_grad_from_leaves(
+                            match build_grad_from_leaves(
                                 &traced, params, &leaf_map.leaves, env,
-                            )?;
-
-                            env.pop_scope();
-                            return Ok(Value::List(vec![Value::Float(loss), grad_tree]));
+                            ) {
+                                Ok(grad_tree) => {
+                                    env.pop_scope();
+                                    return Ok(Value::List(vec![Value::Float(loss), grad_tree]));
+                                }
+                                Err(e) => {
+                                    // Don't pop scope here; the outer block handles it
+                                    sheaf_msg!("warning: value-and-grad: gradient eval failed ({:?}), falling back to finite differences", e);
+                                }
+                            }
                         }
                         env.pop_scope();
                         sheaf_msg!("warning: value-and-grad: tracing incomplete, falling back to finite differences");
@@ -1352,6 +1362,11 @@ fn build_grad_from_leaves(
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
+    // Materialize DeviceBuffers for comparison
+    let a_host = a.ensure_host().ok();
+    let b_host = b.ensure_host().ok();
+    let a = a_host.as_ref().unwrap_or(a);
+    let b = b_host.as_ref().unwrap_or(b);
     match (a, b) {
         (Value::Tensor { data: da, .. }, Value::Tensor { data: db, .. }) => {
             da.shape() == db.shape() && da.iter().zip(db.iter()).all(|(x, y)| x.to_bits() == y.to_bits())
@@ -1368,18 +1383,20 @@ fn build_grad_tree_by_value(
     leaf_grads: &std::collections::HashMap<String, Value>,
 ) -> Result<Value, SheafError> {
     match params {
-        Value::Tensor { .. } | Value::Float(_) | Value::Int(_) => {
+        Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::DeviceBuffer(_) => {
+            // Materialize DeviceBuffer for comparison
+            let params_host = params.ensure_host().unwrap_or_else(|_| params.clone());
             // Find the leaf that matches this param value
             for (sym, leaf_val) in leaves {
-                if values_equal(params, leaf_val) {
+                if values_equal(&params_host, leaf_val) {
                     if let Some(grad_val) = leaf_grads.get(sym) {
-                        return reduce_grad_to_param_shape(grad_val, params);
+                        return reduce_grad_to_param_shape(grad_val, &params_host);
                     }
                 }
             }
             // No matching leaf found, this param wasn't used in the expression.
             // Return zeros with the same shape.
-            Ok(zeros_like(params))
+            Ok(zeros_like(&params_host))
         }
         Value::Dict(map) => {
             let mut grad_map = BTreeMap::new();

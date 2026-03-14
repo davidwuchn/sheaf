@@ -29,13 +29,15 @@ impl LeafMap {
     pub fn register(&mut self, val: Value) -> String {
         let name = format!("__leaf_{}__", self.counter);
         self.counter += 1;
-        self.leaves.push((name.clone(), val));
+        // Materialize DeviceBuffers to host so values_equal can compare them later.
+        let host_val = val.ensure_host().unwrap_or(val);
+        self.leaves.push((name.clone(), host_val));
         name
     }
 }
 
 fn is_tensor_leaf(val: &Value) -> bool {
-    matches!(val, Value::Tensor { .. } | Value::Float(_) | Value::Int(_))
+    matches!(val, Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::DeviceBuffer(_))
 }
 
 /// Differentiable function names that should be kept symbolic.
