@@ -101,7 +101,7 @@ pub fn try_load_vmfb(
     let mut session = match IreeSession::new() {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("warning: IREE init failed: {}", e);
+            eprintln!("warning: JIT engine init failed: {}", e);
             return false;
         }
     };

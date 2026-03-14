@@ -1405,8 +1405,8 @@ impl CodeGenerator {
             };
             Ok(self.emitter.emit_top_k(&input_reg, &input_ty, k))
         }
-        // random-split: (random-split key) -> [key1, key2]
-        else if name == "random-split" && args.len() == 1 {
+        // random-split: (random-split key) or (random-split key 2) -> [key1, key2]
+        else if name == "random-split" && (args.len() == 1 || (args.len() == 2 && matches!(&args[1], CompiledExpr::Integer(2)))) {
             let (key_reg, key_ty) = self.generate(&args[0])?;
             Ok(self.emitter.emit_random_split(&key_reg, &key_ty))
         }

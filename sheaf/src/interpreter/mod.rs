@@ -1588,7 +1588,7 @@ fn try_iree_dispatch(
             // Unexpected IREE error → fall back to interpreter with warning.
             if env.iree_mismatch_warned.insert(format!("{}:call", func_def.name)) {
                 sheaf_msg!(
-                    "warning: '{}' IREE call failed — falling back to interpreted: {}",
+                    "warning: '{}' JIT dispatch failed — falling back to interpreted: {}",
                     func_def.name, _e,
                 );
             }

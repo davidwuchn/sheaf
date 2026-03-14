@@ -100,6 +100,39 @@ unsafe fn libc_stderr() -> *mut c_void {
     }
 }
 
+/// Temporarily redirect fd 2 (stderr) to /dev/null, returning the saved fd.
+/// Used to suppress IREE C runtime diagnostics in non-verbose mode.
+fn suppress_stderr() -> Option<i32> {
+    unsafe {
+        unsafe extern "C" {
+            fn open(path: *const u8, oflag: i32) -> i32;
+            fn close(fd: i32) -> i32;
+            fn dup(fd: i32) -> i32;
+            fn dup2(fd: i32, fd2: i32) -> i32;
+        }
+        const O_WRONLY: i32 = 1;
+        let devnull = open(b"/dev/null\0".as_ptr(), O_WRONLY);
+        if devnull < 0 { return None; }
+        let saved = dup(2);
+        if saved < 0 { close(devnull); return None; }
+        dup2(devnull, 2);
+        close(devnull);
+        Some(saved)
+    }
+}
+
+/// Restore stderr from a saved fd (from suppress_stderr).
+fn restore_stderr(saved_fd: i32) {
+    unsafe {
+        unsafe extern "C" {
+            fn close(fd: i32) -> i32;
+            fn dup2(fd: i32, fd2: i32) -> i32;
+        }
+        dup2(saved_fd, 2);
+        close(saved_fd);
+    }
+}
+
 /// Identity-based fingerprint for buffer view caching.
 /// Uses Arc identity for tensors (O(1), no false positives).
 /// Same Arc = same data = cache hit. New Arc = miss (correct for computed values).
@@ -292,14 +325,20 @@ impl IreeSession {
                 self_: std::ptr::null_mut(),
                 ctl: None,
             };
+            // Suppress IREE C runtime diagnostics on stderr in non-verbose mode
+            let suppress = crate::core::config::verbosity() < 2;
+            let saved_stderr = if suppress { suppress_stderr() } else { None };
             let status = iree_runtime_session_append_bytecode_module_from_memory(
                 self.session,
                 span,
                 null_alloc,
             );
+            if let Some(fd) = saved_stderr { restore_stderr(fd); }
             if !iree_status_is_ok(status) {
-                iree_status_fprint(libc_stderr(), status);
-                return Err(iree_err("failed to load VMFB module"));
+                if crate::core::config::verbosity() >= 2 {
+                    iree_status_fprint(libc_stderr(), status);
+                }
+                return Err(iree_err("failed to load compiled module"));
             }
 
             // Print backend once, after first successful VMFB load

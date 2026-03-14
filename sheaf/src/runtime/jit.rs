@@ -396,12 +396,18 @@ impl JitCompiler {
                     d
                 }
                 Err(_) => {
-                    self.jit_fail(name, "failed to read cached VMFB");
+                    self.jit_fail(name, "failed to read cached compilation");
                     return None;
                 }
             }
         } else {
-            let data = self.run_iree_compile(&iree_compile, name, &mlir, target_backend);
+            let data = match self.run_iree_compile(&iree_compile, name, &mlir, target_backend) {
+                Some(d) => d,
+                None => {
+                    self.jit_fail(name, "iree-compile failed on all backends");
+                    return None;
+                }
+            };
 
             // Cache: named VMFB + manifest entry
             let _ = std::fs::create_dir_all(&cache_dir);
@@ -415,30 +421,35 @@ impl JitCompiler {
         let mut session = match crate::runtime::iree_session::IreeSession::new() {
             Ok(s) => s,
             Err(e) => {
-                self.jit_fail(name, &format!("IREE init: {}", e));
+                self.jit_fail(name, &format!("JIT engine init: {}", e));
                 return None;
             }
         };
         if let Err(e) = session.load_vmfb(vmfb_data) {
             if target_backend != "llvm-cpu" {
-                // Runtime doesn't support this backend (e.g. vulkan on macOS)
                 sheaf_msg!("sheaf: {} backend failed for '{}', falling back to cpu", target_backend, name);
                 let _ = std::fs::remove_file(&cached_vmfb);
                 self.target_backend = "llvm-cpu".to_string();
-                let cpu_data = self.run_iree_compile(&iree_compile, name, &mlir, "llvm-cpu");
+                let cpu_data = match self.run_iree_compile(&iree_compile, name, &mlir, "llvm-cpu") {
+                    Some(d) => d,
+                    None => {
+                        self.jit_fail(name, "compilation failed on all backends");
+                        return None;
+                    }
+                };
                 session = match crate::runtime::iree_session::IreeSession::new() {
                     Ok(s) => s,
                     Err(_) => {
-                        eprintln!("sheaf: JIT engine failed on all backends, aborting");
-                        std::process::exit(1);
+                        self.jit_fail(name, "JIT engine init failed on all backends");
+                        return None;
                     }
                 };
                 if session.load_vmfb(cpu_data).is_err() {
-                    eprintln!("sheaf: JIT engine failed on all backends, aborting");
-                    std::process::exit(1);
+                    self.jit_fail(name, "JIT load failed on all backends");
+                    return None;
                 }
             } else {
-                self.jit_fail(name, &format!("VMFB load: {}", e));
+                self.jit_fail(name, &format!("JIT load: {}", e));
                 return None;
             }
         }
@@ -952,7 +963,7 @@ impl JitCompiler {
                     d
                 }
                 Err(_) => {
-                    self.jit_fail(&vag_key, "failed to read cached VMFB");
+                    self.jit_fail(&vag_key, "failed to read cached compilation");
                     return None;
                 }
             }
@@ -964,7 +975,13 @@ impl JitCompiler {
                 sheaf_msg!("jit: value-and-grad | saved {}", debug_path.display());
             }
 
-            let data = self.run_iree_compile(&iree_compile, "value_and_grad", &mlir, &backend);
+            let data = match self.run_iree_compile(&iree_compile, "value_and_grad", &mlir, &backend) {
+                Some(d) => d,
+                None => {
+                    self.jit_fail(&vag_key, "compilation failed on all backends");
+                    return None;
+                }
+            };
 
             let _ = std::fs::create_dir_all(&cache_dir);
             let _ = std::fs::write(&cached_vmfb, &data);
@@ -973,11 +990,11 @@ impl JitCompiler {
             data
         };
 
-        // Load into IREE session
+        // Load into session
         let mut session = match crate::runtime::iree_session::IreeSession::new() {
             Ok(s) => s,
             Err(e) => {
-                self.jit_fail(&vag_key, &format!("IREE init: {}", e));
+                self.jit_fail(&vag_key, &format!("JIT engine init: {}", e));
                 return None;
             }
         };
@@ -986,20 +1003,26 @@ impl JitCompiler {
                 sheaf_msg!("sheaf: {} backend failed for value-and-grad, falling back to cpu", backend);
                 let _ = std::fs::remove_file(&cached_vmfb);
                 self.target_backend = "llvm-cpu".to_string();
-                let cpu_data = self.run_iree_compile(&iree_compile, "value_and_grad", &mlir, "llvm-cpu");
+                let cpu_data = match self.run_iree_compile(&iree_compile, "value_and_grad", &mlir, "llvm-cpu") {
+                    Some(d) => d,
+                    None => {
+                        self.jit_fail(&vag_key, "compilation failed on all backends");
+                        return None;
+                    }
+                };
                 session = match crate::runtime::iree_session::IreeSession::new() {
                     Ok(s) => s,
                     Err(_) => {
-                        eprintln!("sheaf: JIT engine failed on all backends, aborting");
-                        std::process::exit(1);
+                        self.jit_fail(&vag_key, "JIT engine init failed");
+                        return None;
                     }
                 };
                 if session.load_vmfb(cpu_data).is_err() {
-                    eprintln!("sheaf: JIT engine failed on all backends, aborting");
-                    std::process::exit(1);
+                    self.jit_fail(&vag_key, "JIT load failed on all backends");
+                    return None;
                 }
             } else {
-                self.jit_fail(&vag_key, &format!("VMFB load: {}", e));
+                self.jit_fail(&vag_key, &format!("JIT load: {}", e));
                 return None;
             }
         }
@@ -1013,8 +1036,8 @@ impl JitCompiler {
     }
 
     /// Run iree-compile on MLIR source, with automatic CPU fallback.
-    /// Returns compiled VMFB bytes, or exits the process if all backends fail.
-    fn run_iree_compile(&mut self, iree_compile: &str, name: &str, mlir: &str, backend: &str) -> Vec<u8> {
+    /// Returns compiled VMFB bytes, or None if all backends fail.
+    fn run_iree_compile(&mut self, iree_compile: &str, name: &str, mlir: &str, backend: &str) -> Option<Vec<u8>> {
         let backends_to_try = if backend != "llvm-cpu" {
             vec![backend, "llvm-cpu"]
         } else {
@@ -1080,28 +1103,20 @@ impl JitCompiler {
             if ok {
                 if let Ok(data) = std::fs::read(&vmfb_path) {
                     let _ = std::fs::remove_file(&vmfb_path);
-                    return data;
+                    return Some(data);
                 }
             }
             let _ = std::fs::remove_file(&vmfb_path);
         }
 
-        // All backends failed
-        eprintln!("sheaf: JIT compilation failed on all backends, aborting");
-        std::process::exit(1);
+        None
     }
 
     fn jit_fail(&mut self, name: &str, reason: &str) {
         self.failed_fns.insert(name.to_string());
+        let display_name = if name.starts_with("__vag_") { "value-and-grad" } else { name };
         if crate::core::config::verbosity() >= 1 {
-            sheaf_msg!("jit: {} skipped ({})", name, reason);
-        } else if reason.contains("compile failed")
-            || reason.contains("compile exec")
-            || reason.contains("init:")
-            || reason.contains("load:")
-        {
-            sheaf_msg!("sheaf: '{}' will run in interpreter mode (compilation failed)", name);
-
+            sheaf_msg!("jit: {} skipped ({})", display_name, reason);
         }
     }
 }

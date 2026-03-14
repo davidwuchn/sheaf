@@ -510,7 +510,7 @@ impl CompilerContext {
 }
 
 /// Compiled expression - intermediate representation
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum CompiledExpr {
     Integer(i64),
     Float(f64),
@@ -606,6 +606,86 @@ pub enum CompiledExpr {
         check: GuardCheck,
         expr: Box<CompiledExpr>,
     },
+}
+
+/// Manual Debug impl: omits `loc` from FunctionCall to keep cache keys stable.
+impl std::fmt::Debug for CompiledExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Integer(n) => write!(f, "Integer({})", n),
+            Self::Float(v) => write!(f, "Float({})", v),
+            Self::Boolean(b) => write!(f, "Boolean({})", b),
+            Self::Nil => write!(f, "Nil"),
+            Self::String(s) => write!(f, "String({:?})", s),
+            Self::Keyword(s) => write!(f, "Keyword({:?})", s),
+            Self::Vector(v) => f.debug_tuple("Vector").field(v).finish(),
+            Self::Dict(v) => f.debug_tuple("Dict").field(v).finish(),
+            Self::Quoted(v) => f.debug_tuple("Quoted").field(v).finish(),
+            Self::FunctionRef(s) => write!(f, "FunctionRef({:?})", s),
+            Self::FunctionCall { name, args, .. } => {
+                f.debug_struct("FunctionCall")
+                    .field("name", name)
+                    .field("args", args)
+                    .finish()
+            }
+            Self::Let { bindings, body } => {
+                f.debug_struct("Let").field("bindings", bindings).field("body", body).finish()
+            }
+            Self::If { condition, then_branch, else_branch } => {
+                f.debug_struct("If")
+                    .field("condition", condition)
+                    .field("then_branch", then_branch)
+                    .field("else_branch", else_branch)
+                    .finish()
+            }
+            Self::Do(v) => f.debug_tuple("Do").field(v).finish(),
+            Self::Symbol(s) => write!(f, "Symbol({:?})", s),
+            Self::GetTupleElement { param, indices } => {
+                f.debug_struct("GetTupleElement").field("param", param).field("indices", indices).finish()
+            }
+            Self::Lambda { params, body } => {
+                f.debug_struct("Lambda").field("params", params).field("body", body).finish()
+            }
+            Self::LambdaCall { callee, args } => {
+                f.debug_struct("LambdaCall").field("callee", callee).field("args", args).finish()
+            }
+            Self::ValueAndGrad { fn_name, src_fn_name, wrt_params, shape_config } => {
+                f.debug_struct("ValueAndGrad")
+                    .field("fn_name", fn_name)
+                    .field("src_fn_name", src_fn_name)
+                    .field("wrt_params", wrt_params)
+                    .field("shape_config", shape_config)
+                    .finish()
+            }
+            Self::InlineValueAndGrad { lambda, args, wrt_indices } => {
+                f.debug_struct("InlineValueAndGrad")
+                    .field("lambda", lambda)
+                    .field("args", args)
+                    .field("wrt_indices", wrt_indices)
+                    .finish()
+            }
+            Self::Repeat { index_var, count, acc_var, acc_init, body } => {
+                f.debug_struct("Repeat")
+                    .field("index_var", index_var)
+                    .field("count", count)
+                    .field("acc_var", acc_var)
+                    .field("acc_init", acc_init)
+                    .field("body", body)
+                    .finish()
+            }
+            Self::While { condition, acc_var, acc_init, body } => {
+                f.debug_struct("While")
+                    .field("condition", condition)
+                    .field("acc_var", acc_var)
+                    .field("acc_init", acc_init)
+                    .field("body", body)
+                    .finish()
+            }
+            Self::Guard { check, expr } => {
+                f.debug_struct("Guard").field("check", check).field("expr", expr).finish()
+            }
+        }
+    }
 }
 
 /// Guard check type for runtime assertions.
