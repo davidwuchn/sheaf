@@ -112,12 +112,16 @@ impl StableHLOType {
             Self::ScalarI64 => "tensor<i64>".to_string(),
             Self::ScalarI1 => "tensor<i1>".to_string(),
             Self::Tensor { shape, dtype } => {
-                let shape_str = shape
-                    .iter()
-                    .map(|d| d.to_string())
-                    .collect::<Vec<_>>()
-                    .join("x");
-                format!("tensor<{}x{}>", shape_str, dtype)
+                if shape.is_empty() {
+                    format!("tensor<{}>", dtype)
+                } else {
+                    let shape_str = shape
+                        .iter()
+                        .map(|d| d.to_string())
+                        .collect::<Vec<_>>()
+                        .join("x");
+                    format!("tensor<{}x{}>", shape_str, dtype)
+                }
             }
             Self::Tuple(elems) => {
                 let elems_str = elems
@@ -222,6 +226,10 @@ pub struct StableHLOEmitter {
     /// Virtual tuple registers: maps a register to its constituent (register, type) pairs.
     /// Tuples are never materialized as MLIR ops — they exist only as register groupings.
     virtual_tuples: HashMap<Register, Vec<(Register, StableHLOType)>>,
+    /// Compile-time known scalar values for constant propagation.
+    /// Populated from constants and scalar function params; used to resolve
+    /// shape-critical values (e.g. K in top_k) at codegen time.
+    known_scalars: HashMap<Register, f64>,
 }
 
 impl StableHLOEmitter {
@@ -231,7 +239,18 @@ impl StableHLOEmitter {
             body: Vec::new(),
             reduce_mean_cache: HashMap::new(),
             virtual_tuples: HashMap::new(),
+            known_scalars: HashMap::new(),
         }
+    }
+
+    /// Record a known scalar value for a register (constant propagation).
+    pub fn set_known_scalar(&mut self, reg: Register, value: f64) {
+        self.known_scalars.insert(reg, value);
+    }
+
+    /// Look up a register's known compile-time scalar value.
+    pub fn known_scalar_value(&self, reg: &Register) -> Option<f64> {
+        self.known_scalars.get(reg).copied()
     }
 
     /// Generate a fresh register name
@@ -296,6 +315,7 @@ impl StableHLOEmitter {
             value_str,
             ty.to_mlir()
         ));
+        self.known_scalars.insert(reg, value);
         reg
     }
 
@@ -309,6 +329,7 @@ impl StableHLOEmitter {
             value,
             ty.to_mlir()
         ));
+        self.known_scalars.insert(reg, value as f64);
         reg
     }
 
@@ -442,6 +463,26 @@ impl StableHLOEmitter {
             actual_rhs.to_mlir(),
             result_ty.to_mlir()
         ));
+
+        // Propagate known scalar values through arithmetic
+        if let (Some(lv), Some(rv)) = (
+            self.known_scalars.get(&actual_lhs).copied(),
+            self.known_scalars.get(&actual_rhs).copied(),
+        ) {
+            let result_val = match op {
+                "+" => Some(lv + rv),
+                "-" => Some(lv - rv),
+                "*" => Some(lv * rv),
+                "/" if rv != 0.0 => Some(lv / rv),
+                "min" => Some(lv.min(rv)),
+                "max" => Some(lv.max(rv)),
+                _ => None,
+            };
+            if let Some(v) = result_val {
+                self.known_scalars.insert(reg, v);
+            }
+        }
+
         (reg, result_ty)
     }
 

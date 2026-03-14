@@ -77,7 +77,12 @@ impl StableHLOEmitter {
         new_shape: &[i64],
     ) -> (Register, StableHLOType) {
         let reg = self.fresh_register();
-        let result_ty = StableHLOType::f32_tensor(new_shape.to_vec());
+        // Preserve dtype from operand
+        let dtype = match operand_ty {
+            StableHLOType::Tensor { dtype, .. } => dtype.clone(),
+            _ => "f32".to_string(),
+        };
+        let result_ty = StableHLOType::Tensor { shape: new_shape.to_vec(), dtype };
 
         self.body.push(format!(
             "    {} = stablehlo.reshape {} : ({}) -> {}",
@@ -727,7 +732,11 @@ impl StableHLOEmitter {
 
         let mut result_shape = shape.to_vec();
         result_shape[axis] = end - start;
-        let result_ty = StableHLOType::f32_tensor(result_shape);
+        let dtype = match input_ty {
+            StableHLOType::Tensor { dtype, .. } => dtype.clone(),
+            _ => "f32".to_string(),
+        };
+        let result_ty = StableHLOType::Tensor { shape: result_shape, dtype };
 
         let result_reg = self.fresh_register();
         self.body.push(format!(
@@ -858,23 +867,45 @@ impl StableHLOEmitter {
         assert!(!shape.is_empty(), "top_k requires at least 1D input");
         let last_axis = shape.len() - 1;
 
-        // Create iota indices [0, 1, ..., N-1] as f32 (matching Sheaf f32-only convention)
-        let (iota_reg, iota_ty) = self.emit_iota(shape, last_axis as i64);
+        // Create iota indices [0, 1, ..., N-1] as i32 (required by chlo.top_k pattern)
+        let iota_reg = self.fresh_register();
+        let iota_ty = StableHLOType::i32_tensor(shape.to_vec());
+        self.body.push(format!(
+            "    {} = stablehlo.iota dim = {} : {}",
+            iota_reg.to_mlir(),
+            last_axis,
+            iota_ty.to_mlir()
+        ));
 
         // Sort descending along last axis: returns (sorted_values, sorted_indices)
         let sorted_vals = self.fresh_register();
         let sorted_idxs = self.fresh_register();
 
+        // Use fresh registers for comparator block args to avoid name collisions
+        let cmp_lhs = self.fresh_register();
+        let cmp_rhs = self.fresh_register();
+        let cmp_lhs_idx = self.fresh_register();
+        let cmp_rhs_idx = self.fresh_register();
+        let cmp_pred = self.fresh_register();
+
         self.body.push(format!(
             "    {}, {} = \"stablehlo.sort\"({}, {}) ({{\n\
-             \x20   ^bb0(%arg0: tensor<f32>, %arg1: tensor<f32>, %arg2: tensor<f32>, %arg3: tensor<f32>):\n\
-             \x20     %pred = \"stablehlo.compare\"(%arg0, %arg1) {{comparison_direction = #stablehlo<comparison_direction GT>}} : (tensor<f32>, tensor<f32>) -> tensor<i1>\n\
-             \x20     \"stablehlo.return\"(%pred) : (tensor<i1>) -> ()\n\
+             \x20   ^bb0({}: tensor<f32>, {}: tensor<f32>, {}: tensor<i32>, {}: tensor<i32>):\n\
+             \x20     {} = \"stablehlo.compare\"({}, {}) {{comparison_direction = #stablehlo<comparison_direction GT>}} : (tensor<f32>, tensor<f32>) -> tensor<i1>\n\
+             \x20     \"stablehlo.return\"({}) : (tensor<i1>) -> ()\n\
              \x20   }}) {{dimension = {} : i64, is_stable = true}} : ({}, {}) -> ({}, {})",
             sorted_vals.to_mlir(),
             sorted_idxs.to_mlir(),
             input.to_mlir(),
             iota_reg.to_mlir(),
+            cmp_lhs.to_mlir(),
+            cmp_rhs.to_mlir(),
+            cmp_lhs_idx.to_mlir(),
+            cmp_rhs_idx.to_mlir(),
+            cmp_pred.to_mlir(),
+            cmp_lhs.to_mlir(),
+            cmp_rhs.to_mlir(),
+            cmp_pred.to_mlir(),
             last_axis,
             input_ty.to_mlir(),
             iota_ty.to_mlir(),
@@ -886,14 +917,18 @@ impl StableHLOEmitter {
         let (top_vals, top_vals_ty) = self.emit_slice_axis(
             &sorted_vals, input_ty, 0, k, last_axis,
         );
-        let (top_idxs, top_idxs_ty) = self.emit_slice_axis(
+        let (top_idxs_i32, top_idxs_i32_ty) = self.emit_slice_axis(
             &sorted_idxs, &iota_ty, 0, k, last_axis,
         );
+
+        // Convert indices i32 -> f32 for f32-only codegen consistency
+        let top_idxs_f32_ty = StableHLOType::f32_tensor(top_idxs_i32_ty.shape().to_vec());
+        let top_idxs = self.emit_convert(&top_idxs_i32, &top_idxs_i32_ty, &top_idxs_f32_ty);
 
         // Pack into virtual tuple
         self.emit_tuple(
             &[top_vals, top_idxs],
-            &[top_vals_ty, top_idxs_ty],
+            &[top_vals_ty, top_idxs_f32_ty],
         )
     }
 
