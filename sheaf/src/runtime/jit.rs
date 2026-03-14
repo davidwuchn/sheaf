@@ -1050,6 +1050,7 @@ impl JitCompiler {
             let mut cmd = std::process::Command::new(iree_compile);
             cmd.arg(&mlir_path)
                 .arg(format!("--iree-hal-target-backends={}", try_backend))
+                .arg("--iree-opt-const-eval=false")
                 .arg("-o")
                 .arg(&vmfb_path)
                 .stderr(stderr_cfg);
