@@ -773,6 +773,11 @@ fn eval_scan(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
             Value::Tensor { data, .. } if data.ndim() == 1 && data.shape()[0] == 2 => {
                 Ok((Value::Float(data[[0]]), Value::Float(data[[1]])))
             }
+            Value::Tensor { data, .. } if data.shape()[0] == 2 => {
+                let carry = data.index_axis(ndarray::Axis(0), 0).to_owned();
+                let output = data.index_axis(ndarray::Axis(0), 1).to_owned();
+                Ok((Value::tensor_f32(carry), Value::tensor_f32(output)))
+            }
             _ => Err(runtime_error("scan: fn must return [new-carry output]")),
         }
     };

@@ -128,18 +128,19 @@ fn trace_rec(
                 });
             }
 
-            // (first (scan f init coll)) → unroll scan, return carry only
+            // (first (scan f init coll)) -> unroll scan, return carry only
             if name == "first" && args.len() == 1 {
                 if let CompiledExpr::FunctionCall { name: inner, args: inner_args } = &args[0] {
                     if inner == "scan" {
-                        return trace_reduce(inner_args, env, leaf_map, sym_env);
+                        return trace_reduce(inner_args, env, leaf_map, sym_env, true);
                     }
                 }
             }
 
             match name.as_str() {
                 "get" => trace_get(args, env, leaf_map, sym_env),
-                "reduce" | "scan" => trace_reduce(args, env, leaf_map, sym_env),
+                "reduce" => trace_reduce(args, env, leaf_map, sym_env, false),
+                "scan" => trace_reduce(args, env, leaf_map, sym_env, true),
                 _ => {
                     let val = eval(expr, env)?;
                     if is_tensor_leaf(&val) {
@@ -252,6 +253,7 @@ fn trace_reduce(
     env: &mut Env,
     leaf_map: &mut LeafMap,
     sym_env: &mut SymEnv,
+    is_scan: bool,
 ) -> Result<CompiledExpr, SheafError> {
     if args.len() != 3 {
         return Err(runtime_error("trace: reduce requires 3 args (f init coll)"));
@@ -306,11 +308,49 @@ fn trace_reduce(
         };
 
         // Trace the lambda body — result is a flat expression
-        acc_expr = trace_rec(&lambda_body, env, leaf_map, sym_env)?;
+        let step_expr = trace_rec(&lambda_body, env, leaf_map, sym_env)?;
 
         // Evaluate concretely to get the new accumulator value
-        acc_val = eval(&lambda_body, env)?;
+        let step_val = eval(&lambda_body, env)?;
         env.pop_scope();
+
+        if is_scan {
+            // scan: lambda returns [carry output], extract carry for next iteration.
+            // [tensor tensor] with same-shape tensors gets auto-stacked into a single
+            // tensor by eval_vector, so we handle both List/Tuple and stacked Tensor.
+            let extract_carry = |val: &Value| -> Option<Value> {
+                match val {
+                    Value::List(items) | Value::Tuple(items) if items.len() == 2 => {
+                        Some(items[0].clone())
+                    }
+                    Value::Tensor { data, .. } if data.shape()[0] == 2 => {
+                        Some(Value::tensor_f32(data.index_axis(ndarray::Axis(0), 0).to_owned()))
+                    }
+                    _ => None,
+                }
+            };
+
+            if let Some(carry_val) = extract_carry(&step_val) {
+                acc_val = carry_val;
+                // Extract carry from traced expression
+                acc_expr = match step_expr {
+                    CompiledExpr::Vector(ref elems) if elems.len() == 2 => {
+                        elems[0].clone()
+                    }
+                    _ => {
+                        // Fallback: register the carry value as a leaf
+                        let sym = leaf_map.register(acc_val.clone());
+                        env.set(&sym, acc_val.clone());
+                        CompiledExpr::Symbol(sym)
+                    }
+                };
+            } else {
+                return Err(runtime_error("trace: scan fn must return [carry output]"));
+            }
+        } else {
+            acc_val = step_val;
+            acc_expr = step_expr;
+        }
 
         // Restore sym_env
         match saved_acc {
