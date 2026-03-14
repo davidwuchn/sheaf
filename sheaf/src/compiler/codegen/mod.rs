@@ -377,6 +377,25 @@ impl CodeGenerator {
                                     }
                                 }
                             }
+                            // GetTupleElement: walk idx_to_key chain to resolve layout
+                            // (needed when inlined functions have lowered get calls)
+                            else if let CompiledExpr::GetTupleElement { param, indices } = value_expr {
+                                let mut cur = param.clone();
+                                let mut resolved = true;
+                                for &idx in indices {
+                                    if let Some(key) = self.idx_to_key.get(&(cur.clone(), idx)) {
+                                        cur = key.clone();
+                                    } else {
+                                        resolved = false;
+                                        break;
+                                    }
+                                }
+                                if resolved {
+                                    if let Some(sub_layout) = self.tuple_key_layouts.get(&cur).cloned() {
+                                        self.tuple_key_layouts.insert(name.clone(), sub_layout);
+                                    }
+                                }
+                            }
                             // Symbol alias: (let [x y]) where y has a layout
                             else if let CompiledExpr::Symbol(src) = value_expr {
                                 if let Some(layout) = self.tuple_key_layouts.get(src).cloned() {

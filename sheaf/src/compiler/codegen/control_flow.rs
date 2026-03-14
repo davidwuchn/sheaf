@@ -224,6 +224,7 @@ impl CodeGenerator {
         lambda: &CompiledExpr,
         init: &CompiledExpr,
         coll: &CompiledExpr,
+        is_scan: bool,
     ) -> SheafResult<(Register, StableHLOType)> {
         // Capture collection symbol before generating (for key layout lookup)
         let coll_sym = if let CompiledExpr::Symbol(s) = coll { Some(s.clone()) } else { None };
@@ -287,22 +288,28 @@ impl CodeGenerator {
             }),
         };
 
-        // Key layout for the elem parameter inherited from collection's layout
+        // Key layout for the elem parameter inherited from collection's layout.
+        // Three resolution strategies:
+        // 1. Symbol name lookup (e.g. "hidden" in standalone forward)
+        // 2. Register-based lookup via layout_key_map (handles ANF-renamed vars)
+        // 3. GetTupleElement chain resolution via idx_to_key
         let elem_layout = coll_sym
             .as_deref()
             .and_then(|s| self.tuple_key_layouts.get(s))
             .cloned()
             .or_else(|| {
-                // For GetTupleElement collections (e.g. (get params :h)),
-                // walk idx_to_key chain to resolve the collection's key name.
+                // Strategy 2: the register produced by generate(coll) may have
+                // a layout key via layout_key_map (set by track_layout_key in GTE handler)
+                let layout_key = self.layout_key_map.get(&coll_reg)?;
+                self.tuple_key_layouts.get(layout_key).cloned()
+            })
+            .or_else(|| {
+                // Strategy 3: GetTupleElement collections (e.g. (get params :h))
                 if let CompiledExpr::GetTupleElement { param, indices } = coll {
                     let mut cur = param.clone();
                     for &idx in indices {
                         cur = self.idx_to_key.get(&(cur, idx))?.clone();
                     }
-                    // cur = collection key (e.g. "h"). Elements are its children.
-                    // For VecTuple, all elements share the same structure —
-                    // get the first child's layout.
                     let list_layout = self.tuple_key_layouts.get(&cur)?;
                     let first_child_key = list_layout.values().next()
                         .and_then(|_| list_layout.keys().next())?;
@@ -357,9 +364,28 @@ impl CodeGenerator {
                 self.tuple_key_layouts.remove(&elem_param);
             }
 
-            let (new_carry, new_ty) = result?;
-            carry_reg = new_carry;
-            carry_ty = new_ty;
+            let (step_reg, step_ty) = result?;
+            if is_scan {
+                // Scan body returns [carry, output]; extract carry (element 0)
+                match &step_ty {
+                    StableHLOType::Tuple(elems) if elems.len() == 2 => {
+                        let carry_elem_ty = elems[0].clone();
+                        carry_reg = self.emitter.emit_get_tuple_element(
+                            &step_reg, &step_ty, 0, &carry_elem_ty,
+                        );
+                        carry_ty = carry_elem_ty;
+                    }
+                    _ => {
+                        return Err(SheafError::Compile {
+                            message: "scan: lambda must return [carry output] (a 2-element tuple)".to_string(),
+                            location: crate::core::error::SourceLocation::unknown(),
+                        });
+                    }
+                }
+            } else {
+                carry_reg = step_reg;
+                carry_ty = step_ty;
+            }
         }
 
         Ok((carry_reg, carry_ty))

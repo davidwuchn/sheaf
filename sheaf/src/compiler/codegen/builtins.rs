@@ -43,17 +43,39 @@ impl CodeGenerator {
                 if let Some(body) = &func_def.body_compiled {
                     // Bind arg registers to param names in our bindings map
                     let saved_bindings = self.bindings.clone();
-                    for (param, (reg, ty)) in func_def
+                    let saved_layouts = self.tuple_key_layouts.clone();
+                    let saved_idx_to_key = self.idx_to_key.clone();
+                    for (param, (arg_expr, (reg, ty))) in func_def
                         .params
                         .iter()
-                        .zip(arg_registers.iter().zip(arg_types.iter()))
+                        .zip(args.iter().zip(arg_registers.iter().zip(arg_types.iter())))
                     {
                         self.bindings
                             .insert(param.clone(), (*reg, ty.clone()));
+
+                        // Propagate layout from caller arg to callee param name.
+                        // When inlining forward(x, p), "params" in forward's body
+                        // needs the same layout as "p" in the caller's namespace.
+                        if let CompiledExpr::Symbol(arg_sym) = arg_expr {
+                            if let Some(layout) = self.tuple_key_layouts.get(arg_sym).cloned() {
+                                self.tuple_key_layouts.insert(param.clone(), layout);
+                            }
+                            // Copy idx_to_key entries: (caller_sym, idx) -> key
+                            // becomes also (callee_param, idx) -> key
+                            let entries: Vec<_> = self.idx_to_key.iter()
+                                .filter(|((name, _), _)| name == arg_sym)
+                                .map(|((_, idx), key)| (*idx, key.clone()))
+                                .collect();
+                            for (idx, key) in entries {
+                                self.idx_to_key.insert((param.clone(), idx), key);
+                            }
+                        }
                     }
                     let body = body.clone();
                     let result = self.generate(&body);
                     self.bindings = saved_bindings;
+                    self.tuple_key_layouts = saved_layouts;
+                    self.idx_to_key = saved_idx_to_key;
                     return result;
                 }
             }
@@ -230,7 +252,7 @@ impl CodeGenerator {
         else if name == "first" && args.len() == 1 {
             if let CompiledExpr::FunctionCall { name: inner, args: inner_args } = &args[0] {
                 if inner == "scan" && inner_args.len() == 3 {
-                    return self.generate_reduce_scan(&inner_args[0], &inner_args[1], &inner_args[2]);
+                    return self.generate_reduce_scan(&inner_args[0], &inner_args[1], &inner_args[2], true);
                 }
             }
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
@@ -852,12 +874,12 @@ impl CodeGenerator {
         }
         // reduce: (reduce fn init coll), static unrolling when coll type is known
         else if name == "reduce" && args.len() == 3 {
-            self.generate_reduce_scan(&args[0], &args[1], &args[2])
+            self.generate_reduce_scan(&args[0], &args[1], &args[2], false)
         }
-        // scan: (scan fn init coll), same as reduce for the final carry
+        // scan: (scan fn init coll), same as reduce but extracts carry from [carry, output]
         // Note: (first (scan ...)) is intercepted above in the "first" handler.
         else if name == "scan" && args.len() == 3 {
-            self.generate_reduce_scan(&args[0], &args[1], &args[2])
+            self.generate_reduce_scan(&args[0], &args[1], &args[2], true)
         }
         // tree-map: (tree-map f tree1 tree2 ...)
         // Static unrolling when tree args have known tuple types.
