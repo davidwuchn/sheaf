@@ -284,6 +284,13 @@ fn builtin_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 fn builtin_index_update(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (mut arr, _dt) = to_array(&args[0])?;
     let idx = args[1].to_f64().unwrap() as usize;
+    let dim = arr.shape()[0];
+    if idx >= dim {
+        return Err(runtime_error(format!(
+            "index-update: index {} is out of bounds for axis 0 with size {}",
+            idx, dim
+        )));
+    }
     match &args[2] {
         Value::Tensor { data: new_val, .. } => {
             let mut slice = arr.index_axis_mut(ndarray::Axis(0), idx);

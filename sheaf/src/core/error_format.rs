@@ -263,6 +263,16 @@ fn get_runtime_hint(message: &str) -> Option<String> {
     }
 
     // Index out of bounds
+    if message.contains("is out of bounds for axis") {
+        // Extract index and size for a more helpful hint
+        if let (Some(idx), Some(size)) = (
+            message.split("index ").nth(1).and_then(|s| s.split_whitespace().next()).and_then(|s| s.parse::<usize>().ok()),
+            message.split("with size ").nth(1).and_then(|s| s.parse::<usize>().ok()),
+        ) {
+            return Some(format!("Indices are 0-based. Valid range is [0, {}].", size - 1));
+        }
+        return Some("Index exceeds dimension size. Use (shape x) to check dimensions.".to_string());
+    }
     if message.contains("index out of bounds") || message.contains("out of range") {
         return Some(
             "Index exceeds collection length. Use (len xs) to check bounds.".to_string(),
