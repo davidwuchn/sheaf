@@ -91,7 +91,7 @@ pub fn reconstruct_jit_result(
     }
     // Recurse into sub-elements of a Tuple
     match (ty, val) {
-        (StableHLOType::Tuple(elem_tys), Value::Tuple(elems)) if elem_tys.len() == elems.len() => {
+        (StableHLOType::Tuple(elem_tys, _), Value::Tuple(elems)) if elem_tys.len() == elems.len() => {
             let reconstructed: Vec<Value> = elem_tys
                 .iter()
                 .zip(elems)
@@ -241,7 +241,7 @@ fn resolve_tuple_index(ty: &StableHLOType, indices: &[usize]) -> Option<StableHL
     let mut current = ty.clone();
     for &idx in indices {
         match current {
-            StableHLOType::Tuple(elems) => {
+            StableHLOType::Tuple(elems, _) => {
                 current = elems.into_iter().nth(idx)?;
             }
             _ => return None,
@@ -444,7 +444,7 @@ fn infer_type_with_context(
             for (_, val) in &sorted {
                 elem_tys.push(infer_type_with_context(val, symbol_types)?);
             }
-            Ok(StableHLOType::Tuple(elem_tys))
+            Ok(StableHLOType::Tuple(elem_tys, None))
         }
 
         _ => infer_type(expr),

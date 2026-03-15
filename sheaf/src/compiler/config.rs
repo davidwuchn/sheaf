@@ -35,7 +35,7 @@ pub fn json_to_stablehlo_type(val: &JsonValue) -> SheafResult<StableHLOType> {
                 map.iter().map(|(k, v)| (k.as_str(), v)).collect();
             let elems: SheafResult<Vec<StableHLOType>> =
                 sorted.values().map(|v| json_to_stablehlo_type(v)).collect();
-            Ok(StableHLOType::Tuple(elems?))
+            Ok(StableHLOType::Tuple(elems?, None))
         }
         JsonValue::Array(dims) => {
             if dims.is_empty() {

@@ -190,7 +190,7 @@ impl JitCompiler {
                     for (path, indices) in imap.iter() {
                         if path.len() == 1 {
                             // Leaf field: resolve type from tuple
-                            let ty_str = if let StableHLOType::Tuple(elems) = pty {
+                            let ty_str = if let StableHLOType::Tuple(elems, _) = pty {
                                 if let Some(t) = elems.get(indices[0]) {
                                     t.to_mlir()
                                 } else {
@@ -203,8 +203,8 @@ impl JitCompiler {
                                 .or_insert((path[0].clone(), ty_str));
                         } else if !top_fields.contains_key(&indices[0]) {
                             // Nested field: show as tuple<...>
-                            let ty_str = if let StableHLOType::Tuple(elems) = pty {
-                                if let Some(StableHLOType::Tuple(sub)) = elems.get(indices[0]) {
+                            let ty_str = if let StableHLOType::Tuple(elems, _) = pty {
+                                if let Some(StableHLOType::Tuple(sub, _)) = elems.get(indices[0]) {
                                     format!("tuple<...> ({} fields)", sub.len())
                                 } else {
                                     "tuple<...>".to_string()
@@ -352,10 +352,10 @@ impl JitCompiler {
 
         // Register layout for return type (may differ from param type due to
         // scalar promotion, e.g. ScalarI64→scalar_f32 after adam-step)
-        if let StableHLOType::Tuple(ret_elems) = &sig.return_type {
+        if let StableHLOType::Tuple(ret_elems, _) = &sig.return_type {
             if !sig.arg_type_layouts.iter().any(|(t, _)| t == &sig.return_type) {
                 for (t, layout) in sig.arg_type_layouts.clone() {
-                    if let StableHLOType::Tuple(param_elems) = &t {
+                    if let StableHLOType::Tuple(param_elems, _) = &t {
                         if param_elems.len() == ret_elems.len() {
                             sig.arg_type_layouts.push((sig.return_type.clone(), layout));
                             break;
@@ -607,7 +607,7 @@ impl JitCompiler {
                     let mut top_fields: BTreeMap<usize, (String, String)> = BTreeMap::new();
                     for (path, indices) in imap.iter() {
                         if path.len() == 1 {
-                            let ty_str = if let StableHLOType::Tuple(elems) = pty {
+                            let ty_str = if let StableHLOType::Tuple(elems, _) = pty {
                                 if let Some(t) = elems.get(indices[0]) {
                                     t.to_mlir()
                                 } else {
@@ -619,8 +619,8 @@ impl JitCompiler {
                             top_fields.entry(indices[0])
                                 .or_insert((path[0].clone(), ty_str));
                         } else if !top_fields.contains_key(&indices[0]) {
-                            let ty_str = if let StableHLOType::Tuple(elems) = pty {
-                                if let Some(StableHLOType::Tuple(sub)) = elems.get(indices[0]) {
+                            let ty_str = if let StableHLOType::Tuple(elems, _) = pty {
+                                if let Some(StableHLOType::Tuple(sub, _)) = elems.get(indices[0]) {
                                     format!("tuple<...> ({} fields)", sub.len())
                                 } else {
                                     "tuple<...>".to_string()
@@ -754,7 +754,7 @@ impl JitCompiler {
                     let param_name = &param_names[idx];
                     let param_ty = &param_types[idx];
                     match param_ty {
-                        StableHLOType::Tuple(_) => {
+                        StableHLOType::Tuple(..) => {
                             let leaves = collect_tuple_leaves(&expanded_body, param_name);
                             if crate::core::config::verbosity() >= 2 {
                                 sheaf_msg!("jit: [vag] param '{}': {} tuple leaves", param_name, leaves.len());
@@ -850,7 +850,7 @@ impl JitCompiler {
                     let param_name = &param_names[idx];
                     let param_ty = &param_types[idx];
                     match param_ty {
-                        StableHLOType::Tuple(_) => {
+                        StableHLOType::Tuple(..) => {
                             let leaves = all_leaves.iter()
                                 .find(|(i, _)| *i == idx)
                                 .map(|(_, l)| l)
@@ -912,7 +912,7 @@ impl JitCompiler {
                     &all_regs,
                     &all_tys,
                 );
-                let return_type = StableHLOType::Tuple(all_tys);
+                let return_type = StableHLOType::Tuple(all_tys, None);
                 Ok::<_, crate::core::error::SheafError>((decl, return_type))
             }))
         };
@@ -1125,7 +1125,7 @@ impl JitCompiler {
 fn resolve_leaf_type(ty: &StableHLOType, indices: &[usize]) -> StableHLOType {
     let mut current = ty.clone();
     for &idx in indices {
-        if let StableHLOType::Tuple(elems) = &current {
+        if let StableHLOType::Tuple(elems, _) = &current {
             if idx < elems.len() {
                 current = elems[idx].clone();
             } else {
@@ -1365,7 +1365,7 @@ fn inject_tuple_shapes(
     shapes: &mut HashMap<String, Vec<i64>>,
 ) {
     match ty {
-        StableHLOType::Tuple(elems) => {
+        StableHLOType::Tuple(elems, _) => {
             for (i, elem_ty) in elems.iter().enumerate() {
                 let mut child_indices = indices.to_vec();
                 child_indices.push(i);

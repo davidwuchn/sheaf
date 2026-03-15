@@ -31,7 +31,7 @@ impl CodeGenerator {
         prefix: &[usize],
     ) -> SheafResult<(Register, StableHLOType)> {
         match ty {
-            StableHLOType::Tuple(elems) => {
+            StableHLOType::Tuple(elems, _) => {
                 let mut sub_regs = Vec::new();
                 let mut sub_tys = Vec::new();
                 for (i, elem_ty) in elems.iter().enumerate() {

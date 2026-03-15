@@ -28,7 +28,7 @@ pub fn flatten_param_types(param_types: &[StableHLOType]) -> Vec<StableHLOType> 
 
 fn flatten_type(ty: &StableHLOType, out: &mut Vec<StableHLOType>) {
     match ty {
-        StableHLOType::Tuple(elems) => {
+        StableHLOType::Tuple(elems, _) => {
             for elem in elems {
                 flatten_type(elem, out);
             }
@@ -179,7 +179,7 @@ impl CodeGenerator {
             let names: Vec<&str> = name[1..name.len() - 1].split_whitespace().collect();
             let (tuple_reg, tuple_ty) = self.generate(value_expr)?;
             let element_types = match &tuple_ty {
-                StableHLOType::Tuple(tys) => tys.clone(),
+                StableHLOType::Tuple(tys, _) => tys.clone(),
                 other => {
                     return Err(SheafError::Compile {
                         message: format!("Let destructuring requires a tuple, got: {}", other.to_mlir()),
@@ -195,7 +195,7 @@ impl CodeGenerator {
             }
         } else {
             let (reg, ty) = self.generate(value_expr)?;
-            if matches!(&ty, StableHLOType::Tuple(_)) {
+            if matches!(&ty, StableHLOType::Tuple(..)) {
                 if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args, .. } = value_expr {
                     if fn_name == "get" && fn_args.len() >= 2 {
                         if let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last() {
@@ -290,7 +290,7 @@ impl CodeGenerator {
 
                 for &idx in indices {
                     let element_ty = match &current_ty {
-                        StableHLOType::Tuple(elems) => elems.get(idx).cloned().ok_or_else(|| {
+                        StableHLOType::Tuple(elems, _) => elems.get(idx).cloned().ok_or_else(|| {
                             SheafError::Compile {
                                 message: format!(
                                     "GetTupleElement: index {} out of range for tuple with {} elements",
@@ -341,7 +341,7 @@ impl CodeGenerator {
                             name[1..name.len() - 1].split_whitespace().collect();
                         let (tuple_reg, tuple_ty) = self.generate(value_expr)?;
                         let element_types = match &tuple_ty {
-                            StableHLOType::Tuple(tys) => tys.clone(),
+                            StableHLOType::Tuple(tys, _) => tys.clone(),
                             other => {
                                 return Err(SheafError::Compile {
                                     message: format!(
@@ -365,7 +365,7 @@ impl CodeGenerator {
                     } else {
                         let (reg, ty) = self.generate(value_expr)?;
                         // Propagate sub-layout for Let-bound tuples
-                        if matches!(&ty, StableHLOType::Tuple(_)) {
+                        if matches!(&ty, StableHLOType::Tuple(..)) {
                             if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args, .. } = value_expr {
                                 if fn_name == "get" && fn_args.len() >= 2 {
                                     // Use the last keyword arg as the layout key
@@ -488,12 +488,18 @@ impl CodeGenerator {
                 });
                 let mut regs = Vec::new();
                 let mut tys = Vec::new();
-                for (_, val) in &sorted {
+                let mut keys = Vec::new();
+                for (k, val) in &sorted {
                     let (r, t) = self.generate(val)?;
                     regs.push(r);
                     tys.push(t);
+                    keys.push(match k {
+                        CompiledExpr::Keyword(k) => k.clone(),
+                        _ => String::new(),
+                    });
                 }
-                Ok(self.emitter.emit_tuple(&regs, &tys))
+                let (reg, _) = self.emitter.emit_tuple(&regs, &tys);
+                Ok((reg, StableHLOType::Tuple(tys, Some(keys))))
             }
 
             _ => Err(SheafError::Compile {

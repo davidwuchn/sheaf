@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -873,7 +873,7 @@ pub fn count_signature_tensors(types: &[crate::compiler::stablehlo::StableHLOTyp
 
 fn count_type_leaves(ty: &crate::compiler::stablehlo::StableHLOType) -> usize {
     match ty {
-        crate::compiler::stablehlo::StableHLOType::Tuple(elems) => {
+        crate::compiler::stablehlo::StableHLOType::Tuple(elems, _) => {
             elems.iter().map(count_type_leaves).sum()
         }
         _ => 1,
@@ -955,7 +955,7 @@ fn collect_leaf_shapes(types: &[crate::compiler::stablehlo::StableHLOType], out:
     use crate::compiler::stablehlo::StableHLOType;
     for ty in types {
         match ty {
-            StableHLOType::Tuple(elems) => collect_leaf_shapes(elems, out),
+            StableHLOType::Tuple(elems, _) => collect_leaf_shapes(elems, out),
             _ => out.push(ty.shape().to_vec()),
         }
     }
@@ -1034,12 +1034,21 @@ fn unflatten_value(
 ) -> Result<Value, SheafError> {
     use crate::compiler::stablehlo::StableHLOType;
     match ty {
-        StableHLOType::Tuple(elem_tys) => {
+        StableHLOType::Tuple(elem_tys, keys) => {
             let mut elems = Vec::new();
             for elem_ty in elem_tys {
                 elems.push(unflatten_value(elem_ty, flat, cursor)?);
             }
-            Ok(Value::Tuple(elems))
+            if let Some(key_names) = keys {
+                let map: BTreeMap<String, Value> = key_names
+                    .iter()
+                    .zip(elems)
+                    .map(|(k, v)| (k.clone(), v))
+                    .collect();
+                Ok(Value::Dict(map))
+            } else {
+                Ok(Value::Tuple(elems))
+            }
         }
         _ => {
             if *cursor < flat.len() {

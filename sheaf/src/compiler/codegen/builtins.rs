@@ -257,7 +257,7 @@ impl CodeGenerator {
             }
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             match &operand_ty {
-                StableHLOType::Tuple(elems) => {
+                StableHLOType::Tuple(elems, _) => {
                     let elem_ty = elems[0].clone();
                     let reg = self.emitter.emit_get_tuple_element(&operand_reg, &operand_ty, 0, &elem_ty);
                     Ok((reg, elem_ty))
@@ -278,7 +278,7 @@ impl CodeGenerator {
         else if name == "second" && args.len() == 1 {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             match &operand_ty {
-                StableHLOType::Tuple(elems) => {
+                StableHLOType::Tuple(elems, _) => {
                     let elem_ty = elems[1].clone();
                     let reg = self.emitter.emit_get_tuple_element(&operand_reg, &operand_ty, 1, &elem_ty);
                     Ok((reg, elem_ty))
@@ -922,7 +922,7 @@ impl CodeGenerator {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             match &operand_ty {
                 // Tuple + keyword/string, try to resolve via tuple_key_layouts
-                StableHLOType::Tuple(_) => {
+                StableHLOType::Tuple(..) => {
                     // Resolve layout key from symbol name or layout_key_map
                     let layout_key = sym_name.clone()
                         .or_else(|| self.layout_key_map.get(&operand_reg).cloned());
@@ -938,7 +938,7 @@ impl CodeGenerator {
                             let mut cur_key = start_key.clone();
                             let mut ok = true;
                             for key in &keywords {
-                                if let StableHLOType::Tuple(sub_types) = &cur_ty {
+                                if let StableHLOType::Tuple(sub_types, _) = &cur_ty {
                                     if let Some(layout) = self.tuple_key_layouts.get(&cur_key).cloned() {
                                         if let Some(&idx) = layout.get(key) {
                                             let sub_ty = sub_types[idx].clone();
@@ -1318,7 +1318,7 @@ impl CodeGenerator {
             let sym_name = if let CompiledExpr::Symbol(s) = &args[0] { Some(s.clone()) } else { None };
             let (base_reg, base_ty) = self.generate(&args[0])?;
             let elems = match &base_ty {
-                StableHLOType::Tuple(e) => e.clone(),
+                StableHLOType::Tuple(e, _) => e.clone(),
                 _ => {
                     return Err(SheafError::Compile {
                         message: "assoc: base must be a tuple".to_string(),

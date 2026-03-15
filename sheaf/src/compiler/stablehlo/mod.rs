@@ -26,7 +26,8 @@ pub enum StableHLOType {
     /// Tensor with shape: tensor<2x3xf32>
     Tensor { shape: Vec<i64>, dtype: String },
     /// Tuple of types: tuple<tensor<2x3xf32>, tensor<8xf32>>
-    Tuple(Vec<StableHLOType>),
+    /// When keys is Some, this represents a dict (reconstructed as Value::Dict on output).
+    Tuple(Vec<StableHLOType>, Option<Vec<String>>),
 }
 
 impl StableHLOType {
@@ -73,7 +74,7 @@ impl StableHLOType {
             | Self::ScalarF64
             | Self::ScalarI64
             | Self::ScalarI1
-            | Self::Tuple(_) => &[],
+            | Self::Tuple(..) => &[],
             Self::Tensor { shape, .. } => shape,
         }
     }
@@ -86,7 +87,7 @@ impl StableHLOType {
             Self::ScalarI64 => "i64",
             Self::ScalarI1 => "i1",
             Self::Tensor { dtype, .. } => dtype,
-            Self::Tuple(_) => "tuple",
+            Self::Tuple(..) => "tuple",
         }
     }
 
@@ -94,13 +95,13 @@ impl StableHLOType {
     /// Leaf types (tensors, scalars) are considered structurally equivalent.
     pub fn tuple_structure_matches(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Tuple(a), Self::Tuple(b)) => {
+            (Self::Tuple(a, _), Self::Tuple(b, _)) => {
                 a.len() == b.len()
                     && a.iter()
                         .zip(b.iter())
                         .all(|(x, y)| x.tuple_structure_matches(y))
             }
-            (Self::Tuple(_), _) | (_, Self::Tuple(_)) => false,
+            (Self::Tuple(..), _) | (_, Self::Tuple(..)) => false,
             _ => true, // both are leaf types
         }
     }
@@ -123,7 +124,7 @@ impl StableHLOType {
                     format!("tensor<{}x{}>", shape_str, dtype)
                 }
             }
-            Self::Tuple(elems) => {
+            Self::Tuple(elems, _) => {
                 let elems_str = elems
                     .iter()
                     .map(|t| t.to_mlir())
@@ -142,7 +143,7 @@ impl StableHLOType {
             let inner = &s[6..s.len() - 1];
             let elems = split_tuple_args(inner);
             let parsed: Option<Vec<Self>> = elems.iter().map(|e| Self::parse(e)).collect();
-            return parsed.map(Self::Tuple);
+            return parsed.map(|elems| Self::Tuple(elems, None));
         }
         if s.starts_with("tensor<") && s.ends_with('>') {
             let inner = &s[7..s.len() - 1]; // e.g. "2x3xf32" or "f32"
@@ -269,7 +270,7 @@ impl StableHLOEmitter {
     /// Leaf types map to Register::arg(flat_idx); sub-tuples map to fresh virtual registers.
     pub fn register_virtual_param(&mut self, ty: &StableHLOType, flat_idx: &mut usize) -> Register {
         match ty {
-            StableHLOType::Tuple(elems) => {
+            StableHLOType::Tuple(elems, _) => {
                 let vreg = self.fresh_register();
                 let constituents: Vec<_> = elems.iter()
                     .map(|elem_ty| {
@@ -715,7 +716,7 @@ impl StableHLOEmitter {
             .map(|(r, t)| (*r, t.clone()))
             .collect();
         self.virtual_tuples.insert(vreg, constituents);
-        (vreg, StableHLOType::Tuple(types.to_vec()))
+        (vreg, StableHLOType::Tuple(types.to_vec(), None))
     }
 
     /// Emit a return statement

@@ -721,7 +721,7 @@ fn resolve_type_at_indices(
     let mut current = base;
     for &idx in indices {
         match current {
-            StableHLOType::Tuple(elems) if idx < elems.len() => {
+            StableHLOType::Tuple(elems, _) if idx < elems.len() => {
                 current = &elems[idx];
             }
             _ => return None,
@@ -778,7 +778,7 @@ pub fn unroll_reduces(
                 CompiledExpr::GetTupleElement { param, indices } => {
                     resolve_type_at_indices(param, indices, param_types)
                         .and_then(|ty| match ty {
-                            StableHLOType::Tuple(elems) => Some((
+                            StableHLOType::Tuple(elems, _) => Some((
                                 elems.len(),
                                 UnrollColl::TupleElement {
                                     param: param.clone(),

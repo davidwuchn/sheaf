@@ -580,7 +580,7 @@ fn fields_to_tuple_type(fields: &[&ParamField], depth: usize) -> StableHLOType {
         })
         .collect();
 
-    StableHLOType::Tuple(elements)
+    StableHLOType::Tuple(elements, None)
 }
 
 fn field_to_tensor_type(field: &ParamField) -> StableHLOType {

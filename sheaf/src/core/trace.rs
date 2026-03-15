@@ -122,7 +122,7 @@ fn stablehlo_to_dummy_value(ty: &StableHLOType) -> Value {
                 dtype: Dtype::F32,
             }
         }
-        StableHLOType::Tuple(elems) => {
+        StableHLOType::Tuple(elems, _) => {
             Value::Tuple(elems.iter().map(stablehlo_to_dummy_value).collect())
         }
     }
@@ -200,7 +200,7 @@ pub fn value_to_stablehlo_type(val: &Value) -> SheafResult<StableHLOType> {
         Value::Tuple(elems) => {
             let tys: SheafResult<Vec<StableHLOType>> =
                 elems.iter().map(value_to_stablehlo_type).collect();
-            Ok(StableHLOType::Tuple(tys?))
+            Ok(StableHLOType::Tuple(tys?, None))
         }
         Value::Dict(map) => {
             // Dict -> Tuple sorted by key (matching codegen convention)
@@ -210,7 +210,7 @@ pub fn value_to_stablehlo_type(val: &Value) -> SheafResult<StableHLOType> {
                 .iter()
                 .map(|k| value_to_stablehlo_type(&map[*k]))
                 .collect();
-            Ok(StableHLOType::Tuple(tys?))
+            Ok(StableHLOType::Tuple(tys?, None))
         }
         Value::List(items) => {
             // List of scalars -> 1D tensor
@@ -223,7 +223,7 @@ pub fn value_to_stablehlo_type(val: &Value) -> SheafResult<StableHLOType> {
                 // List of structured values -> Tuple
                 let tys: SheafResult<Vec<StableHLOType>> =
                     items.iter().map(value_to_stablehlo_type).collect();
-                Ok(StableHLOType::Tuple(tys?))
+                Ok(StableHLOType::Tuple(tys?, None))
             }
         }
         Value::DeviceBuffer(db) => {
@@ -259,7 +259,7 @@ fn find_param_layout<'a>(
         .known_param_types
         .iter()
         .find(|(n, _)| n == param_name)
-        .map(|(_, ty)| matches!(ty, StableHLOType::Tuple(_)))
+        .map(|(_, ty)| matches!(ty, StableHLOType::Tuple(..)))
         .unwrap_or(false);
 
     if !has_tuple_type {

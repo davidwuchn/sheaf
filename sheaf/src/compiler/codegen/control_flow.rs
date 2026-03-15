@@ -77,7 +77,7 @@ impl CodeGenerator {
     ) -> SheafResult<(Register, StableHLOType)> {
         // Use the first tree's type to drive the tuple structure
         match &tree_tys[0] {
-            StableHLOType::Tuple(first_elem_tys) => {
+            StableHLOType::Tuple(first_elem_tys, _) => {
                 let mut result_regs = Vec::new();
                 let mut result_tys = Vec::new();
                 for (idx, _) in first_elem_tys.iter().enumerate() {
@@ -86,7 +86,7 @@ impl CodeGenerator {
                     let mut sub_tys = Vec::new();
                     for (tree_reg, tree_ty) in tree_regs.iter().zip(tree_tys.iter()) {
                         let elem_ty = match tree_ty {
-                            StableHLOType::Tuple(elems) => &elems[idx],
+                            StableHLOType::Tuple(elems, _) => &elems[idx],
                             other => other,
                         };
                         let elem_reg = self.emitter.emit_get_tuple_element(
@@ -152,7 +152,7 @@ impl CodeGenerator {
         acc_ty: &StableHLOType,
     ) -> SheafResult<(Register, StableHLOType)> {
         match tree_ty {
-            StableHLOType::Tuple(elem_tys) => {
+            StableHLOType::Tuple(elem_tys, _) => {
                 let mut cur_acc = acc_reg;
                 let mut cur_ty = acc_ty.clone();
                 for (idx, elem_ty) in elem_tys.iter().enumerate() {
@@ -263,8 +263,8 @@ impl CodeGenerator {
             PlainTensor,                     // Single tensor
         }
         let (n, kind) = match &coll_ty {
-            StableHLOType::Tuple(types) if !types.is_empty() => {
-                if types.iter().all(|t| matches!(t, StableHLOType::Tuple(_))) {
+            StableHLOType::Tuple(types, _) if !types.is_empty() => {
+                if types.iter().all(|t| matches!(t, StableHLOType::Tuple(..))) {
                     (types.len(), ElemKind::VecTuple(types.clone()))
                 } else if types.iter().all(|t| !t.shape().is_empty()) {
                     let n = types[0].shape()[0] as usize;
@@ -369,7 +369,7 @@ impl CodeGenerator {
             if is_scan {
                 // Scan body returns [carry, output]; extract carry (element 0)
                 match &step_ty {
-                    StableHLOType::Tuple(elems) if elems.len() == 2 => {
+                    StableHLOType::Tuple(elems, _) if elems.len() == 2 => {
                         let carry_elem_ty = elems[0].clone();
                         carry_reg = self.emitter.emit_get_tuple_element(
                             &step_reg, &step_ty, 0, &carry_elem_ty,
