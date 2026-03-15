@@ -94,7 +94,7 @@ fn collect_hof_rec(expr: &CompiledExpr, out: &mut Vec<String>) {
             collect_hof_rec(acc_init, out);
             collect_hof_rec(body, out);
         }
-        // ValueAndGrad (deferred form) is higher-order; InlineValueAndGrad is compilable
+        // ValueAndGrad (deferred form) is higher-order
         CompiledExpr::ValueAndGrad { .. } => {
             out.push("value-and-grad".to_string());
         }
@@ -185,8 +185,7 @@ fn collect_effects_rec(expr: &CompiledExpr, out: &mut Vec<EffectSite>) {
         | CompiledExpr::FunctionRef(_)
         | CompiledExpr::Quoted(_)
         | CompiledExpr::GetTupleElement { .. }
-        | CompiledExpr::ValueAndGrad { .. }
-        | CompiledExpr::InlineValueAndGrad { .. } => {}
+        | CompiledExpr::ValueAndGrad { .. } => {}
     }
 }
 

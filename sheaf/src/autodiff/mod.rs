@@ -5,7 +5,6 @@
 
 pub mod reverse;
 pub mod trace;
-pub mod value_and_grad;
 
 // `grad(expr, wrt)` returns a new `CompiledExpr` representing dL/d(wrt),
 // assuming `expr` is the scalar loss (so the incoming gradient is 1.0).
@@ -182,51 +181,129 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
         // d/dwrt Let { x1=e1, ..., xn=en, body }
         // = Let { x1=e1, ..., xn=en,            -- forward values
         //         dx1 = de1/dwrt,                -- gradient seed
-        //         dxi = dei/dwrt + Σ(dei/dxj * dxj for j<i),
-        //         result = dbody/dwrt + Σ(dbody/dxi * dxi)  }
+        // Reverse-mode AD through Let bindings.
         //
-        // Size: O(n² * S) but with simplification of zero terms → typically O(n * S)
+        // 1. Compute upstream gradient for each binding: dL/dxi
+        // 2. Back-propagate each dL/dxi through its value expression
+        //
+        // Previous approach used float(1.0) as seed for per-binding Jacobians,
+        // which breaks for matrix-valued bindings (matmul with scalar seed).
+        // This approach threads the actual upstream gradient through each binding.
         CompiledExpr::Let { bindings, body } => {
-            let mut all_bindings = Vec::new();
-            let mut grad_vars: Vec<(String, String)> = Vec::new(); // (name, grad_name)
-
-            for (name, value) in bindings {
-                // Keep original binding for forward values
-                all_bindings.push((name.clone(), value.clone()));
-
-                // Compute total derivative: de_i/dwrt + Σ(de_i/dx_j * dx_j)
-                let mut total_grad = grad_with(value, wrt, float(1.0));
-                for (prev_name, prev_grad_name) in &grad_vars {
-                    let partial = grad_with(value, prev_name, float(1.0));
-                    if !is_zero(&partial) {
-                        total_grad = add(
-                            total_grad,
-                            mul(partial, CompiledExpr::Symbol(prev_grad_name.clone())),
-                        );
-                    }
-                }
-
-                let grad_name = format!("__d_{}", name);
-                all_bindings.push((grad_name.clone(), simplify(total_grad)));
-                grad_vars.push((name.clone(), grad_name));
+            // Split shadowed bindings into nested Lets before differentiating.
+            // as-> produces flat Lets like [(h, x), (h, f(h))] which confuse
+            // gradient accumulation (duplicate variable names).
+            if has_shadowed_bindings(bindings) {
+                let nested = unshadow_let(bindings, body);
+                return grad_with(&nested, wrt, g);
             }
 
-            // Total derivative of body: dbody/dwrt + Σ(dbody/dx_i * dx_i)
-            // Apply upstream gradient g
-            let mut total = grad_with(body, wrt, g.clone());
-            for (name, grad_name) in &grad_vars {
-                let partial = grad_with(body, name, g.clone());
-                if !is_zero(&partial) {
-                    total = add(
-                        total,
-                        mul(partial, CompiledExpr::Symbol(grad_name.clone())),
+            // Handle self-referencing bindings: h = f(h) where h comes from
+            // outer scope. Rename the outer reference to __pre_h.
+            let mut all_bindings: Vec<(String, CompiledExpr)> = Vec::new();
+            let effective_bindings: Vec<(String, CompiledExpr)> = bindings
+                .iter()
+                .map(|(name, value)| {
+                    if expr_contains_symbol(value, name) {
+                        let alias = format!("__pre_{}", name);
+                        all_bindings.push((alias.clone(), CompiledExpr::Symbol(name.clone())));
+                        let renamed = replace_symbol(value, name, &CompiledExpr::Symbol(alias));
+                        all_bindings.push((name.clone(), renamed.clone()));
+                        (name.clone(), renamed)
+                    } else {
+                        all_bindings.push((name.clone(), value.clone()));
+                        (name.clone(), value.clone())
+                    }
+                })
+                .collect();
+
+            let binding_names: Vec<&str> = effective_bindings
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect();
+            let n = effective_bindings.len();
+
+            // 1: Compute upstream gradient for each binding.
+            // upstream[i] = dL/dxi, accumulated from body and later bindings.
+            let mut upstream: Vec<CompiledExpr> = (0..n)
+                .map(|i| grad_with(body, binding_names[i], g.clone()))
+                .collect();
+
+            // Back-propagate through later bindings (reverse order)
+            for j in (0..n).rev() {
+                for i in 0..j {
+                    let contrib = grad_with(
+                        &effective_bindings[j].1,
+                        binding_names[i],
+                        upstream[j].clone(),
                     );
+                    if !is_zero(&contrib) {
+                        upstream[i] = add(upstream[i].clone(), contrib);
+                    }
+                }
+            }
+
+            // 2: Compute total gradient wrt `wrt`.
+            //
+            // If wrt is a binding name, body references go through the binding
+            // (not directly to the outer variable), so the direct body term is 0.
+            // The gradient flows only through the alias chain.
+            let is_bound = binding_names.contains(&wrt);
+            let mut total = if is_bound {
+                float(0.0)
+            } else {
+                grad_with(body, wrt, g)
+            };
+
+            for i in 0..n {
+                let contrib = grad_with(
+                    &effective_bindings[i].1,
+                    wrt,
+                    upstream[i].clone(),
+                );
+                if !is_zero(&contrib) {
+                    total = add(total, contrib);
+                }
+            }
+
+            // Propagate gradient through aliases back to outer scope
+            for j in 0..n {
+                if expr_contains_symbol(&bindings[j].1, &bindings[j].0) {
+                    let alias = format!("__pre_{}", bindings[j].0);
+                    let contrib = grad_with(
+                        &effective_bindings[j].1,
+                        &alias,
+                        upstream[j].clone(),
+                    );
+                    if !is_zero(&contrib) {
+                        // __pre_h = Symbol(h_outer). Propagate: if wrt matches
+                        // the outer name, the gradient flows through.
+                        if bindings[j].0 == wrt {
+                            total = add(total, contrib);
+                        } else {
+                            // For other wrt, propagate through the alias source
+                            let outer_contrib = grad_with(
+                                &CompiledExpr::Symbol(bindings[j].0.clone()),
+                                wrt,
+                                contrib,
+                            );
+                            if !is_zero(&outer_contrib) {
+                                all_bindings.push((
+                                    format!("__d_alias_{}", bindings[j].0),
+                                    simplify(outer_contrib.clone()),
+                                ));
+                                total = add(total, CompiledExpr::Symbol(
+                                    format!("__d_alias_{}", bindings[j].0),
+                                ));
+                            }
+                        }
+                    }
                 }
             }
 
             CompiledExpr::Let {
                 bindings: all_bindings,
-                body: Box::new(total),
+                body: Box::new(simplify(total)),
             }
         }
 
@@ -240,6 +317,57 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
         }
 
         _ => float(0.0),
+    }
+}
+
+/// Check if a Let has duplicate binding names (e.g. from as-> threading).
+fn has_shadowed_bindings(bindings: &[(String, CompiledExpr)]) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    bindings.iter().any(|(name, _)| !seen.insert(name.as_str()))
+}
+
+/// Convert a flat Let with shadowed bindings into nested Lets.
+/// Splits at the first duplicate: [a=e1, a=e2, b=e3] → Let{a=e1, Let{a=e2, b=e3, body}}
+fn unshadow_let(bindings: &[(String, CompiledExpr)], body: &CompiledExpr) -> CompiledExpr {
+    let mut seen = std::collections::HashSet::new();
+    for (i, (name, _)) in bindings.iter().enumerate() {
+        if !seen.insert(name.as_str()) {
+            let outer = bindings[..i].to_vec();
+            let inner = unshadow_let(&bindings[i..], body);
+            return CompiledExpr::Let {
+                bindings: outer,
+                body: Box::new(inner),
+            };
+        }
+    }
+    CompiledExpr::Let {
+        bindings: bindings.to_vec(),
+        body: Box::new(body.clone()),
+    }
+}
+
+/// Check if an expression contains a free reference to Symbol(name).
+fn expr_contains_symbol(expr: &CompiledExpr, name: &str) -> bool {
+    match expr {
+        CompiledExpr::Symbol(s) => s == name,
+        CompiledExpr::FunctionCall { args, .. } => {
+            args.iter().any(|a| expr_contains_symbol(a, name))
+        }
+        CompiledExpr::Let { bindings, body } => {
+            for (k, v) in bindings {
+                if expr_contains_symbol(v, name) {
+                    return true;
+                }
+                if k == name {
+                    return false; // shadowed from here on
+                }
+            }
+            expr_contains_symbol(body, name)
+        }
+        CompiledExpr::Do(exprs) => exprs.iter().any(|e| expr_contains_symbol(e, name)),
+        CompiledExpr::GetTupleElement { param, .. } => param == name,
+        CompiledExpr::Vector(elems) => elems.iter().any(|e| expr_contains_symbol(e, name)),
+        _ => false,
     }
 }
 
@@ -319,6 +447,43 @@ fn grad_function_call(
         "relu" => {
             // d/dx relu(f) ≈ df/dx  (simplified; full version multiplies by (f > 0))
             grad_with(&args[0], wrt, g)
+        }
+
+        "maximum" => {
+            // d/dx maximum(a, b): gradient flows to a where a >= b, to b otherwise
+            // For relu case (maximum(x, 0)), this passes gradient through to x
+            let g_a = call("where", vec![
+                call(">=", vec![args[0].clone(), args[1].clone()]),
+                g.clone(),
+                float(0.0),
+            ]);
+            let g_b = call("where", vec![
+                call(">=", vec![args[0].clone(), args[1].clone()]),
+                float(0.0),
+                g,
+            ]);
+            add(
+                grad_with(&args[0], wrt, g_a),
+                grad_with(&args[1], wrt, g_b),
+            )
+        }
+
+        "minimum" => {
+            // d/dx minimum(a, b): gradient flows to a where a <= b, to b otherwise
+            let g_a = call("where", vec![
+                call("<=", vec![args[0].clone(), args[1].clone()]),
+                g.clone(),
+                float(0.0),
+            ]);
+            let g_b = call("where", vec![
+                call("<=", vec![args[0].clone(), args[1].clone()]),
+                float(0.0),
+                g,
+            ]);
+            add(
+                grad_with(&args[0], wrt, g_a),
+                grad_with(&args[1], wrt, g_b),
+            )
         }
 
         "sigmoid" => {

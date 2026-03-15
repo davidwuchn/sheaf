@@ -328,20 +328,6 @@ impl CompilerContext {
                         elements[1..].iter().map(|a| self.compile(a)).collect();
                     let call_args = call_args?;
 
-                    // Detect ((value-and-grad f) args) HOF pattern
-                    if let CompiledExpr::FunctionCall { name, args: inner, .. } = &callee {
-                        if name == "__value-and-grad-hof__" && inner.len() == 1 {
-                            if let CompiledExpr::Lambda { params, .. } = &inner[0] {
-                                let wrt_indices = (0..params.len()).collect();
-                                return Ok(CompiledExpr::InlineValueAndGrad {
-                                    lambda: Box::new(inner[0].clone()),
-                                    args: call_args,
-                                    wrt_indices,
-                                });
-                            }
-                        }
-                    }
-
                     Ok(CompiledExpr::LambdaCall {
                         callee: Box::new(callee),
                         args: call_args,
@@ -572,14 +558,6 @@ pub enum CompiledExpr {
         wrt_params: Vec<String>,
         shape_config: Vec<(String, Vec<i64>)>,
     },
-    /// Inline value-and-grad: compile-time resolved HOF form.
-    /// Produced when the compiler detects `((value-and-grad (fn [p] body)) args)`.
-    /// Codegen performs forward pass + symbolic autodiff + tuple packing inline.
-    InlineValueAndGrad {
-        lambda: Box<CompiledExpr>,
-        args: Vec<CompiledExpr>,
-        wrt_indices: Vec<usize>,
-    },
     /// Counted loop with accumulator: (repeat [i n] [acc init] body)
     /// Evaluates body `n` times, binding loop index to `i` and accumulator to `acc`.
     /// Returns final value of accumulator.
@@ -655,13 +633,6 @@ impl std::fmt::Debug for CompiledExpr {
                     .field("src_fn_name", src_fn_name)
                     .field("wrt_params", wrt_params)
                     .field("shape_config", shape_config)
-                    .finish()
-            }
-            Self::InlineValueAndGrad { lambda, args, wrt_indices } => {
-                f.debug_struct("InlineValueAndGrad")
-                    .field("lambda", lambda)
-                    .field("args", args)
-                    .field("wrt_indices", wrt_indices)
                     .finish()
             }
             Self::Repeat { index_var, count, acc_var, acc_init, body } => {

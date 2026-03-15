@@ -58,8 +58,7 @@ pub struct CodeGenerator {
     /// `(get (get x :k1) :k2)` where the outer get's operand is not a Symbol.
     layout_key_map: HashMap<Register, String>,
     /// Scalar constants extracted from runtime values (e.g. config.n_embd = 384).
-    /// Used by `generate_inline_value_and_grad` to resolve `(static (get config :key))`
-    /// in inlined function bodies.
+    /// Used to resolve `(static (get config :key))` in inlined function bodies.
     scalar_constants: HashMap<(String, Vec<usize>), f64>,
     /// Full param index maps for dict-to-tuple lowering of inlined function bodies.
     param_index_maps: Vec<(String, std::collections::BTreeMap<Vec<String>, Vec<usize>>)>,
@@ -472,16 +471,6 @@ impl CodeGenerator {
                 location: crate::core::error::SourceLocation::unknown(),
             }),
 
-            CompiledExpr::InlineValueAndGrad {
-                lambda,
-                args,
-                wrt_indices,
-            } => {
-                let lambda = lambda.clone();
-                let args = args.clone();
-                let wrt_indices = wrt_indices.clone();
-                self.generate_inline_value_and_grad(&lambda, &args, &wrt_indices)
-            }
 
             CompiledExpr::Dict(pairs) => {
                 // Emit dict as a tuple, keys sorted alphabetically for deterministic layout
