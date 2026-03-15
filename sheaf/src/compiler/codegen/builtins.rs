@@ -250,11 +250,6 @@ impl CodeGenerator {
         }
         // first: (first x), special case: (first (scan fn init coll)) = final carry
         else if name == "first" && args.len() == 1 {
-            if let CompiledExpr::FunctionCall { name: inner, args: inner_args, .. } = &args[0] {
-                if inner == "scan" && inner_args.len() == 3 {
-                    return self.generate_reduce_scan(&inner_args[0], &inner_args[1], &inner_args[2], true);
-                }
-            }
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
             match &operand_ty {
                 StableHLOType::Tuple(elems, _) => {
@@ -262,11 +257,9 @@ impl CodeGenerator {
                     let reg = self.emitter.emit_get_tuple_element(&operand_reg, &operand_ty, 0, &elem_ty);
                     Ok((reg, elem_ty))
                 }
+                // Scalar: identity (handles ANF case where scan already extracted carry)
                 _ if operand_ty.shape().is_empty() => {
-                    Err(SheafError::Compile {
-                        message: "first: cannot index a scalar".to_string(),
-                        location: crate::core::error::SourceLocation::unknown(),
-                    })
+                    Ok((operand_reg, operand_ty))
                 }
                 _ => {
                     let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, 0);
@@ -876,8 +869,7 @@ impl CodeGenerator {
         else if name == "reduce" && args.len() == 3 {
             self.generate_reduce_scan(&args[0], &args[1], &args[2], false)
         }
-        // scan: (scan fn init coll), same as reduce but extracts carry from [carry, output]
-        // Note: (first (scan ...)) is intercepted above in the "first" handler.
+        // scan: (scan fn init coll), returns [carry, output] tuple from last step
         else if name == "scan" && args.len() == 3 {
             self.generate_reduce_scan(&args[0], &args[1], &args[2], true)
         }
@@ -906,6 +898,11 @@ impl CodeGenerator {
             }
 
             self.generate_tree_map(lambda, &tree_regs, &tree_tys)
+        }
+        // __scan_vjp__: backward differentiation through scan
+        // Emitted by reverse_grad when differentiating first(scan(body, init, coll))
+        else if name == "__scan_vjp__" && args.len() == 4 {
+            self.generate_scan_vjp(args)
         }
         // tree-reduce: (tree-reduce f tree init)
         // Fold a binary function over all leaves of a pytree.

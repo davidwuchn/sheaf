@@ -549,7 +549,7 @@ fn push_first_last(name: &str, expr: CompiledExpr) -> CompiledExpr {
     }
 }
 
-fn try_infer_shape(
+pub fn try_infer_shape(
     expr: &CompiledExpr,
     shapes: &HashMap<String, Vec<i64>>,
 ) -> Option<Vec<i64>> {
@@ -621,7 +621,7 @@ fn try_infer_shape(
                         out.extend_from_slice(&rhs[r-1..]);
                         Some(out)
                     }
-                    (_, 1) => Some(lhs[..lhs.len()-1].to_vec()),
+                    (l, 1) if l >= 1 => Some(lhs[..l-1].to_vec()),
                     (l, r) if l >= 2 && r >= 2 => {
                         let mut out = lhs[..lhs.len()-1].to_vec();
                         out.push(*rhs.last().unwrap());

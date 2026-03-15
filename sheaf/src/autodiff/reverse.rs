@@ -384,15 +384,20 @@ fn distribute_fn_adjoint_named(
 
             // dL/dB = A^T @ G
             if a_ndim == 1 {
-                // A is 1D [m], G is 1D [n] → outer product → [m, n]
-                // Use reshape to promote: reshape(A,[m,1]) @ reshape(G,[1,n])
-                if let Some(a_shape) = arg_shape(&args[0], shapes) {
+                // A is 1D [m], G may be 1D [n] → outer product → [m, n]
+                // reshape(A,[m,1]) @ reshape(G,[1,n])
+                if let (Some(a_shape), Some(b_shape)) = (arg_shape(&args[0], shapes), arg_shape(&args[1], shapes)) {
                     let m = a_shape[0];
+                    let n = b_shape[b_shape.len() - 1];
                     let a_col = emit_binding(bindings, call("reshape", vec![
                         args[0].clone(),
                         CompiledExpr::Vector(vec![CompiledExpr::Integer(m), CompiledExpr::Integer(1)]),
                     ]));
-                    let db = emit_binding(bindings, call("@", vec![sym(&a_col), adj.clone()]));
+                    let g_row = emit_binding(bindings, call("reshape", vec![
+                        adj.clone(),
+                        CompiledExpr::Vector(vec![CompiledExpr::Integer(1), CompiledExpr::Integer(n)]),
+                    ]));
+                    let db = emit_binding(bindings, call("@", vec![sym(&a_col), sym(&g_row)]));
                     let db_ub = maybe_unbroadcast(sym(&db), &args[1], shapes, bindings);
                     acc_arg(&args[1], db_ub, adj_names, bindings);
                 } else {
@@ -660,6 +665,27 @@ fn distribute_fn_adjoint_named(
                 let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&local)]));
                 acc_arg(&args[0], sym(&contrib), adj_names, bindings);
             }
+        }
+
+        // first(x) extracts element 0.  Adjoint passes through to arg.
+        "first" if args.len() == 1 => {
+            acc_arg(&args[0], adj.clone(), adj_names, bindings);
+        }
+
+        // scan(lambda, init, coll) — emit a __scan_vjp__ call that the codegen compiles.
+        // The adjoint flows to init and coll via the backward scan.
+        "scan" if args.len() == 3 => {
+            let vjp_result = emit_binding(bindings, call("__scan_vjp__", vec![
+                args[0].clone(),  // lambda
+                args[1].clone(),  // init
+                args[2].clone(),  // coll
+                adj.clone(),      // adj of scan result (carry adjoint)
+            ]));
+            // __scan_vjp__ returns [adj_init, adj_coll] — extract with first/second
+            let adj_init = emit_binding(bindings, call("first", vec![sym(&vjp_result)]));
+            let adj_coll = emit_binding(bindings, call("second", vec![sym(&vjp_result)]));
+            acc_arg(&args[1], sym(&adj_init), adj_names, bindings);
+            acc_arg(&args[2], sym(&adj_coll), adj_names, bindings);
         }
 
         _ => {} // Unknown op: no gradient
