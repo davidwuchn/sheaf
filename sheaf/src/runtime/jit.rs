@@ -489,8 +489,12 @@ impl JitCompiler {
         // Derive a human-readable name from the outermost function call
         let vag_fn_name = outermost_call_name(body).unwrap_or("anonymous".to_string());
 
-        // Build a stable key for the blocklist and cache
-        let vag_key = format!("__vag_{:?}", body);
+        // Build a stable key for the blocklist and cache.
+        // Include wrt_arg type so shape changes (e.g. after grow-hydra) cause a cache miss.
+        let wrt_type_str = value_to_stablehlo_type(wrt_arg)
+            .map(|t| t.to_mlir())
+            .unwrap_or_default();
+        let vag_key = format!("__vag_{:?}_{}", body, wrt_type_str);
         if self.failed_fns.contains(&vag_key) {
             return None;
         }

@@ -751,6 +751,14 @@ pub fn unroll_reduces(
     expr: &CompiledExpr,
     param_types: &[(String, StableHLOType)],
 ) -> CompiledExpr {
+    unroll_reduces_rec(expr, param_types, &HashMap::new())
+}
+
+fn unroll_reduces_rec(
+    expr: &CompiledExpr,
+    param_types: &[(String, StableHLOType)],
+    let_env: &HashMap<String, CompiledExpr>,
+) -> CompiledExpr {
     match expr {
         CompiledExpr::FunctionCall { name, args, .. }
             if name == "reduce" && args.len() == 3 =>
@@ -764,17 +772,23 @@ pub fn unroll_reduces(
                     // Not a lambda, can't unroll, recurse into args
                     return CompiledExpr::FunctionCall {
                         name: name.clone(),
-                        args: args.iter().map(|a| unroll_reduces(a, param_types)).collect(),
+                        args: args.iter().map(|a| unroll_reduces_rec(a, param_types, let_env)).collect(),
                         loc: None,
                     };
                 }
             };
 
-            let init = unroll_reduces(&args[1], param_types);
-            let coll = unroll_reduces(&args[2], param_types);
+            let init = unroll_reduces_rec(&args[1], param_types, let_env);
+            let coll = unroll_reduces_rec(&args[2], param_types, let_env);
+
+            // Resolve the collection: if it's a Let-bound symbol, look through to the GTE
+            let resolved_coll = match &coll {
+                CompiledExpr::Symbol(s) => let_env.get(s).unwrap_or(&coll),
+                other => other,
+            };
 
             // Determine n and element accessor
-            let unroll_info = match &coll {
+            let unroll_info = match resolved_coll {
                 CompiledExpr::GetTupleElement { param, indices } => {
                     resolve_type_at_indices(param, indices, param_types)
                         .and_then(|ty| match ty {
@@ -842,7 +856,7 @@ pub fn unroll_reduces(
                 iteration_body = replace_symbol(&iteration_body, elem_p, &elem_expr);
 
                 // Recursively unroll any nested reduces in the substituted body
-                iteration_body = unroll_reduces(&iteration_body, param_types);
+                iteration_body = unroll_reduces_rec(&iteration_body, param_types, let_env);
 
                 bindings.push((var_name, iteration_body));
             }
@@ -857,41 +871,49 @@ pub fn unroll_reduces(
         // Recurse into all other expression types
         CompiledExpr::FunctionCall { name, args, .. } => CompiledExpr::FunctionCall {
             name: name.clone(),
-            args: args.iter().map(|a| unroll_reduces(a, param_types)).collect(),
+            args: args.iter().map(|a| unroll_reduces_rec(a, param_types, let_env)).collect(),
             loc: None,
         },
-        CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
-            bindings: bindings
+        CompiledExpr::Let { bindings, body } => {
+            let mut new_env = let_env.clone();
+            let new_bindings: Vec<_> = bindings
                 .iter()
-                .map(|(k, v)| (k.clone(), unroll_reduces(v, param_types)))
-                .collect(),
-            body: Box::new(unroll_reduces(body, param_types)),
+                .map(|(k, v)| {
+                    let resolved = unroll_reduces_rec(v, param_types, &new_env);
+                    new_env.insert(k.clone(), resolved.clone());
+                    (k.clone(), resolved)
+                })
+                .collect();
+            CompiledExpr::Let {
+                bindings: new_bindings,
+                body: Box::new(unroll_reduces_rec(body, param_types, &new_env)),
+            }
         },
         CompiledExpr::Do(exprs) => CompiledExpr::Do(
-            exprs.iter().map(|e| unroll_reduces(e, param_types)).collect(),
+            exprs.iter().map(|e| unroll_reduces_rec(e, param_types, let_env)).collect(),
         ),
         CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
-            condition: Box::new(unroll_reduces(condition, param_types)),
-            then_branch: Box::new(unroll_reduces(then_branch, param_types)),
-            else_branch: else_branch.as_ref().map(|e| Box::new(unroll_reduces(e, param_types))),
+            condition: Box::new(unroll_reduces_rec(condition, param_types, let_env)),
+            then_branch: Box::new(unroll_reduces_rec(then_branch, param_types, let_env)),
+            else_branch: else_branch.as_ref().map(|e| Box::new(unroll_reduces_rec(e, param_types, let_env))),
         },
         CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
             params: params.clone(),
-            body: Box::new(unroll_reduces(body, param_types)),
+            body: Box::new(unroll_reduces_rec(body, param_types, let_env)),
         },
         CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
-            callee: Box::new(unroll_reduces(callee, param_types)),
-            args: args.iter().map(|a| unroll_reduces(a, param_types)).collect(),
+            callee: Box::new(unroll_reduces_rec(callee, param_types, let_env)),
+            args: args.iter().map(|a| unroll_reduces_rec(a, param_types, let_env)).collect(),
         },
         CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => CompiledExpr::Repeat {
             index_var: index_var.clone(),
-            count: Box::new(unroll_reduces(count, param_types)),
+            count: Box::new(unroll_reduces_rec(count, param_types, let_env)),
             acc_var: acc_var.clone(),
-            acc_init: Box::new(unroll_reduces(acc_init, param_types)),
-            body: Box::new(unroll_reduces(body, param_types)),
+            acc_init: Box::new(unroll_reduces_rec(acc_init, param_types, let_env)),
+            body: Box::new(unroll_reduces_rec(body, param_types, let_env)),
         },
         CompiledExpr::Vector(elems) => CompiledExpr::Vector(
-            elems.iter().map(|e| unroll_reduces(e, param_types)).collect(),
+            elems.iter().map(|e| unroll_reduces_rec(e, param_types, let_env)).collect(),
         ),
         other => other.clone(),
     }

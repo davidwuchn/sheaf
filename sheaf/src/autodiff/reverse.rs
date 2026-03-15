@@ -617,6 +617,26 @@ fn distribute_fn_adjoint_named(
             acc_arg(&args[0], sym(&contrib), adj_names, bindings);
         }
 
+        "maximum" if args.len() == 2 => {
+            // d/da maximum(a, b) = adj * (a >= b)
+            // d/db maximum(a, b) = adj * (a < b)
+            let cond = emit_binding(bindings, call(">=", vec![args[0].clone(), args[1].clone()]));
+            let da = emit_binding(bindings, call("where", vec![sym(&cond), adj.clone(), float(0.0)]));
+            let db = emit_binding(bindings, call("where", vec![sym(&cond), float(0.0), adj.clone()]));
+            acc_arg(&args[0], sym(&da), adj_names, bindings);
+            acc_arg(&args[1], sym(&db), adj_names, bindings);
+        }
+
+        "minimum" if args.len() == 2 => {
+            // d/da minimum(a, b) = adj * (a <= b)
+            // d/db minimum(a, b) = adj * (a > b)
+            let cond = emit_binding(bindings, call("<=", vec![args[0].clone(), args[1].clone()]));
+            let da = emit_binding(bindings, call("where", vec![sym(&cond), adj.clone(), float(0.0)]));
+            let db = emit_binding(bindings, call("where", vec![sym(&cond), float(0.0), adj.clone()]));
+            acc_arg(&args[0], sym(&da), adj_names, bindings);
+            acc_arg(&args[1], sym(&db), adj_names, bindings);
+        }
+
         "where" if args.len() == 3 => {
             let da = emit_binding(bindings, call("where", vec![args[0].clone(), adj.clone(), float(0.0)]));
             let db = emit_binding(bindings, call("where", vec![args[0].clone(), float(0.0), adj.clone()]));

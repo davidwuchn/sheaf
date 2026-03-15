@@ -1155,8 +1155,13 @@ fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Resu
     // Skip when tracing -- interpreter must run to expose the autodiff call tree
     #[cfg(iree_runtime)]
     if env.tracer.is_none() {
-        if let Some(result) = try_jit_vag(func, params, env) {
-            return result;
+        match try_jit_vag(func, params, env) {
+            Some(result) => return result,
+            None => {
+                if crate::core::config::verbosity() >= 1 {
+                    sheaf_msg!("jit: value-and-grad JIT unavailable, falling back to symbolic autodiff");
+                }
+            }
         }
     }
 
@@ -1586,15 +1591,10 @@ fn try_iree_dispatch(
     let full_name = format!("module.{}", func_def.name.replace('-', "_"));
     let result = match iree_session.call_typed_device(&full_name, args, &sig.return_type) {
         Ok(v) => v,
-        Err(_e) => {
-            // Unexpected IREE error -> fall back to interpreter with warning.
-            if env.iree_mismatch_warned.insert(format!("{}:call", func_def.name)) {
-                sheaf_msg!(
-                    "warning: '{}' JIT dispatch failed -- falling back to interpreted: {}",
-                    func_def.name, _e,
-                );
-            }
-            return None;
+        Err(e) => {
+            return Some(Err(runtime_error(format!(
+                "'{}': IREE dispatch failed: {}", func_def.name, e
+            ))));
         }
     };
 
@@ -1667,8 +1667,9 @@ fn try_jit_vag(
     let result = match iree_session.call_typed_device("module.value_and_grad", &args, &sig.return_type) {
         Ok(v) => v,
         Err(e) => {
-            sheaf_msg!("warning: value-and-grad JIT dispatch failed: {}", e);
-            return None;
+            return Some(Err(runtime_error(format!(
+                "value-and-grad: IREE dispatch failed: {}", e
+            ))));
         }
     };
 
@@ -1691,14 +1692,17 @@ fn try_jit_vag(
     })) {
         Ok(Some(v)) => v,
         Ok(None) => {
-            sheaf_msg!("warning: value-and-grad result unpacking failed");
-            return None;
+            return Some(Err(runtime_error(
+                "value-and-grad: result unpacking failed".to_string()
+            )));
         }
         Err(e) => {
-            sheaf_msg!("warning: value-and-grad result unpacking panicked: {:?}",
-                e.downcast_ref::<String>().map(|s| s.as_str())
-                    .or_else(|| e.downcast_ref::<&str>().copied()));
-            return None;
+            let detail = e.downcast_ref::<String>().map(|s| s.as_str())
+                .or_else(|| e.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown");
+            return Some(Err(runtime_error(format!(
+                "value-and-grad: result unpacking panicked: {}", detail
+            ))));
         }
     };
 

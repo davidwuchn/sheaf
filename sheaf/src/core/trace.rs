@@ -326,6 +326,14 @@ fn collect_layout_fields(
             }
             Value::List(items) => {
                 // Treat list as indexed dict with keys "0", "1", ..., "N-1"
+                if items.is_empty() {
+                    // Empty list: register as container so index map includes this path
+                    fields.push(ParamField {
+                        path: path.clone(),
+                        shape: vec![],
+                        tuple_index: indices.clone(),
+                    });
+                }
                 for (list_idx, item) in items.iter().enumerate() {
                     path.push(list_idx.to_string());
                     indices.push(list_idx);
