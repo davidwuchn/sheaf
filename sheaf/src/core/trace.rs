@@ -213,6 +213,10 @@ pub fn value_to_stablehlo_type(val: &Value) -> SheafResult<StableHLOType> {
             Ok(StableHLOType::Tuple(tys?, None))
         }
         Value::List(items) => {
+            // Empty list -> empty tuple (0 leaves, consistent with runtime flattening)
+            if items.is_empty() {
+                return Ok(StableHLOType::Tuple(vec![], None));
+            }
             // List of scalars -> 1D tensor
             if items
                 .iter()
@@ -291,7 +295,7 @@ fn register_trace_overrides(env: &mut Env) {
 /// tensors, produce the corresponding ParamLayout.
 ///
 /// Keys are sorted alphabetically at each level (BTreeMap order), and tuple
-/// indices are assigned in that order — matching the codegen convention.
+/// indices are assigned in that order -- matching the codegen convention.
 pub fn value_to_param_layout(name: &str, val: &Value) -> Option<ParamLayout> {
     let dict = match val {
         Value::Dict(map) => map,

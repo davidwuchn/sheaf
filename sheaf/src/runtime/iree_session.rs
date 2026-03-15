@@ -889,9 +889,10 @@ fn count_one_value(val: &Value) -> usize {
     match val {
         Value::Dict(map) => map.values().map(count_one_value).sum(),
         Value::Tuple(elems) => elems.iter().map(count_one_value).sum(),
-        // List of all scalars → single tensor f32[N] (matches value_to_stablehlo_type)
+        // List of all scalars -> single tensor f32[N] (matches value_to_stablehlo_type)
+        // Empty list -> 0 leaves (consistent with flatten_value and trace.rs)
         Value::List(elems)
-            if elems
+            if !elems.is_empty() && elems
                 .iter()
                 .all(|v| matches!(v, Value::Float(_) | Value::Int(_))) =>
         {
