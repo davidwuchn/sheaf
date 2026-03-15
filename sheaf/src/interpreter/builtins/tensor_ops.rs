@@ -122,6 +122,12 @@ fn builtin_slice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
+    // Materialize DeviceBuffer indices to host tensors
+    if args.len() >= 2 && matches!(&args[1], Value::DeviceBuffer(_)) {
+        let mut host_args = args.to_vec();
+        host_args[1] = args[1].ensure_host()?;
+        return builtin_get(&host_args, kw);
+    }
     match &args[0] {
         Value::Dict(map) => {
             let key = match &args[1] {
