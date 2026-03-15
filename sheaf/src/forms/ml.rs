@@ -252,6 +252,13 @@ fn parse_with_params_binding(
 
             Ok((param_name.to_string(), opt_key))
         }
+        SheafValue::Symbol(s, _) => Err(SheafError::Compile {
+            message: format!(
+                "with-params: expected [{}] (vector), got bare symbol. Use (with-params [{}] ...)",
+                s, s
+            ),
+            location: loc.clone(),
+        }),
         other => Err(SheafError::Compile {
             message: format!(
                 "with-params: expected binding vector [param] or [param :key], got: {}",
@@ -337,7 +344,7 @@ impl SpecialForm for GradForm {
             });
         }
 
-        // Compile body expression(s) — use last one as the differentiable expr
+        // Compile body expression(s) -- use last one as the differentiable expr
         let compiled_bodies: SheafResult<Vec<CompiledExpr>> =
             body_exprs.iter().map(|e| compiler.compile(e)).collect();
         let compiled_bodies = compiled_bodies?;
@@ -360,16 +367,16 @@ impl SpecialForm for GradForm {
 ///   (value-and-grad name f config :wrt [p1 p2 ...])
 ///   (value-and-grad name f :wrt [p1 p2 ...])
 ///
-/// - `name`: symbol — name for the generated function
-/// - `f`: symbol — must refer to an existing `defn` in the registry
-/// - `config`: optional dict `{:param [dim ...] ...}` — shapes for specialization
+/// - `name`: symbol -- name for the generated function
+/// - `f`: symbol -- must refer to an existing `defn` in the registry
+/// - `config`: optional dict `{:param [dim ...] ...}` -- shapes for specialization
 /// - `:wrt [p1 p2 ...]`: parameter names to differentiate
 ///
 /// Returns `CompiledExpr::ValueAndGrad` recording the intent. Actual codegen
 /// or interpretation is deferred to the backend.
 
 /// Parse a shape config dict into raw (name, dims) pairs, without
-/// constructing StableHLOType — keeps the frontend free from codegen types.
+/// constructing StableHLOType -- keeps the frontend free from codegen types.
 fn parse_shape_dims(
     dict: &SheafValue,
     loc: &SourceLocation,
@@ -540,16 +547,16 @@ impl SpecialForm for ValueAndGradForm {
 }
 
 // ---------------------------------------------------------------------------
-// ParamLayout → StableHLOType conversion
+// ParamLayout -> StableHLOType conversion
 // ---------------------------------------------------------------------------
 
 /// Convert a ParamLayout into a StableHLO tuple type.
 ///
 /// Flat layout:  {:W [4 8] :b [8]}
-///   → tuple<tensor<4x8xf32>, tensor<8xf32>>
+///   -> tuple<tensor<4x8xf32>, tensor<8xf32>>
 ///
 /// Nested layout: {:attn {:Wq [512 512] :Wk [512 512]} :mlp {:W1 [512 2048]}}
-///   → tuple<tuple<tensor<512x512xf32>, tensor<512x512xf32>>, tuple<tensor<512x2048xf32>>>
+///   -> tuple<tuple<tensor<512x512xf32>, tensor<512x512xf32>>, tuple<tensor<512x2048xf32>>>
 pub fn param_layout_to_stablehlo_type(layout: &ParamLayout) -> StableHLOType {
     let field_refs: Vec<&ParamField> = layout.fields.iter().collect();
     fields_to_tuple_type(&field_refs, 0)

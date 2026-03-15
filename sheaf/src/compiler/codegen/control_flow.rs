@@ -19,13 +19,13 @@ enum ElemKind {
 }
 
 impl CodeGenerator {
-    /// Inline a lambda call: generate args, bind params→registers, generate body.
+    /// Inline a lambda call: generate args, bind params->registers, generate body.
     pub(super) fn inline_lambda_call(
         &mut self,
         callee: &CompiledExpr,
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
-        // Resolve callee — may be a Lambda directly, or a Symbol bound in lambda_bindings.
+        // Resolve callee -- may be a Lambda directly, or a Symbol bound in lambda_bindings.
         let lambda = match callee {
             CompiledExpr::Lambda { .. } => callee.clone(),
             CompiledExpr::Symbol(name) => {
@@ -59,7 +59,7 @@ impl CodeGenerator {
             arg_tys.push(ty);
         }
 
-        // Bind param names → (register, type) and generate body.
+        // Bind param names -> (register, type) and generate body.
         let saved = self.bindings.clone();
         for (param, (reg, ty)) in params.iter().zip(arg_regs.iter().zip(arg_tys.iter())) {
             self.bindings
@@ -224,9 +224,9 @@ impl CodeGenerator {
     /// Static unrolling of `reduce` / `scan` over a collection with known type.
     ///
     /// Supports three collection shapes:
-    /// - `Tuple([Tuple(...), ...])` — VecTuple (list of structs): each elem = get_tuple_element(i)
-    /// - `Tuple([tensor[N,...], ...])` — stacked dict (scan): each elem = tuple of slices at i
-    /// - `tensor[N, ...]` — plain tensor: each elem = index_axis0(i)
+    /// - `Tuple([Tuple(...), ...])` -- VecTuple (list of structs): each elem = get_tuple_element(i)
+    /// - `Tuple([tensor[N,...], ...])` -- stacked dict (scan): each elem = tuple of slices at i
+    /// - `tensor[N, ...]` -- plain tensor: each elem = index_axis0(i)
     ///
     /// Key layout (`tuple_key_layouts`) is inherited by the lambda's elem parameter so that
     /// `(get elem "field")` resolves correctly inside the body.
@@ -336,7 +336,7 @@ impl CodeGenerator {
                     (reg, elem_ty)
                 }
                 ElemKind::StackedDict(comp_types) => {
-                    // Each component tensor: get + slice → then pack into a tuple
+                    // Each component tensor: get + slice -> then pack into a tuple
                     let mut parts = Vec::new();
                     let mut part_types = Vec::new();
                     for (k, comp_ty) in comp_types.iter().enumerate() {
@@ -374,25 +374,29 @@ impl CodeGenerator {
 
             let (step_reg, step_ty) = result?;
             if is_scan {
-                // Scan body returns [carry, output]; extract carry for next iteration
-                // but keep the full tuple result for the final return.
                 match &step_ty {
+                    // Body returns [carry, output]: extract carry for next iteration
                     StableHLOType::Tuple(elems, _) if elems.len() == 2 => {
                         let carry_elem_ty = elems[0].clone();
                         carry_reg = self.emitter.emit_get_tuple_element(
                             &step_reg, &step_ty, 0, &carry_elem_ty,
                         );
                         carry_ty = carry_elem_ty;
+                        last_scan_result = Some((step_reg, step_ty));
                     }
+                    // Body returns just carry (no output): wrap in [carry, ()] for first()
                     _ => {
-                        return Err(SheafError::Compile {
-                            message: "scan: lambda must return [carry output] (a 2-element tuple)".to_string(),
-                            location: crate::core::error::SourceLocation::unknown(),
-                        });
+                        carry_reg = step_reg;
+                        carry_ty = step_ty.clone();
+                        let unit_ty = StableHLOType::Tuple(vec![], None);
+                        let (unit_reg, _) = self.emitter.emit_tuple(&[], &[]);
+                        let (wrapped_reg, wrapped_ty) = self.emitter.emit_tuple(
+                            &[carry_reg, unit_reg],
+                            &[carry_ty.clone(), unit_ty],
+                        );
+                        last_scan_result = Some((wrapped_reg, wrapped_ty));
                     }
                 }
-                // Track last step's full [carry, output] tuple
-                last_scan_result = Some((step_reg, step_ty));
             } else {
                 carry_reg = step_reg;
                 carry_ty = step_ty;
@@ -624,7 +628,7 @@ impl CodeGenerator {
         };
 
         // Build shapes for body differentiation.
-        // carry_param → carry shape, elem components → their shapes.
+        // carry_param -> carry shape, elem components -> their shapes.
         let mut body_shapes: HashMap<String, Vec<i64>> = HashMap::new();
         body_shapes.insert(carry_param.clone(), fwd_carry_ty.shape().to_vec());
 

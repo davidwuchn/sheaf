@@ -45,7 +45,7 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
             if let Ok(val) = env.get(name) {
                 return Ok(val);
             }
-            // Registry functions → Value::Function with real params/body
+            // Registry functions -> Value::Function with real params/body
             if let Some(func_def) = env.registry.get(name).cloned() {
                 if let Some(body) = func_def.body_compiled {
                     return Ok(Value::Function {
@@ -238,8 +238,8 @@ fn format_value_brief(val: &Value) -> String {
 /// Bind a pattern name to a value in the current scope.
 ///
 /// Patterns:
-///   - Simple: `"x"` → env["x"] = val
-///   - Destructuring: `"[a b]"` (encoded by compiler as "[a b]") → env["a"] = val[0], env["b"] = val[1]
+///   - Simple: `"x"` -> env["x"] = val
+///   - Destructuring: `"[a b]"` (encoded by compiler as "[a b]") -> env["a"] = val[0], env["b"] = val[1]
 ///
 /// The compiler encodes vector destructuring patterns as a string like `"[k1 k2]"`.
 /// We detect this by the leading `[` and parse the names out.
@@ -284,7 +284,7 @@ fn eval_vector(elements: &[CompiledExpr], env: &mut Env) -> Result<Value, SheafE
         return Ok(Value::List(vec![]));
     }
 
-    // Check if all elements are numeric → produce a Tensor (always F32 by default)
+    // Check if all elements are numeric -> produce a Tensor (always F32 by default)
     let all_numeric = vals.iter().all(|v| matches!(v, Value::Int(_) | Value::Float(_)));
     if all_numeric {
         let data: Vec<f32> = vals.iter().map(|v| v.to_f64().unwrap() as f32).collect();
@@ -292,7 +292,7 @@ fn eval_vector(elements: &[CompiledExpr], env: &mut Env) -> Result<Value, SheafE
         return Ok(Value::tensor_f32(arr));
     }
 
-    // Check if all elements are vectors/tensors of same shape → produce a 2D+ tensor
+    // Check if all elements are vectors/tensors of same shape -> produce a 2D+ tensor
     let all_tensors = vals.iter().all(|v| matches!(v, Value::Tensor { .. }));
     if all_tensors {
         let shapes: Vec<_> = vals.iter().map(|v| match v {
@@ -471,36 +471,61 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
         // and exposes the full call tree
         #[cfg(iree_runtime)]
         if env.tracer.is_none() {
-            // VMFB dispatch: pure compiled functions run via IREE
+            // VMFB dispatch: try compiled version first
             if let Some(result) = try_iree_dispatch(&func_def, &pos_args, env) {
                 if let Some(ref mut p) = env.profiler { p.exit(); }
                 return result;
             }
 
-            // JIT: try to compile on first call if no VMFB exists
-            if func_def.vmfb_session_idx.is_none() {
-                if let Some(jit) = &mut env.jit_compiler {
-                    if let Some((session_idx, sig)) = jit.try_jit_compile(
-                        &func_def,
-                        &pos_args,
-                        &env.registry,
-                        &mut env.vmfb_sessions,
-                    ) {
-                        if let Some(fd) = env.registry.get_mut(name) {
-                            fd.vmfb_session_idx = Some(session_idx);
-                            fd.signature = Some(sig);
-                        }
-                        let func_def = env.registry.get(name).unwrap().clone();
-                        if let Some(result) = try_iree_dispatch(&func_def, &pos_args, env) {
-                            if let Some(ref mut p) = env.profiler { p.exit(); }
-                            return result;
-                        }
+            // Dispatch failed: either no compiled version, or shape/tensor mismatch.
+            let was_stale = func_def.vmfb_session_idx.is_some();
+            if was_stale {
+                // Clear stale session so JIT recompiles for current arg shapes.
+                if let Some(fd) = env.registry.get_mut(name) {
+                    fd.vmfb_session_idx = None;
+                    fd.signature = None;
+                }
+            }
+
+            let mut recompiled = false;
+            if let Some(jit) = &mut env.jit_compiler {
+                if let Some((session_idx, sig)) = jit.try_jit_compile(
+                    &func_def,
+                    &pos_args,
+                    &env.registry,
+                    &mut env.vmfb_sessions,
+                ) {
+                    if let Some(fd) = env.registry.get_mut(name) {
+                        fd.vmfb_session_idx = Some(session_idx);
+                        fd.signature = Some(sig);
+                    }
+                    recompiled = true;
+                    let func_def = env.registry.get(name).unwrap().clone();
+                    if let Some(result) = try_iree_dispatch(&func_def, &pos_args, env) {
+                        if let Some(ref mut p) = env.profiler { p.exit(); }
+                        return result;
                     }
                 }
             }
+
+            // Had a compiled version but recompilation failed -> hard error
+            if was_stale && !recompiled {
+                if let Some(ref mut p) = env.profiler { p.exit(); }
+                return Err(runtime_error(format!(
+                    "'{}': argument shapes changed and recompilation failed", func_def.name
+                )));
+            }
+
+            // Recompiled but dispatch still fails -> hard error
+            if recompiled {
+                if let Some(ref mut p) = env.profiler { p.exit(); }
+                return Err(runtime_error(format!(
+                    "'{}': compiled but IREE dispatch failed", func_def.name
+                )));
+            }
         }
 
-        // Fallback: interpret
+        // Interpret (only reached when no VMFB exists yet, i.e. first-time tracing)
         if let Some(ref body) = func_def.body_compiled {
             let tracing = env.tracer.as_ref().map_or(false, |t| t.is_active(name));
             if tracing {
@@ -527,6 +552,12 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
 
             if let Some(ref mut p) = env.profiler { p.exit(); }
             return result;
+        }
+
+        // If body compilation failed, report the original error
+        if let Some(ref err) = func_def.compile_error {
+            if let Some(ref mut p) = env.profiler { p.exit(); }
+            return Err(err.clone());
         }
 
         if let Some(ref mut p) = env.profiler { p.exit(); }
@@ -988,11 +1019,11 @@ fn eval_flatten(args: &[Value]) -> Result<Value, SheafError> {
     let mut leaves = Vec::new();
     flatten_leaves(&args[0], &mut leaves);
     // Returns (leaves_list, reconstruct_fn), we return a list of [leaves, nil] for now
-    // The test only uses (first (flatten params)) → the leaves list
+    // The test only uses (first (flatten params)) -> the leaves list
     Ok(Value::List(vec![Value::List(leaves), Value::Nil]))
 }
 
-/// (vmap f) or (vmap f in-axes) → returns a vmapped function.
+/// (vmap f) or (vmap f in-axes) -> returns a vmapped function.
 /// When called, slices inputs along the mapped axes, applies f to each slice, and stacks results.
 fn eval_vmap(args: &[Value], _env: &mut Env) -> Result<Value, SheafError> {
     if args.is_empty() || args.len() > 2 {
@@ -1081,7 +1112,7 @@ fn eval_vmap_call(
         };
         Ok(Value::Tensor { data: Arc::new(stacked), dtype })
     } else if results.iter().all(|r| matches!(r, Value::Float(_) | Value::Int(_))) {
-        // Scalar results → 1D tensor
+        // Scalar results -> 1D tensor
         let vals: Vec<f32> = results.iter().map(|r| match r {
             Value::Float(f) => *f,
             Value::Int(n) => *n as f32,
@@ -1095,7 +1126,7 @@ fn eval_vmap_call(
     }
 }
 
-/// (value-and-grad f) → returns a function that, given params, returns [loss, grad_params].
+/// (value-and-grad f) -> returns a function that, given params, returns [loss, grad_params].
 ///
 /// Gradient computed by central finite differences: grad[i] ≈ (f(p+h) - f(p-h)) / 2h
 /// Applied element-wise to every leaf tensor in the params pytree.
@@ -1121,7 +1152,7 @@ fn eval_value_and_grad_hof(args: &[Value], _env: &mut Env) -> Result<Value, Shea
 /// if the function body contains ops the AD engine cannot handle (get, reduce, etc.).
 fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Result<Value, SheafError> {
     // Try JIT compilation first: compile forward+backward into a single VMFB
-    // Skip when tracing — interpreter must run to expose the autodiff call tree
+    // Skip when tracing -- interpreter must run to expose the autodiff call tree
     #[cfg(iree_runtime)]
     if env.tracer.is_none() {
         if let Some(result) = try_jit_vag(func, params, env) {
@@ -1429,7 +1460,7 @@ fn zeros_like(val: &Value) -> Value {
 }
 
 /// Reduce a gradient tensor to match the parameter's shape.
-/// When an op broadcasts a param (e.g., bias [1] → [4,1]),
+/// When an op broadcasts a param (e.g., bias [1] -> [4,1]),
 /// the symbolic gradient has the broadcasted shape. Sum over
 /// the extra leading dimensions to get back to param shape.
 fn reduce_grad_to_param_shape(grad: &Value, param: &Value) -> Result<Value, SheafError> {
@@ -1441,8 +1472,8 @@ fn reduce_grad_to_param_shape(grad: &Value, param: &Value) -> Result<Value, Shea
                 return Ok(grad.clone());
             }
             // Sum over leading batch dimensions
-            // e.g., grad [4,1] + param [1] → sum axis 0 → [1]
-            // e.g., grad [4,2,1] + param [2,1] → sum axis 0 → [2,1]
+            // e.g., grad [4,1] + param [1] -> sum axis 0 -> [1]
+            // e.g., grad [4,2,1] + param [2,1] -> sum axis 0 -> [2,1]
             let g_ndim = g_shape.len();
             let p_ndim = p_shape.len();
             if g_ndim > p_ndim {
@@ -1544,28 +1575,11 @@ fn try_iree_dispatch(
 
     // Validate tensor count AND shapes before calling into IREE.
     // This prevents the C runtime from printing ugly diagnostics to stderr.
+    // No warning here -- the caller handles recompilation and warns only if that fails too.
     if !crate::runtime::iree_session::args_match_signature(args, &sig.param_types) {
-        let expected = crate::runtime::iree_session::count_signature_tensors(&sig.param_types);
-        let actual = crate::runtime::iree_session::count_arg_tensors(args);
-        if env.iree_mismatch_warned.insert(func_def.name.clone())
-            || crate::core::config::verbosity() >= 2
-        {
-            sheaf_msg!(
-                "warning: '{}' compiled for {} tensors but called with {} — falling back to interpreted",
-                func_def.name, expected, actual,
-            );
-        }
         return None;
     }
-    if let Err(mismatch) = crate::runtime::iree_session::check_shapes_match(args, &sig.param_types) {
-        if env.iree_mismatch_warned.insert(func_def.name.clone())
-            || crate::core::config::verbosity() >= 2
-        {
-            sheaf_msg!(
-                "warning: '{}': {}. Falling back to interpreted mode.",
-                func_def.name, mismatch,
-            );
-        }
+    if crate::runtime::iree_session::check_shapes_match(args, &sig.param_types).is_err() {
         return None;
     }
 
@@ -1573,10 +1587,10 @@ fn try_iree_dispatch(
     let result = match iree_session.call_typed_device(&full_name, args, &sig.return_type) {
         Ok(v) => v,
         Err(_e) => {
-            // Unexpected IREE error → fall back to interpreter with warning.
+            // Unexpected IREE error -> fall back to interpreter with warning.
             if env.iree_mismatch_warned.insert(format!("{}:call", func_def.name)) {
                 sheaf_msg!(
-                    "warning: '{}' JIT dispatch failed — falling back to interpreted: {}",
+                    "warning: '{}' JIT dispatch failed -- falling back to interpreted: {}",
                     func_def.name, _e,
                 );
             }
@@ -1712,7 +1726,7 @@ fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
         free_set.remove(k.as_str());
     }
 
-    // Sort for deterministic parameter ordering (avoids MLIR hash changes → cache misses)
+    // Sort for deterministic parameter ordering (avoids MLIR hash changes -> cache misses)
     let mut free: Vec<&str> = free_set.iter().map(|s| s.as_str()).collect();
     free.sort();
 
@@ -1802,7 +1816,7 @@ fn unpack_vag_result(result: &Value, original_params: &Value) -> Option<Value> {
         return None;
     }
 
-    // First element: loss (scalar tensor → Float)
+    // First element: loss (scalar tensor -> Float)
     let loss = match &elems[0] {
         Value::Tensor { data, .. } if data.len() == 1 => {
             Value::Float(*data.iter().next().unwrap())

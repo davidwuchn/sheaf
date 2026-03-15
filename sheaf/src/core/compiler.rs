@@ -103,6 +103,8 @@ pub struct FunctionDef {
     /// Known parameter types from annotations (shape annotations + traced layouts).
     /// Used by the tracing compiler to create dummy inputs.
     pub known_param_types: Vec<(String, crate::compiler::stablehlo::StableHLOType)>,
+    /// If body compilation failed, store the error for deferred reporting.
+    pub compile_error: Option<SheafError>,
 }
 
 impl FunctionDef {
@@ -129,7 +131,7 @@ fn lower_quasiquote(node: &SheafValue) -> SheafValue {
             let mut result = Vec::new();
             for e in elems {
                 if let SheafValue::UnquoteSplicing(inner, _) = e {
-                    // ~@expr — the inner expression should produce a list at runtime;
+                    // ~@expr -- the inner expression should produce a list at runtime;
                     // for now just lower it as a single element (covers CLEVR usage)
                     result.push(lower_quasiquote(inner));
                 } else {
@@ -321,7 +323,7 @@ impl CompilerContext {
                         None => self.compile_function_call(elements, loc),
                     }
                 } else {
-                    // Head is not a symbol — compile it and treat as lambda call.
+                    // Head is not a symbol -- compile it and treat as lambda call.
                     // e.g. ((fn [x] (+ x 1)) 10)
                     let callee = self.compile(&elements[0])?;
                     let call_args: SheafResult<Vec<CompiledExpr>> =
@@ -533,7 +535,7 @@ pub enum CompiledExpr {
         /// Sequence of indices for nested tuple access
         indices: Vec<usize>,
     },
-    /// Anonymous function (lambda). Pure — captures no external state.
+    /// Anonymous function (lambda). Pure -- captures no external state.
     /// Always inlined at call sites; never emitted as a separate MLIR function.
     ///
     /// Corresponds to (fn [params] body) in Sheaf.
@@ -551,7 +553,7 @@ pub enum CompiledExpr {
     },
     /// Deferred value-and-grad computation.
     /// Records the intent to differentiate a function; codegen or interpreter handles execution.
-    /// shape_config stores raw (param_name, dims) pairs — no StableHLOType dependency.
+    /// shape_config stores raw (param_name, dims) pairs -- no StableHLOType dependency.
     ValueAndGrad {
         fn_name: String,
         src_fn_name: String,
@@ -911,7 +913,7 @@ mod tests {
         println!("grad(linear, W) = {:?}", result);
 
         // Result should be a FunctionCall (matmul of transpose(x) @ upstream_grad)
-        // After simplification:  (@ (transpose x) 1.0)  + 0.0  →  (@ (transpose x) 1.0)
+        // After simplification:  (@ (transpose x) 1.0)  + 0.0  ->  (@ (transpose x) 1.0)
         assert!(
             matches!(result, CompiledExpr::FunctionCall { .. }),
             "Expected FunctionCall (matmul), got: {:?}",
@@ -951,7 +953,7 @@ mod tests {
         println!("grad(linear, b) = {:?}", result);
 
         // After simplify: grad of (x @ W) wrt b = 0.0, grad of b wrt b = 1.0
-        // Add(0.0, 1.0) → 1.0
+        // Add(0.0, 1.0) -> 1.0
         assert!(
             matches!(result, CompiledExpr::Float(f) if f == 1.0),
             "Expected Float(1.0), got: {:?}",

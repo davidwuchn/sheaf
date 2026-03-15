@@ -32,7 +32,7 @@ impl SpecialForm for DefnForm {
         // Extract parameter names, handling typed params:
         //   - symbol: simple param  e.g. `x`
         //   - (p :as TypeName): typed param
-        //   - (x [4 2]): shape-annotated param → tensor<4x2xf32>
+        //   - (x [4 2]): shape-annotated param -> tensor<4x2xf32>
         let mut params: Vec<String> = Vec::new();
         let mut type_annotations: Vec<(String, String)> = Vec::new(); // (param, type_name)
         let mut shape_annotations: Vec<(String, Vec<i64>)> = Vec::new(); // (param, shape)
@@ -64,7 +64,7 @@ impl SpecialForm for DefnForm {
                         params.push(pname.to_string());
                         type_annotations.push((pname.to_string(), type_name.to_string()));
                     } else if elems.len() == 2 {
-                        // (x [4 2]) — shape annotation
+                        // (x [4 2]) -- shape annotation
                         let pname = expect_symbol(&elems[0], "shape-annotated param name", inner_loc)?;
                         let shape = match &elems[1] {
                             SheafValue::Vector(dims, dim_loc) => {
@@ -132,7 +132,7 @@ impl SpecialForm for DefnForm {
         let body_ast = if args.len() - body_start == 1 {
             args[body_start].clone()
         } else {
-            // Multiple body forms → implicit do
+            // Multiple body forms -> implicit do
             let mut do_forms = vec![SheafValue::Symbol("do".to_string(), loc.clone())];
             do_forms.extend(args[body_start..].iter().cloned());
             SheafValue::List(do_forms, loc.clone())
@@ -162,7 +162,7 @@ impl SpecialForm for DefnForm {
         // Restore local scope (must happen even if compile failed)
         compiler.local_vars = saved_locals;
 
-        let (body_compiled_opt, signature_opt, known_param_types) = match compile_result {
+        let (body_compiled_opt, signature_opt, known_param_types, compile_err) = match compile_result {
             Ok(body_compiled) => {
                 // Build known param types from type and shape annotations
                 let mut known_param_types: Vec<(
@@ -227,11 +227,12 @@ impl SpecialForm for DefnForm {
                     }
                 }
 
-                (Some(body_compiled), signature, known_param_types)
+                (Some(body_compiled), signature, known_param_types, None)
             }
-            Err(_) => {
-                // Body compilation failed — register as AST-only function
-                (None, None, vec![])
+            Err(e) => {
+                // Body compilation failed -- register as AST-only function
+                // but store the error for deferred reporting at call site.
+                (None, None, vec![], Some(e))
             }
         };
 
@@ -246,6 +247,7 @@ impl SpecialForm for DefnForm {
                 signature: signature_opt,
                 vmfb_session_idx: None,
                 known_param_types,
+                compile_error: compile_err,
             },
         );
 
@@ -313,7 +315,7 @@ impl SpecialForm for LetForm {
                             SheafValue::Symbol(n.clone(), inner_loc.clone()),
                         );
                     }
-                    // Encode the pattern as "[a b c]" — interpreter decodes it
+                    // Encode the pattern as "[a b c]" -- interpreter decodes it
                     let pattern_key = format!("[{}]", sym_names.join(" "));
                     compiled_bindings.push((pattern_key, compiled_value));
                 }
@@ -443,7 +445,7 @@ impl SpecialForm for FnForm {
         let body = if args.len() == 2 {
             compiler.compile(&args[1])?
         } else {
-            // Multiple body expressions → implicit do
+            // Multiple body expressions -> implicit do
             let exprs: SheafResult<Vec<CompiledExpr>> =
                 args[1..].iter().map(|e| compiler.compile(e)).collect();
             CompiledExpr::Do(exprs?)

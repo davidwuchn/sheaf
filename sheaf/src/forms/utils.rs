@@ -59,9 +59,9 @@ impl SpecialForm for GetInForm {
         &self,
         compiler: &mut CompilerContext,
         args: &[SheafValue],
-        _loc: &SourceLocation,
+        loc: &SourceLocation,
     ) -> SheafResult<CompiledExpr> {
-        // Desugar (get-in m [:k1 :k2 :k3]) → (get (get (get m :k1) :k2) :k3)
+        // Desugar (get-in m [:k1 :k2 :k3]) -> (get (get (get m :k1) :k2) :k3)
         if args.len() == 2 {
             if let SheafValue::Vector(keys, _) = &args[1] {
                 let mut result = compiler.compile(&args[0])?;
@@ -70,7 +70,7 @@ impl SpecialForm for GetInForm {
                     result = CompiledExpr::FunctionCall {
                         name: "get".to_string(),
                         args: vec![result, compiled_key],
-                        loc: None,
+                        loc: Some(loc.clone()),
                     };
                 }
                 return Ok(result);
@@ -79,7 +79,7 @@ impl SpecialForm for GetInForm {
         // Fallback: compile as function call
         let compiled: SheafResult<Vec<CompiledExpr>> =
             args.iter().map(|a| compiler.compile(a)).collect();
-        Ok(CompiledExpr::FunctionCall { name: "get-in".to_string(), args: compiled?, loc: None })
+        Ok(CompiledExpr::FunctionCall { name: "get-in".to_string(), args: compiled?, loc: Some(loc.clone()) })
     }
 }
 
