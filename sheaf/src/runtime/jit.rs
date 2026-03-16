@@ -427,32 +427,9 @@ impl JitCompiler {
             }
         };
         if let Err(e) = session.load_vmfb(vmfb_data) {
-            if target_backend != "llvm-cpu" {
-                sheaf_msg!("sheaf: {} backend failed for '{}', falling back to cpu", target_backend, name);
-                let _ = std::fs::remove_file(&cached_vmfb);
-                self.target_backend = "llvm-cpu".to_string();
-                let cpu_data = match self.run_iree_compile(&iree_compile, name, &mlir, "llvm-cpu") {
-                    Some(d) => d,
-                    None => {
-                        self.jit_fail(name, "compilation failed on all backends");
-                        return None;
-                    }
-                };
-                session = match crate::runtime::iree_session::IreeSession::new() {
-                    Ok(s) => s,
-                    Err(_) => {
-                        self.jit_fail(name, "JIT engine init failed on all backends");
-                        return None;
-                    }
-                };
-                if session.load_vmfb(cpu_data).is_err() {
-                    self.jit_fail(name, "JIT load failed on all backends");
-                    return None;
-                }
-            } else {
-                self.jit_fail(name, &format!("JIT load: {}", e));
-                return None;
-            }
+            let _ = std::fs::remove_file(&cached_vmfb);
+            self.jit_fail(name, &format!("JIT load: {}", e));
+            return None;
         }
 
         let session_idx = vmfb_sessions.len();
@@ -1004,32 +981,9 @@ impl JitCompiler {
             }
         };
         if let Err(e) = session.load_vmfb(vmfb_data) {
-            if backend != "llvm-cpu" {
-                sheaf_msg!("sheaf: {} backend failed for value-and-grad, falling back to cpu", backend);
-                let _ = std::fs::remove_file(&cached_vmfb);
-                self.target_backend = "llvm-cpu".to_string();
-                let cpu_data = match self.run_iree_compile(&iree_compile, "value_and_grad", &mlir, "llvm-cpu") {
-                    Some(d) => d,
-                    None => {
-                        self.jit_fail(&vag_key, "compilation failed on all backends");
-                        return None;
-                    }
-                };
-                session = match crate::runtime::iree_session::IreeSession::new() {
-                    Ok(s) => s,
-                    Err(_) => {
-                        self.jit_fail(&vag_key, "JIT engine init failed");
-                        return None;
-                    }
-                };
-                if session.load_vmfb(cpu_data).is_err() {
-                    self.jit_fail(&vag_key, "JIT load failed on all backends");
-                    return None;
-                }
-            } else {
-                self.jit_fail(&vag_key, &format!("JIT load: {}", e));
-                return None;
-            }
+            let _ = std::fs::remove_file(&cached_vmfb);
+            self.jit_fail(&vag_key, &format!("JIT load: {}", e));
+            return None;
         }
 
         let session_idx = vmfb_sessions.len();
@@ -1040,83 +994,66 @@ impl JitCompiler {
         Some(result)
     }
 
-    /// Run iree-compile on MLIR source, with automatic CPU fallback.
-    /// Returns compiled VMFB bytes, or None if all backends fail.
-    fn run_iree_compile(&mut self, iree_compile: &str, name: &str, mlir: &str, backend: &str) -> Option<Vec<u8>> {
-        let backends_to_try = if backend != "llvm-cpu" {
-            vec![backend, "llvm-cpu"]
-        } else {
-            vec![backend]
-        };
-
-        for (i, try_backend) in backends_to_try.iter().enumerate() {
-            if i > 0 {
-                sheaf_msg!("sheaf: {} backend failed for '{}', falling back to cpu", backend, name);
-            }
-
-            if crate::core::config::verbosity() >= 1 {
-                sheaf_msg!("jit: compiling {} [{}]...", name, try_backend);
-            }
-
-            let tmp_dir = std::env::temp_dir();
-            let stamp = std::process::id();
-            let safe_name = name.replace('?', "_q").replace('!', "_b");
-            let mlir_path = tmp_dir.join(format!("sheaf-jit-{}-{}.mlir", safe_name, stamp));
-            let vmfb_path = tmp_dir.join(format!("sheaf-jit-{}-{}.vmfb", safe_name, stamp));
-
-            if std::fs::write(&mlir_path, mlir).is_err() {
-                eprintln!("sheaf: failed to write temp MLIR, aborting");
-                std::process::exit(1);
-            }
-
-            let stderr_cfg = if crate::core::config::verbosity() >= 2 {
-                std::process::Stdio::inherit()
-            } else {
-                std::process::Stdio::null()
-            };
-
-            let mut cmd = std::process::Command::new(iree_compile);
-            cmd.arg(&mlir_path)
-                .arg(format!("--iree-hal-target-backends={}", try_backend))
-                .arg("--iree-opt-const-eval=false")
-                .arg("-o")
-                .arg(&vmfb_path)
-                .stderr(stderr_cfg);
-            if *try_backend == "metal-spirv" {
-                cmd.arg("--iree-metal-compile-to-metallib=false");
-            }
-            if *try_backend == "llvm-cpu" {
-                cmd.arg("--iree-llvmcpu-target-cpu=host");
-                cmd.arg("--iree-llvmcpu-enable-ukernels=all");
-            }
-            let status = cmd.status();
-
-            if crate::core::config::verbosity() >= 2 {
-                let debug_mlir = format!("__sheaf__/{}-debug.mlir", safe_name);
-                let _ = std::fs::rename(&mlir_path, &debug_mlir);
-                sheaf_msg!("jit: {} | saved {}", name, debug_mlir);
-            } else {
-                let _ = std::fs::remove_file(&mlir_path);
-            }
-
-            let ok = match &status {
-                Ok(s) => s.success(),
-                Err(_) => false,
-            };
-
-            if ok {
-                if let Ok(data) = std::fs::read(&vmfb_path) {
-                    let _ = std::fs::remove_file(&vmfb_path);
-                    if i > 0 {
-                        // CPU fallback succeeded — remember for future functions
-                        self.target_backend = "llvm-cpu".to_string();
-                    }
-                    return Some(data);
-                }
-            }
-            let _ = std::fs::remove_file(&vmfb_path);
+    /// Run iree-compile on MLIR source for the given backend.
+    /// Returns compiled VMFB bytes, or None if compilation fails.
+    fn run_iree_compile(&self, iree_compile: &str, name: &str, mlir: &str, backend: &str) -> Option<Vec<u8>> {
+        if crate::core::config::verbosity() >= 1 {
+            sheaf_msg!("jit: compiling {} [{}]...", name, backend);
         }
 
+        let tmp_dir = std::env::temp_dir();
+        let stamp = std::process::id();
+        let safe_name = name.replace('?', "_q").replace('!', "_b");
+        let mlir_path = tmp_dir.join(format!("sheaf-jit-{}-{}.mlir", safe_name, stamp));
+        let vmfb_path = tmp_dir.join(format!("sheaf-jit-{}-{}.vmfb", safe_name, stamp));
+
+        if std::fs::write(&mlir_path, mlir).is_err() {
+            eprintln!("sheaf: failed to write temp MLIR, aborting");
+            std::process::exit(1);
+        }
+
+        let stderr_cfg = if crate::core::config::verbosity() >= 2 {
+            std::process::Stdio::inherit()
+        } else {
+            std::process::Stdio::null()
+        };
+
+        let mut cmd = std::process::Command::new(iree_compile);
+        cmd.arg(&mlir_path)
+            .arg(format!("--iree-hal-target-backends={}", backend))
+            .arg("--iree-opt-const-eval=false")
+            .arg("-o")
+            .arg(&vmfb_path)
+            .stderr(stderr_cfg);
+        if backend == "metal-spirv" {
+            cmd.arg("--iree-metal-compile-to-metallib=false");
+        }
+        if backend == "llvm-cpu" {
+            cmd.arg("--iree-llvmcpu-target-cpu=host");
+            cmd.arg("--iree-llvmcpu-enable-ukernels=all");
+        }
+        let status = cmd.status();
+
+        if crate::core::config::verbosity() >= 2 {
+            let debug_mlir = format!("__sheaf__/{}-debug.mlir", safe_name);
+            let _ = std::fs::rename(&mlir_path, &debug_mlir);
+            sheaf_msg!("jit: {} | saved {}", name, debug_mlir);
+        } else {
+            let _ = std::fs::remove_file(&mlir_path);
+        }
+
+        let ok = match &status {
+            Ok(s) => s.success(),
+            Err(_) => false,
+        };
+
+        if ok {
+            if let Ok(data) = std::fs::read(&vmfb_path) {
+                let _ = std::fs::remove_file(&vmfb_path);
+                return Some(data);
+            }
+        }
+        let _ = std::fs::remove_file(&vmfb_path);
         None
     }
 

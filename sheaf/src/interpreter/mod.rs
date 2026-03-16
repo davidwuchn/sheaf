@@ -1148,8 +1148,8 @@ fn eval_value_and_grad_hof(args: &[Value], _env: &mut Env) -> Result<Value, Shea
 
 /// Evaluate a value-and-grad HOF call.
 ///
-/// Tries symbolic autodiff first (exact, fast). Falls back to finite differences
-/// if the function body contains ops the AD engine cannot handle (get, reduce, etc.).
+/// Tries JIT compilation first, then symbolic autodiff with tracing.
+/// Raises a fatal error if differentiation fails — no silent fallback.
 fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Result<Value, SheafError> {
     // Try JIT compilation first: compile forward+backward into a single VMFB
     // Skip when tracing -- interpreter must run to expose the autodiff call tree
@@ -1159,7 +1159,7 @@ fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Resu
             Some(result) => return result,
             None => {
                 if crate::core::config::verbosity() >= 1 {
-                    sheaf_msg!("jit: value-and-grad JIT unavailable, falling back to symbolic autodiff");
+                    sheaf_msg!("jit: value-and-grad JIT unavailable, using symbolic autodiff");
                 }
             }
         }
@@ -1204,14 +1204,10 @@ fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Resu
                 match trace_expr(&inlined, env, &mut leaf_map) {
                     Ok(traced) => {
                         if !contains_undiffable_ops(&traced) {
-                            // Forward pass: call the function normally
-                            // (not via eval on inlined, which may have
-                            // lambda params not in scope)
                             env.pop_scope();
                             let loss_val = call_function(func, &[params.clone()], env)?;
                             let loss = scalar_from_value(&loss_val)?;
 
-                            // Re-enter scope for gradient evaluation
                             env.push_scope();
                             for (name, val) in closure {
                                 env.set(name, val.clone());
@@ -1221,115 +1217,32 @@ fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Resu
                                 env.set(sym, val.clone());
                             }
 
-                            match build_grad_from_leaves(
+                            let grad_tree = build_grad_from_leaves(
                                 &traced, params, &leaf_map.leaves, env,
-                            ) {
-                                Ok(grad_tree) => {
-                                    env.pop_scope();
-                                    return Ok(Value::List(vec![Value::Float(loss), grad_tree]));
-                                }
-                                Err(e) => {
-                                    // Don't pop scope here; the outer block handles it
-                                    sheaf_msg!("warning: value-and-grad: gradient eval failed ({:?}), falling back to finite differences", e);
-                                }
-                            }
+                            ).map_err(|e| {
+                                env.pop_scope();
+                                runtime_error(format!("value-and-grad: gradient evaluation failed: {}", e))
+                            })?;
+                            env.pop_scope();
+                            return Ok(Value::List(vec![Value::Float(loss), grad_tree]));
                         }
                         env.pop_scope();
-                        sheaf_msg!("warning: value-and-grad: tracing incomplete, falling back to finite differences");
+                        return Err(runtime_error(
+                            "value-and-grad: tracing produced undifferentiable ops (this is a bug in the autodiff engine)"
+                        ));
                     }
                     Err(e) => {
                         env.pop_scope();
-                        sheaf_msg!("warning: value-and-grad: tracing failed ({:?}), falling back to finite differences", e);
+                        return Err(runtime_error(format!(
+                            "value-and-grad: tracing failed: {}", e
+                        )));
                     }
                 }
             }
         }
     }
 
-    eval_vag_finite_diff(func, params, env)
-}
-
-/// Finite-difference fallback for value-and-grad.
-fn eval_vag_finite_diff(func: &Value, params: &Value, env: &mut Env) -> Result<Value, SheafError> {
-    let h = 1e-4_f32;
-
-    // Evaluate loss at params
-    let loss_val = call_function(func, &[params.clone()], env)?;
-    let loss = match &loss_val {
-        Value::Float(x) => *x,
-        Value::Int(n) => *n as f32,
-        Value::Tensor { data, .. } => data.first().copied().unwrap_or(0.0f32),
-        _ => return Err(runtime_error("value-and-grad: loss function must return a scalar")),
-    };
-
-    // Count leaves
-    let n_leaves = {
-        let mut count = 0usize;
-        fn count_leaves_inner(val: &Value, count: &mut usize) {
-            match val {
-                Value::Tensor { data, .. } => *count += data.len(),
-                Value::Dict(map) => map.values().for_each(|v| count_leaves_inner(v, count)),
-                Value::Float(_) | Value::Int(_) => *count += 1,
-                _ => {}
-            }
-        }
-        count_leaves_inner(params, &mut count);
-        count
-    };
-
-    // Central finite differences for each leaf
-    let mut grads = vec![0.0f32; n_leaves];
-    for i in 0..n_leaves {
-        let p_plus = perturb_leaf(params, i, h);
-        let p_minus = perturb_leaf(params, i, -h);
-        let f_plus = call_function(func, &[p_plus], env)?;
-        let f_minus = call_function(func, &[p_minus], env)?;
-        let fp = scalar_from_value(&f_plus)?;
-        let fm = scalar_from_value(&f_minus)?;
-        grads[i] = (fp - fm) / (2.0 * h);
-    }
-
-    let mut counter = 0;
-    let grad_tree = build_grad_tree(params, &grads, &mut counter);
-
-    Ok(Value::List(vec![Value::Float(loss), grad_tree]))
-}
-
-fn perturb_leaf(val: &Value, leaf_idx: usize, delta: f32) -> Value {
-    let mut counter = 0usize;
-    perturb_leaf_inner(val, leaf_idx, delta, &mut counter)
-}
-
-fn perturb_leaf_inner(val: &Value, leaf_idx: usize, delta: f32, counter: &mut usize) -> Value {
-    match val {
-        Value::Tensor { data, dtype } => {
-            let n = data.len();
-            if *counter <= leaf_idx && leaf_idx < *counter + n {
-                let local = leaf_idx - *counter;
-                let mut new_data = (**data).clone();
-                new_data.as_slice_mut().unwrap()[local] += delta;
-                *counter += n;
-                Value::Tensor { data: Arc::new(new_data), dtype: *dtype }
-            } else {
-                *counter += n;
-                val.clone()
-            }
-        }
-        Value::Dict(map) => Value::Dict(
-            map.iter().map(|(k, v)| (k.clone(), perturb_leaf_inner(v, leaf_idx, delta, counter))).collect()
-        ),
-        Value::Float(x) => {
-            let result = if *counter == leaf_idx { Value::Float(*x + delta) } else { val.clone() };
-            *counter += 1;
-            result
-        }
-        Value::Int(n) => {
-            let result = if *counter == leaf_idx { Value::Float(*n as f32 + delta) } else { val.clone() };
-            *counter += 1;
-            result
-        }
-        _ => val.clone(),
-    }
+    Err(runtime_error("value-and-grad: cannot differentiate this function"))
 }
 
 fn scalar_from_value(val: &Value) -> Result<f32, SheafError> {
@@ -1340,29 +1253,6 @@ fn scalar_from_value(val: &Value) -> Result<f32, SheafError> {
         Value::Tensor { data, .. } => data.first().copied()
             .ok_or_else(|| runtime_error("value-and-grad: empty tensor result")),
         _ => Err(runtime_error("value-and-grad: loss must return a scalar")),
-    }
-}
-
-fn build_grad_tree(params: &Value, grads: &[f32], counter: &mut usize) -> Value {
-    match params {
-        Value::Tensor { data, dtype } => {
-            let n = data.len();
-            let slice = grads[*counter..*counter + n].to_vec();
-            *counter += n;
-            Value::Tensor {
-                data: Arc::new(ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(data.shape()), slice).unwrap()),
-                dtype: *dtype,
-            }
-        }
-        Value::Dict(map) => Value::Dict(
-            map.iter().map(|(k, v)| (k.clone(), build_grad_tree(v, grads, counter))).collect()
-        ),
-        Value::Float(_) | Value::Int(_) => {
-            let g = grads[*counter];
-            *counter += 1;
-            Value::Float(g)
-        }
-        _ => params.clone(),
     }
 }
 
