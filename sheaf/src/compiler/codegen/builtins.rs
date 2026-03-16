@@ -423,11 +423,27 @@ impl CodeGenerator {
                 })
             }
         }
+        // random-key: (random-key seed) -> tensor<2xf32>
+        else if name == "random-key" && args.len() == 1 {
+            if let CompiledExpr::Integer(seed) = &args[0] {
+                let (reg, ty) = tensor_ops::emit_random_key(&mut self.emitter, *seed);
+                Ok((reg, ty))
+            } else if let CompiledExpr::Float(f) = &args[0] {
+                let (reg, ty) = tensor_ops::emit_random_key(&mut self.emitter, *f as i64);
+                Ok((reg, ty))
+            } else {
+                Err(SheafError::Compile {
+                    message: "random-key expects an integer seed".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })
+            }
+        }
         // random-normal: (random-normal key [M N])
         else if name == "random-normal" && args.len() == 2 {
             if let CompiledExpr::Vector(shape_elems) = &args[1] {
                 let shape = self.parse_shape_vec(shape_elems)?;
-                let (reg, ty) = tensor_ops::emit_random_normal(&mut self.emitter, &shape);
+                let (key_reg, key_ty) = self.generate(&args[0])?;
+                let (reg, ty) = self.emitter.emit_random_normal(&key_reg, &key_ty, &shape);
                 Ok((reg, ty))
             } else {
                 Err(SheafError::Compile {
@@ -1435,10 +1451,51 @@ impl CodeGenerator {
             };
             Ok(self.emitter.emit_top_k(&input_reg, &input_ty, k))
         }
-        // random-split: (random-split key) or (random-split key 2) -> [key1, key2]
-        else if name == "random-split" && (args.len() == 1 || (args.len() == 2 && matches!(&args[1], CompiledExpr::Integer(2)))) {
+        // random-randint: (random-randint key [M N] low high)
+        else if name == "random-randint" && args.len() == 4 {
+            if let CompiledExpr::Vector(shape_elems) = &args[1] {
+                let shape = self.parse_shape_vec(shape_elems)?;
+                let (key_reg, key_ty) = self.generate(&args[0])?;
+                let low = match &args[2] {
+                    CompiledExpr::Integer(n) => *n,
+                    CompiledExpr::Float(f) => *f as i64,
+                    _ => return Err(SheafError::Compile {
+                        message: "random-randint: low must be an integer literal".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    }),
+                };
+                let high = match &args[3] {
+                    CompiledExpr::Integer(n) => *n,
+                    CompiledExpr::Float(f) => *f as i64,
+                    _ => return Err(SheafError::Compile {
+                        message: "random-randint: high must be an integer literal".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    }),
+                };
+                let (reg, ty) = self.emitter.emit_random_randint(&key_reg, &key_ty, &shape, low, high);
+                Ok((reg, ty))
+            } else {
+                Err(SheafError::Compile {
+                    message: "random-randint expects a vector shape argument".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })
+            }
+        }
+        // random-split: (random-split key) or (random-split key N) -> [key1, ..., keyN]
+        else if name == "random-split" && (args.len() == 1 || args.len() == 2) {
+            let n = if args.len() == 2 {
+                match &args[1] {
+                    CompiledExpr::Integer(n) => *n as usize,
+                    _ => return Err(SheafError::Compile {
+                        message: "random-split: N must be an integer literal".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    }),
+                }
+            } else {
+                2
+            };
             let (key_reg, key_ty) = self.generate(&args[0])?;
-            Ok(self.emitter.emit_random_split(&key_reg, &key_ty))
+            Ok(self.emitter.emit_random_split_n(&key_reg, &key_ty, n))
         }
         // choice: (choice key n :p probs) -> index
         else if name == "choice" {

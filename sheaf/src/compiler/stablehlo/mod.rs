@@ -930,8 +930,9 @@ impl StableHLOEmitter {
                         }
 
                         "random-normal" if elems.len() == 3 => {
+                            let (key_reg, key_ty) = self.compile_expr(&elems[1]);
                             let shape = self.parse_shape_vector(&elems[2]);
-                            self.emit_random_normal(&shape)
+                            self.emit_random_normal(&key_reg, &key_ty, &shape)
                         }
 
                         _ => panic!("Unsupported operation: {}", op),

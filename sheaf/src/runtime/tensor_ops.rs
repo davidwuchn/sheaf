@@ -17,14 +17,12 @@ pub fn emit_zeros(emitter: &mut StableHLOEmitter, shape: &[i64]) -> (Register, S
     emitter.emit_zeros(shape)
 }
 
-/// Emit random-normal tensor: (random-normal key [M N])
-/// For now, we emit a constant with small values (placeholder)
-/// TODO: Proper RNG with seed/key
-pub fn emit_random_normal(
+/// Emit random-key: integer seed -> tensor<2xf32> (opaque key)
+pub fn emit_random_key(
     emitter: &mut StableHLOEmitter,
-    shape: &[i64],
+    seed: i64,
 ) -> (Register, StableHLOType) {
-    emitter.emit_random_normal(shape)
+    emitter.emit_random_key(seed)
 }
 
 /// Emit ones tensor: (ones [M N]) -> tensor<MxNxf32>
