@@ -1149,7 +1149,7 @@ fn eval_value_and_grad_hof(args: &[Value], _env: &mut Env) -> Result<Value, Shea
 /// Evaluate a value-and-grad HOF call.
 ///
 /// Tries JIT compilation first, then symbolic autodiff with tracing.
-/// Raises a fatal error if differentiation fails — no silent fallback.
+/// Raises a fatal error if differentiation fails.
 fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Result<Value, SheafError> {
     // Try JIT compilation first: compile forward+backward into a single VMFB
     // Skip when tracing -- interpreter must run to expose the autodiff call tree

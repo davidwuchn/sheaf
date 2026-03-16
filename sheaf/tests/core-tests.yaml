@@ -158,10 +158,10 @@
   test: (relu [1.0 -2.0 3.0])
   expected: '[1. 0. 3.]'
 - name: leaky-relu
-  test: (leaky-relu -1.0)
+  test: (leaky-relu -1.0 0.01)
   expected: '-0.01'
 - name: leaky-relu
-  test: (leaky-relu [-1.0 2.0] :negative_slope 0.1)
+  test: (leaky-relu [-1.0 2.0] 0.1)
   expected: '[-0.1  2. ]'
 - name: sigmoid
   test: (sigmoid 0.0)

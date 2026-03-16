@@ -12,9 +12,10 @@
 (defn silu [x] (* x (sigmoid x)))
 
 (defn gelu [x]
-  (* 0.5 (* x (+ 1.0 (tanh (* 0.7978846 (+ x (* 0.044715 (** x 3)))))))))
+  (* 0.5 (* x (+ 1.0 (tanh (* 0.7978846 (+ x (* 0.044715 (* x (* x x))))))))))
 
-(defn leaky-relu [x] (+ (maximum x 0.0) (* 0.01 (minimum x 0.0))))
+(defn leaky-relu [x slope]
+  (+ (maximum x 0.0) (* slope (minimum x 0.0))))
 
 (defn selu [x]
   (let [alpha 1.6732632
@@ -58,7 +59,7 @@
   (let [eps 1e-6
         ;; RMS normalization: (x / RMS(x)) * gamma + beta
         ;; RMS = sqrt(mean(x^2) + eps)
-        mean-sq (mean (** x 2) :axis axis :keepdims)
+        mean-sq (mean (* x x) :axis axis :keepdims)
         rms (sqrt (+ mean-sq eps))
         gamma (get p :gamma)
         beta (get p :beta)]

@@ -334,14 +334,14 @@ Computes the Rectified Linear Unit activation function. It returns the element-w
 
 ### leaky-relu
 
-**Type:** function  
-**Signature:** `(leaky-relu x [:alpha a])`
+**Type:** function
+**Signature:** `(leaky-relu x slope)`
 
-Computes the Leaky Rectified Linear Unit activation function. Unlike standard ReLU, it allows a small non-zero gradient when the input is negative, defined as `alpha * x`. This prevents "dead" neurons during training.
+Computes the Leaky Rectified Linear Unit activation function. Unlike standard ReLU, it allows a small non-zero gradient when the input is negative, defined as `slope * x`. This prevents "dead" neurons during training.
 
 ```sheaf
-(leaky-relu -1.0)    ; => -0.01 (default negative_slope=0.01)
-(leaky-relu [-1.0 2.0] :negative_slope 0.1) ; => [-0.1  2. ]
+(leaky-relu -1.0 0.01)          ; => -0.01
+(leaky-relu [-1.0 2.0] 0.1)     ; => [-0.1  2. ]
 ```
 
 ---
