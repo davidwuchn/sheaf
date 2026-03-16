@@ -1588,7 +1588,7 @@ fn try_iree_dispatch(
         return None;
     }
 
-    let full_name = format!("module.{}", func_def.name.replace('-', "_"));
+    let full_name = format!("module.{}", func_def.name.replace('-', "_").replace('?', "_q").replace('!', "_b"));
     let result = match iree_session.call_typed_device(&full_name, args, &sig.return_type) {
         Ok(v) => v,
         Err(e) => {

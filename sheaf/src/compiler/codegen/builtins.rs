@@ -6,6 +6,7 @@
 use crate::compiler::stablehlo::{Register, StableHLOType};
 use crate::core::compiler::CompiledExpr;
 use crate::core::error::{SheafError, SheafResult};
+use crate::ast::SheafValue;
 use crate::runtime::{math_ops, nn_ops, tensor_ops};
 use super::CodeGenerator;
 
@@ -484,7 +485,30 @@ impl CodeGenerator {
         // reshape: (reshape tensor [M N])
         else if name == "reshape" && args.len() == 2 {
             let (operand_reg, operand_ty) = self.generate(&args[0])?;
-            if let CompiledExpr::Vector(shape_elems) = &args[1] {
+            let shape_elems_owned;
+            let shape_elems: &[CompiledExpr] = if let CompiledExpr::Vector(elems) = &args[1] {
+                elems
+            } else if let CompiledExpr::Quoted(val) = &args[1] {
+                if let SheafValue::Vector(elems, _) = val.as_ref() {
+                    shape_elems_owned = elems.iter().map(|e| match e {
+                        SheafValue::Integer(n, _) => CompiledExpr::Integer(*n),
+                        SheafValue::Float(f, _) => CompiledExpr::Float(*f),
+                        _ => CompiledExpr::Integer(0),
+                    }).collect::<Vec<_>>();
+                    &shape_elems_owned
+                } else {
+                    return Err(SheafError::Compile {
+                        message: "reshape expects a vector shape argument".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    });
+                }
+            } else {
+                return Err(SheafError::Compile {
+                    message: "reshape expects a vector shape argument".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                });
+            };
+            {
                 let mut new_shape = self.parse_shape_vec(shape_elems)?;
                 // Resolve -1 dimensions: infer from input total size
                 if let Some(neg_idx) = new_shape.iter().position(|&d| d < 0) {
@@ -501,11 +525,6 @@ impl CodeGenerator {
                     &new_shape,
                 );
                 Ok((reg, ty))
-            } else {
-                Err(SheafError::Compile {
-                    message: "reshape expects a vector shape argument".to_string(),
-                    location: crate::core::error::SourceLocation::unknown(),
-                })
             }
         }
         // transpose: (transpose tensor [1 0]) or (transpose tensor), default perm [1 0]

@@ -962,7 +962,7 @@ impl StableHLOEmitter {
 
     /// Sanitize function name for MLIR (replace dashes with underscores)
     fn sanitize_func_name(name: &str) -> String {
-        name.replace('-', "_")
+        name.replace('-', "_").replace('?', "_q").replace('!', "_b")
     }
 
     /// Generate a complete MLIR module with a function body already emitted

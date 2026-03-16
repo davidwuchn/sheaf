@@ -381,7 +381,8 @@ impl JitCompiler {
         let content_hash = format!("{:016x}", hasher.finish());
 
         let cache_dir = PathBuf::from("__sheaf__");
-        let cached_vmfb = cache_dir.join(format!("{}.vmfb", name));
+        let safe_name = name.replace('?', "_q").replace('!', "_b");
+        let cached_vmfb = cache_dir.join(format!("{}.vmfb", safe_name));
 
         // Check manifest for staleness (-vv forces recompile for full debug output)
         let force_recompile = crate::core::config::verbosity() >= 2;
@@ -1051,8 +1052,6 @@ impl JitCompiler {
         for (i, try_backend) in backends_to_try.iter().enumerate() {
             if i > 0 {
                 sheaf_msg!("sheaf: {} backend failed for '{}', falling back to cpu", backend, name);
-                // Remember the fallback so we don't retry for every function
-                self.target_backend = "llvm-cpu".to_string();
             }
 
             if crate::core::config::verbosity() >= 1 {
@@ -1061,8 +1060,9 @@ impl JitCompiler {
 
             let tmp_dir = std::env::temp_dir();
             let stamp = std::process::id();
-            let mlir_path = tmp_dir.join(format!("sheaf-jit-{}-{}.mlir", name, stamp));
-            let vmfb_path = tmp_dir.join(format!("sheaf-jit-{}-{}.vmfb", name, stamp));
+            let safe_name = name.replace('?', "_q").replace('!', "_b");
+            let mlir_path = tmp_dir.join(format!("sheaf-jit-{}-{}.mlir", safe_name, stamp));
+            let vmfb_path = tmp_dir.join(format!("sheaf-jit-{}-{}.vmfb", safe_name, stamp));
 
             if std::fs::write(&mlir_path, mlir).is_err() {
                 eprintln!("sheaf: failed to write temp MLIR, aborting");
@@ -1092,7 +1092,7 @@ impl JitCompiler {
             let status = cmd.status();
 
             if crate::core::config::verbosity() >= 2 {
-                let debug_mlir = format!("__sheaf__/{}-debug.mlir", name);
+                let debug_mlir = format!("__sheaf__/{}-debug.mlir", safe_name);
                 let _ = std::fs::rename(&mlir_path, &debug_mlir);
                 sheaf_msg!("jit: {} | saved {}", name, debug_mlir);
             } else {
@@ -1107,6 +1107,10 @@ impl JitCompiler {
             if ok {
                 if let Ok(data) = std::fs::read(&vmfb_path) {
                     let _ = std::fs::remove_file(&vmfb_path);
+                    if i > 0 {
+                        // CPU fallback succeeded — remember for future functions
+                        self.target_backend = "llvm-cpu".to_string();
+                    }
                     return Some(data);
                 }
             }
