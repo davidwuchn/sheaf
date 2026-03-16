@@ -227,6 +227,66 @@ impl CodeGenerator {
             .emit_get_tuple_element(tuple_reg, tuple_ty, index, elem_ty)
     }
 
+    /// Try to evaluate an expression to a compile-time constant.
+    /// Used for constant-folding `if` conditions (e.g. `(== (ndim x) 3)`).
+    fn try_const_eval(&self, expr: &CompiledExpr) -> Option<f64> {
+        match expr {
+            CompiledExpr::Integer(n) => Some(*n as f64),
+            CompiledExpr::Float(f) => Some(*f),
+            CompiledExpr::Boolean(b) => Some(if *b { 1.0 } else { 0.0 }),
+            CompiledExpr::FunctionCall { name, args, .. } => {
+                match name.as_str() {
+                    "ndim" if args.len() == 1 => {
+                        if let CompiledExpr::Symbol(sym) = &args[0] {
+                            let (_, ty) = self.bindings.get(sym.as_str())?;
+                            Some(ty.shape().len() as f64)
+                        } else {
+                            None
+                        }
+                    }
+                    "len" | "length" if args.len() == 1 => {
+                        if let CompiledExpr::FunctionCall { name: inner_name, args: inner_args, .. } = &args[0] {
+                            if inner_name == "shape" && inner_args.len() == 1 {
+                                if let CompiledExpr::Symbol(sym) = &inner_args[0] {
+                                    let (_, ty) = self.bindings.get(sym.as_str())?;
+                                    return Some(ty.shape().len() as f64);
+                                }
+                            }
+                        }
+                        None
+                    }
+                    "==" | "!=" | "<" | ">" | "<=" | ">=" if args.len() == 2 => {
+                        let a = self.try_const_eval(&args[0])?;
+                        let b = self.try_const_eval(&args[1])?;
+                        let result = match name.as_str() {
+                            "==" => (a - b).abs() < 1e-10,
+                            "!=" => (a - b).abs() >= 1e-10,
+                            "<" => a < b,
+                            ">" => a > b,
+                            "<=" => a <= b,
+                            ">=" => a >= b,
+                            _ => return None,
+                        };
+                        Some(if result { 1.0 } else { 0.0 })
+                    }
+                    "+" | "-" | "*" | "/" if args.len() == 2 => {
+                        let a = self.try_const_eval(&args[0])?;
+                        let b = self.try_const_eval(&args[1])?;
+                        Some(match name.as_str() {
+                            "+" => a + b,
+                            "-" => a - b,
+                            "*" => a * b,
+                            "/" => a / b,
+                            _ => return None,
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Generate StableHLO for a compiled expression
     pub fn generate(&mut self, expr: &CompiledExpr) -> SheafResult<(Register, StableHLOType)> {
         match expr {
@@ -416,6 +476,22 @@ impl CodeGenerator {
                 then_branch,
                 else_branch,
             } => {
+                // Constant-fold: if condition is compile-time known, only emit the taken branch.
+                // This avoids shape mismatches in select when branches have different types
+                // (e.g. `(if (== (ndim x) 3) (sum x :axis -2) x)` where branches differ in rank).
+                if let Some(const_val) = self.try_const_eval(condition) {
+                    let is_true = const_val.abs() > 1e-10;
+                    if is_true {
+                        return self.generate(then_branch);
+                    } else if let Some(else_expr) = else_branch {
+                        return self.generate(else_expr);
+                    } else {
+                        // if-without-else, condition false: return scalar 0
+                        let reg = self.emitter.emit_constant_f32(0.0);
+                        return Ok((reg, StableHLOType::ScalarF32));
+                    }
+                }
+
                 let (cond_reg, cond_ty) = self.generate(condition)?;
                 let (then_reg, then_ty) = self.generate(then_branch)?;
 

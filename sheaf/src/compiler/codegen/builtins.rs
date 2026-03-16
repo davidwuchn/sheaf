@@ -1010,9 +1010,23 @@ impl CodeGenerator {
                                         &operand_reg, &operand_ty, actual_idx, actual_idx + 1,
                                     );
                                     Ok((reg, ty))
+                                } else if let CompiledExpr::FunctionCall { name: range_name, args: range_args, .. } = &args[2] {
+                                    // (get tensor ... (range start end)) -> slice last axis
+                                    if (range_name == "range" || range_name == "arange") && range_args.len() == 2 {
+                                        if let (CompiledExpr::Integer(start), CompiledExpr::Integer(end)) = (&range_args[0], &range_args[1]) {
+                                            let (reg, ty) = self.emitter.emit_slice_last_axis(
+                                                &operand_reg, &operand_ty, *start, *end,
+                                            );
+                                            return Ok((reg, ty));
+                                        }
+                                    }
+                                    Err(SheafError::Compile {
+                                        message: "get with ellipsis: index must be integer or (range start end)".to_string(),
+                                        location: crate::core::error::SourceLocation::unknown(),
+                                    })
                                 } else {
                                     Err(SheafError::Compile {
-                                        message: "get with ellipsis: index must be integer".to_string(),
+                                        message: "get with ellipsis: index must be integer or (range start end)".to_string(),
                                         location: crate::core::error::SourceLocation::unknown(),
                                     })
                                 }
