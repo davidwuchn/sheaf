@@ -295,7 +295,7 @@ fn test_relu_vector() {
 
 #[test]
 fn test_leaky_relu_negative() {
-    assert_eq!(eval("(leaky-relu -1.0)"), "-0.01");
+    assert_eq!(eval("(leaky-relu -1.0 0.01)"), "-0.01");
 }
 
 #[test]

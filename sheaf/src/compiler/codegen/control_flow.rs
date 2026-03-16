@@ -295,6 +295,20 @@ impl CodeGenerator {
         };
 
         // Key layout for the elem parameter inherited from collection's layout.
+        // For a VecTuple (list of structs), the collection layout maps "0","1",... to indices.
+        // We need the layout of one *element*, not the collection itself.
+        // Helper: if a layout looks like a list (numeric keys), resolve to first child's layout.
+        let resolve_elem_layout = |list_layout: &std::collections::BTreeMap<String, usize>| -> Option<std::collections::BTreeMap<String, usize>> {
+            let first_key = list_layout.keys().next()?;
+            // If the first key parses as a number, this is a list layout; descend one level
+            if first_key.parse::<usize>().is_ok() {
+                self.tuple_key_layouts.get(first_key).cloned()
+            } else {
+                // Already an element layout (keys are field names like "attn", "ln_1")
+                Some(list_layout.clone())
+            }
+        };
+
         // Three resolution strategies:
         // 1. Symbol name lookup (e.g. "hidden" in standalone forward)
         // 2. Register-based lookup via layout_key_map (handles ANF-renamed vars)
@@ -302,12 +316,13 @@ impl CodeGenerator {
         let elem_layout = coll_sym
             .as_deref()
             .and_then(|s| self.tuple_key_layouts.get(s))
-            .cloned()
+            .and_then(|layout| resolve_elem_layout(layout))
             .or_else(|| {
                 // Strategy 2: the register produced by generate(coll) may have
                 // a layout key via layout_key_map (set by track_layout_key in GTE handler)
                 let layout_key = self.layout_key_map.get(&coll_reg)?;
-                self.tuple_key_layouts.get(layout_key).cloned()
+                let layout = self.tuple_key_layouts.get(layout_key)?;
+                resolve_elem_layout(layout)
             })
             .or_else(|| {
                 // Strategy 3: GetTupleElement collections (e.g. (get params :h))
@@ -317,9 +332,7 @@ impl CodeGenerator {
                         cur = self.idx_to_key.get(&(cur, idx))?.clone();
                     }
                     let list_layout = self.tuple_key_layouts.get(&cur)?;
-                    let first_child_key = list_layout.values().next()
-                        .and_then(|_| list_layout.keys().next())?;
-                    self.tuple_key_layouts.get(first_child_key).cloned()
+                    resolve_elem_layout(list_layout)
                 } else {
                     None
                 }
