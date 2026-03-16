@@ -122,9 +122,12 @@ impl StableHLOEmitter {
         (result, operand_ty)
     }
 
-    /// Emit select: pred * on_true + (1 - pred) * on_false
-    /// Pred is f32 (0.0/1.0). No i1 involved — avoids IREE SPIRV crash.
-    /// Safe when on_false is finite (e.g. -1e10 for attention masks).
+    /// Emit select using native stablehlo.select with i1 predicate.
+    /// Pred is f32 (0.0/1.0), converted to i1 via compare NE 0.0.
+    ///
+    /// Previous f32 arithmetic emulation (pred*a + (1-pred)*b) was buggy
+    /// on IREE Metal SPIRV when broadcast dims=[2,3] combined with multiply
+    /// corrupted values for tensors with batch dims > 1 (e.g. 1x6x256x256).
     pub fn emit_select(
         &mut self,
         pred: &Register,
@@ -136,35 +139,33 @@ impl StableHLOEmitter {
     ) -> (Register, StableHLOType) {
         let result_ty = on_true_ty.clone();
 
-        // on_true * pred
-        let a_pred = self.fresh_register();
+        // Convert f32 pred (0.0/1.0) to i1: compare NE pred, 0.0
+        let zero = self.emit_constant_f32(0.0);
+        let zero_ty = StableHLOType::ScalarF32;
+        let zero_bc = self.emit_broadcast(&zero, &zero_ty, pred_ty);
+
+        let pred_i1_ty = StableHLOType::i1_tensor(pred_ty.shape().to_vec());
+        let pred_i1 = self.fresh_register();
         self.body.push(format!(
-            "    {} = stablehlo.multiply {}, {} : {}",
-            a_pred.to_mlir(), on_true.to_mlir(), pred.to_mlir(), result_ty.to_mlir()
+            "    {} = stablehlo.compare NE, {}, {}, FLOAT : ({}, {}) -> {}",
+            pred_i1.to_mlir(),
+            pred.to_mlir(),
+            zero_bc.to_mlir(),
+            pred_ty.to_mlir(),
+            pred_ty.to_mlir(),
+            pred_i1_ty.to_mlir(),
         ));
 
-        // 1.0 - pred
-        let one = self.emit_constant_f32(1.0);
-        let one_ty = StableHLOType::ScalarF32;
-        let one_bc = self.emit_broadcast(&one, &one_ty, pred_ty);
-        let inv_pred = self.fresh_register();
-        self.body.push(format!(
-            "    {} = stablehlo.subtract {}, {} : {}",
-            inv_pred.to_mlir(), one_bc.to_mlir(), pred.to_mlir(), pred_ty.to_mlir()
-        ));
-
-        // on_false * (1 - pred)
-        let b_inv = self.fresh_register();
-        self.body.push(format!(
-            "    {} = stablehlo.multiply {}, {} : {}",
-            b_inv.to_mlir(), on_false.to_mlir(), inv_pred.to_mlir(), result_ty.to_mlir()
-        ));
-
-        // a_pred + b_inv
+        // Native select
         let reg = self.fresh_register();
         self.body.push(format!(
-            "    {} = stablehlo.add {}, {} : {}",
-            reg.to_mlir(), a_pred.to_mlir(), b_inv.to_mlir(), result_ty.to_mlir()
+            "    {} = stablehlo.select {}, {}, {} : {}, {}",
+            reg.to_mlir(),
+            pred_i1.to_mlir(),
+            on_true.to_mlir(),
+            on_false.to_mlir(),
+            pred_i1_ty.to_mlir(),
+            result_ty.to_mlir(),
         ));
 
         (reg, result_ty)
