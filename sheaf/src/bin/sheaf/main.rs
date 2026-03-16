@@ -73,8 +73,12 @@ fn main() {
 
         _ => {
             if let Some(ci) = remaining.iter().position(|a| a == "-c") {
+                let mut blame = false;
                 let expr = remaining[ci + 1..].iter()
-                    .filter(|a| !a.starts_with('-') || a.parse::<f64>().is_ok())
+                    .filter(|a| {
+                        if *a == "--blame" { blame = true; return false; }
+                        !a.starts_with('-') || a.parse::<f64>().is_ok()
+                    })
                     .cloned()
                     .collect::<Vec<_>>()
                     .join(" ");
@@ -82,7 +86,7 @@ fn main() {
                     sheaf_msg!("sheaf: -c requires an expression");
                     exit(1);
                 }
-                run_expr(&expr);
+                run_expr(&expr, blame);
             } else if remaining.is_empty() {
                 run_repl();
             } else {
@@ -135,10 +139,19 @@ fn is_silent_result(val: &sheaf_compiler::interpreter::value::Value) -> bool {
     }
 }
 
-fn run_expr(source: &str) {
-    use sheaf_compiler::interpreter::eval::eval_source;
-    match eval_source(source) {
-        Ok(val) => println!("{}", val),
+fn run_expr(source: &str, blame: bool) {
+    use sheaf_compiler::interpreter::eval::{eval_source, eval_source_with_blame};
+    let result = if blame {
+        eval_source_with_blame(source, None, None)
+    } else {
+        eval_source(source)
+    };
+    match result {
+        Ok(val) => {
+            if !is_silent_result(&val) {
+                println!("{}", val);
+            }
+        }
         Err(e) => {
             sheaf_msg!("{}", sheaf_compiler::core::error_format::format_error(&e));
             exit(1);

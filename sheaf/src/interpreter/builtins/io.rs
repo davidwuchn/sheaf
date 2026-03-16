@@ -8,6 +8,7 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("io", builtin_io);
     env.set_builtin("gensym", builtin_gensym);
     env.set_builtin("symbol?", builtin_symbol_q);
+    env.set_builtin("time", builtin_time_ns);
 }
 
 fn builtin_print(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
@@ -353,6 +354,15 @@ fn builtin_gensym(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     let hash = format!("{:08x}", (t.as_nanos() & 0xFFFFFFFF) as u32);
     Ok(Value::String(format!("{}{}", prefix, hash)))
+}
+
+fn builtin_time_ns(_args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    use std::time::Instant;
+    // Return monotonic time in seconds (f32 has ~0.01ms precision for durations < 1h)
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let origin = START.get_or_init(Instant::now);
+    let elapsed = origin.elapsed().as_secs_f32();
+    Ok(Value::Float(elapsed))
 }
 
 fn builtin_symbol_q(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
