@@ -239,12 +239,12 @@ pub fn value_to_stablehlo_type(val: &Value) -> SheafResult<StableHLOType> {
             }
         }
         Value::Nil => Ok(StableHLOType::scalar_f32()),
-        _ => Err(SheafError::Runtime {
+        _ => Err(SheafError::Compile {
             message: format!(
-                "trace: cannot convert {} to StableHLOType",
+                "unsupported type for JIT: {}",
                 val.type_name()
             ),
-            location: None,
+            location: crate::core::error::SourceLocation::unknown(),
         }),
     }
 }

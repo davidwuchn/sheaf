@@ -92,6 +92,18 @@ impl fmt::Display for SheafError {
     }
 }
 
+impl SheafError {
+    /// Return just the message, without location or error-kind prefix.
+    pub fn short_message(&self) -> &str {
+        match self {
+            SheafError::Parse { message, .. }
+            | SheafError::Compile { message, .. }
+            | SheafError::Runtime { message, .. } => message,
+            SheafError::Io(msg) => msg,
+        }
+    }
+}
+
 impl std::error::Error for SheafError {}
 
 /// Result type for Sheaf operations

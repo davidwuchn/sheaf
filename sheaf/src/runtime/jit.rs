@@ -145,7 +145,7 @@ impl JitCompiler {
             let ty = match value_to_stablehlo_type(arg_val) {
                 Ok(ty) => ty,
                 Err(e) => {
-                    self.jit_fail(name, &format!("type inference: {}", e));
+                    self.jit_fail(name, &format!("arg '{}' has {}", param_name, e.short_message()));
                     return None;
                 }
             };
@@ -545,7 +545,7 @@ impl JitCompiler {
             let ty = match value_to_stablehlo_type(arg_val) {
                 Ok(ty) => ty,
                 Err(e) => {
-                    self.jit_fail(&vag_key, &format!("type inference: {}", e));
+                    self.jit_fail(&vag_key, &format!("arg '{}' has {}", param_name, e.short_message()));
                     return None;
                 }
             };
