@@ -100,6 +100,21 @@ impl IreeSession {
             };
             let _ = CACHED_BACKEND.set(backend.to_string());
 
+            {
+                use std::sync::atomic::AtomicBool;
+                static PRINTED: AtomicBool = AtomicBool::new(false);
+                if !PRINTED.swap(true, Ordering::Relaxed) {
+                    let display = match chosen_driver {
+                        "local-task" => "CPU",
+                        "metal" => "Metal GPU",
+                        "cuda" => "CUDA GPU",
+                        "vulkan" => "Vulkan GPU",
+                        other => other,
+                    };
+                    sheaf_msg!("sheaf: running on {}", display);
+                }
+            }
+
             // Retain the device for our Arc handle (session also holds its own ref)
             iree_hal_device_retain(device);
             let device_handle = Arc::new(IreeDeviceHandle { device });
@@ -190,22 +205,6 @@ impl IreeSession {
                     iree_status_fprint(libc_stderr(), status);
                 }
                 return Err(iree_err("failed to load compiled module"));
-            }
-
-            // Print backend once, after first successful VMFB load
-            {
-                use std::sync::atomic::AtomicBool;
-                static PRINTED: AtomicBool = AtomicBool::new(false);
-                if !PRINTED.swap(true, Ordering::Relaxed) {
-                    let display = match self.driver_name.as_str() {
-                        "local-task" => "CPU",
-                        "metal" => "Metal GPU",
-                        "cuda" => "CUDA GPU",
-                        "vulkan" => "Vulkan GPU",
-                        other => other,
-                    };
-                    sheaf_msg!("sheaf: running on {}", display);
-                }
             }
 
             Ok(())
