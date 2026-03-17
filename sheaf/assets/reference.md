@@ -868,6 +868,32 @@ Cast a scalar tensor or number to a 32-bit integer or 32-bit float, respectively
 
 ---
 
+### cast
+
+**Type:** function
+**Signature:** `(cast expr :dtype)`
+
+Converts a tensor, scalar, or DeviceBuffer to the specified dtype. Supported dtypes: `:f32`, `:bf16`, `:i32`. Sheaf never converts dtypes implicitly.
+
+The `[vec] :dtype` syntax is syntactic sugar that desugars to `cast` at parse time.
+
+```sheaf
+(cast [1 2 3] :bf16)         ; => tensor bf16[3] = [1. 2. 3.]
+(cast [1 2 3] :f32)          ; => tensor f32[3] = [1. 2. 3.]
+
+;; Equivalent shorthand via type annotation
+[1 2 3] :bf16                ; => tensor bf16[3] = [1. 2. 3.]
+
+;; Cast an existing tensor
+(def x [1 2 3])
+(cast x :bf16)               ; => tensor bf16[3] = [1. 2. 3.]
+
+;; Cast scalars
+(cast 3.14 :bf16)            ; => tensor bf16[] = 3.14
+```
+
+---
+
 ## Initializers
 
 Provided by `(use nn)`. All follow the `(init key shape)` convention, matching PyTorch naming.

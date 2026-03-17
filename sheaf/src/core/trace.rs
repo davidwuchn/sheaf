@@ -112,14 +112,20 @@ pub fn trace_function_signature(
 fn stablehlo_to_dummy_value(ty: &StableHLOType) -> Value {
     match ty {
         StableHLOType::ScalarF32 | StableHLOType::ScalarF64 => Value::Float(0.0),
+        StableHLOType::ScalarBF16 => Value::Float(0.0),
         StableHLOType::ScalarI64 => Value::Int(0),
         StableHLOType::ScalarI1 => Value::Bool(false),
-        StableHLOType::Tensor { shape, .. } => {
+        StableHLOType::Tensor { shape, dtype } => {
             let dims: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
             let data = ArrayD::zeros(IxDyn(&dims));
+            let rt_dtype = match dtype.as_str() {
+                "bf16" => Dtype::BF16,
+                "i32" => Dtype::I32,
+                _ => Dtype::F32,
+            };
             Value::Tensor {
                 data: Arc::new(data),
-                dtype: Dtype::F32,
+                dtype: rt_dtype,
             }
         }
         StableHLOType::Tuple(elems, _) => {
@@ -183,19 +189,35 @@ fn param_layout_to_dummy_value(layout: &ParamLayout) -> Value {
     Value::Dict(result)
 }
 
-/// Convert a runtime Value back to a StableHLOType (shape extraction).
+/// Helper: build a scalar StableHLOType from a Dtype.
+fn scalar_for_dtype(dtype: Dtype) -> StableHLOType {
+    match dtype {
+        Dtype::F32 => StableHLOType::scalar_f32(),
+        Dtype::BF16 => StableHLOType::scalar_bf16(),
+        _ => StableHLOType::scalar_f32(),
+    }
+}
+
+/// Helper: build a tensor StableHLOType from shape + Dtype.
+fn tensor_for_dtype(shape: Vec<i64>, dtype: Dtype) -> StableHLOType {
+    if shape.is_empty() {
+        return scalar_for_dtype(dtype);
+    }
+    match dtype {
+        Dtype::BF16 => StableHLOType::bf16_tensor(shape),
+        _ => StableHLOType::f32_tensor(shape),
+    }
+}
+
+/// Convert a runtime Value back to a StableHLOType (shape + dtype extraction).
 pub fn value_to_stablehlo_type(val: &Value) -> SheafResult<StableHLOType> {
     match val {
         Value::Float(_) => Ok(StableHLOType::scalar_f32()),
         Value::Int(_) => Ok(StableHLOType::scalar_f32()),
         Value::Bool(_) => Ok(StableHLOType::scalar_f32()),
-        Value::Tensor { data, .. } => {
+        Value::Tensor { data, dtype } => {
             let shape: Vec<i64> = data.shape().iter().map(|&d| d as i64).collect();
-            if shape.is_empty() {
-                Ok(StableHLOType::scalar_f32())
-            } else {
-                Ok(StableHLOType::f32_tensor(shape))
-            }
+            Ok(tensor_for_dtype(shape, *dtype))
         }
         Value::Tuple(elems) => {
             let tys: SheafResult<Vec<StableHLOType>> =
@@ -232,11 +254,7 @@ pub fn value_to_stablehlo_type(val: &Value) -> SheafResult<StableHLOType> {
         }
         Value::DeviceBuffer(db) => {
             let shape: Vec<i64> = db.shape.iter().map(|&d| d as i64).collect();
-            if shape.is_empty() {
-                Ok(StableHLOType::scalar_f32())
-            } else {
-                Ok(StableHLOType::f32_tensor(shape))
-            }
+            Ok(tensor_for_dtype(shape, db.dtype))
         }
         Value::Nil => Ok(StableHLOType::scalar_f32()),
         _ => Err(SheafError::Compile {

@@ -265,6 +265,7 @@ fn value_to_json(val: &Value) -> Result<serde_json::Value, crate::core::error::S
             let flat: Vec<f32> = data.iter().copied().collect();
             let dtype_str = match dtype {
                 Dtype::F32 => "f32",
+                Dtype::BF16 => "bf16",
                 Dtype::I32 => "i32",
                 Dtype::Bool => "bool",
             };

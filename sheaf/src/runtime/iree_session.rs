@@ -48,27 +48,52 @@ impl Drop for DeviceBufferInner {
 }
 
 impl DeviceBufferInner {
-    /// Transfer data to host, returning an ndarray.
+    /// Transfer data to host, returning an ndarray of f32.
+    /// For bf16 buffers, data is transferred as raw bytes then converted to f32.
     pub fn to_host(&self) -> Result<ArrayD<f32>, SheafError> {
         unsafe {
             let n_elems: usize = self.shape.iter().product::<usize>().max(1);
-            let byte_len = n_elems * 4; // f32 = 4 bytes
-            let mut f32_buf: Vec<f32> = vec![0.0; n_elems];
-
             let buf = iree_hal_buffer_view_buffer(self.bv);
-            let status = iree_hal_device_transfer_d2h(
-                self.device.device,
-                buf,
-                0,
-                f32_buf.as_mut_ptr() as *mut c_void,
-                byte_len as u64,
-                0,
-                iree_timeout_t::infinite(),
-            );
-            if !iree_status_is_ok(status) {
-                iree_status_fprint(libc_stderr(), status);
-                return Err(iree_err("d2h transfer failed"));
-            }
+
+            let f32_buf = match self.dtype {
+                Dtype::BF16 => {
+                    let byte_len = n_elems * 2;
+                    let mut raw: Vec<u16> = vec![0; n_elems];
+                    let status = iree_hal_device_transfer_d2h(
+                        self.device.device,
+                        buf,
+                        0,
+                        raw.as_mut_ptr() as *mut c_void,
+                        byte_len as u64,
+                        0,
+                        iree_timeout_t::infinite(),
+                    );
+                    if !iree_status_is_ok(status) {
+                        iree_status_fprint(libc_stderr(), status);
+                        return Err(iree_err("d2h transfer failed (bf16)"));
+                    }
+                    // bf16 -> f32: shift left 16 bits (bf16 is the top 16 bits of f32)
+                    raw.iter().map(|&bits| f32::from_bits((bits as u32) << 16)).collect()
+                }
+                _ => {
+                    let byte_len = n_elems * 4;
+                    let mut data: Vec<f32> = vec![0.0; n_elems];
+                    let status = iree_hal_device_transfer_d2h(
+                        self.device.device,
+                        buf,
+                        0,
+                        data.as_mut_ptr() as *mut c_void,
+                        byte_len as u64,
+                        0,
+                        iree_timeout_t::infinite(),
+                    );
+                    if !iree_status_is_ok(status) {
+                        iree_status_fprint(libc_stderr(), status);
+                        return Err(iree_err("d2h transfer failed"));
+                    }
+                    data
+                }
+            };
 
             ArrayD::from_shape_vec(self.shape.clone(), f32_buf)
                 .map_err(|e| iree_err(&format!("shape mismatch: {}", e)))
@@ -630,17 +655,25 @@ impl IreeSession {
                 }
                 let bv = ref_.ptr as *mut iree_hal_buffer_view_t;
 
-                // Read shape metadata (no data transfer)
+                // Read shape and dtype metadata (no data transfer)
                 let rank = iree_hal_buffer_view_shape_rank(bv);
                 let shape: Vec<usize> = (0..rank)
                     .map(|j| iree_hal_buffer_view_shape_dim(bv, j) as usize)
                     .collect();
+                let elem_type = iree_hal_buffer_view_element_type(bv);
+                let dtype = if elem_type == IREE_HAL_ELEMENT_TYPE_BFLOAT_16 {
+                    Dtype::BF16
+                } else if elem_type == IREE_HAL_ELEMENT_TYPE_INT_32 {
+                    Dtype::I32
+                } else {
+                    Dtype::F32
+                };
 
                 let db = Arc::new(DeviceBufferInner {
                     bv,
                     device: Arc::clone(&self.device_handle),
                     shape,
-                    dtype: Dtype::F32,
+                    dtype,
                 });
                 // Transfer ownership: nullify ptr to prevent double-free on ref release
                 ref_.ptr = std::ptr::null_mut();
@@ -735,16 +768,32 @@ unsafe fn value_to_buffer_view(
 ) -> Result<*mut iree_hal_buffer_view_t, SheafError> {
     unsafe {
         match val {
-            Value::Tensor { data, dtype: _ } => {
+            Value::Tensor { data, dtype } => {
                 let shape: Vec<iree_hal_dim_t> =
                     data.shape().iter().map(|&d| d as iree_hal_dim_t).collect();
 
                 let f32_slice = data.as_slice().unwrap();
-                let byte_data: Vec<u8> = f32_slice
-                    .iter()
-                    .flat_map(|f| f.to_ne_bytes())
-                    .collect();
-                let element_type = IREE_HAL_ELEMENT_TYPE_FLOAT_32;
+                let (byte_data, element_type) = match dtype {
+                    Dtype::BF16 => {
+                        // f32 -> bf16: truncate to top 16 bits
+                        let bytes: Vec<u8> = f32_slice
+                            .iter()
+                            .flat_map(|f| {
+                                let bits = f.to_bits();
+                                let bf16_bits = (bits >> 16) as u16;
+                                bf16_bits.to_ne_bytes()
+                            })
+                            .collect();
+                        (bytes, IREE_HAL_ELEMENT_TYPE_BFLOAT_16)
+                    }
+                    _ => {
+                        let bytes: Vec<u8> = f32_slice
+                            .iter()
+                            .flat_map(|f| f.to_ne_bytes())
+                            .collect();
+                        (bytes, IREE_HAL_ELEMENT_TYPE_FLOAT_32)
+                    }
+                };
 
                 let params = iree_hal_buffer_params_t {
                     usage: 3 | 3072,   // TRANSFER | DISPATCH_STORAGE
@@ -821,11 +870,11 @@ unsafe fn buffer_view_to_value(
             .collect();
         let elem_type = iree_hal_buffer_view_element_type(bv);
         let n_elems: usize = shape.iter().product::<usize>().max(1);
-        let byte_len = n_elems * 4; // both f32 and i32 are 4 bytes
 
         let buf = iree_hal_buffer_view_buffer(bv);
 
         let (f32_data, dtype) = if elem_type == IREE_HAL_ELEMENT_TYPE_FLOAT_32 {
+            let byte_len = n_elems * 4;
             let mut f32_buf: Vec<f32> = vec![0.0; n_elems];
             let status = iree_hal_device_transfer_d2h(
                 device, buf, 0,
@@ -837,7 +886,24 @@ unsafe fn buffer_view_to_value(
                 return Err(iree_err("failed to read IREE buffer data"));
             }
             (f32_buf, Dtype::F32)
+        } else if elem_type == IREE_HAL_ELEMENT_TYPE_BFLOAT_16 {
+            let byte_len = n_elems * 2;
+            let mut raw: Vec<u16> = vec![0; n_elems];
+            let status = iree_hal_device_transfer_d2h(
+                device, buf, 0,
+                raw.as_mut_ptr() as *mut c_void,
+                byte_len as u64, 0, iree_timeout_t::infinite(),
+            );
+            if !iree_status_is_ok(status) {
+                iree_status_fprint(libc_stderr(), status);
+                return Err(iree_err("failed to read IREE buffer data (bf16)"));
+            }
+            let f32_buf: Vec<f32> = raw.iter()
+                .map(|&bits| f32::from_bits((bits as u32) << 16))
+                .collect();
+            (f32_buf, Dtype::BF16)
         } else if elem_type == IREE_HAL_ELEMENT_TYPE_INT_32 {
+            let byte_len = n_elems * 4;
             let mut i32_buf: Vec<i32> = vec![0; n_elems];
             let status = iree_hal_device_transfer_d2h(
                 device, buf, 0,

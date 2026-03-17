@@ -17,6 +17,8 @@ use std::fmt::Write;
 pub enum StableHLOType {
     /// Scalar tensor: tensor<f32>
     ScalarF32,
+    /// Scalar tensor: tensor<bf16>
+    ScalarBF16,
     /// Scalar tensor: tensor<f64>
     ScalarF64,
     /// Scalar tensor: tensor<i64>
@@ -35,6 +37,10 @@ impl StableHLOType {
         Self::ScalarF32
     }
 
+    pub fn scalar_bf16() -> Self {
+        Self::ScalarBF16
+    }
+
     pub fn scalar_i64() -> Self {
         Self::ScalarI64
     }
@@ -43,6 +49,21 @@ impl StableHLOType {
         Self::Tensor {
             shape: shape.into(),
             dtype: "f32".to_string(),
+        }
+    }
+
+    pub fn bf16_tensor(shape: impl Into<Vec<i64>>) -> Self {
+        Self::Tensor {
+            shape: shape.into(),
+            dtype: "bf16".to_string(),
+        }
+    }
+
+    /// Create a tensor with the given dtype string ("f32", "bf16", "i32", etc.)
+    pub fn typed_tensor(shape: impl Into<Vec<i64>>, dtype: &str) -> Self {
+        Self::Tensor {
+            shape: shape.into(),
+            dtype: dtype.to_string(),
         }
     }
 
@@ -71,6 +92,7 @@ impl StableHLOType {
     pub fn shape(&self) -> &[i64] {
         match self {
             Self::ScalarF32
+            | Self::ScalarBF16
             | Self::ScalarF64
             | Self::ScalarI64
             | Self::ScalarI1
@@ -83,12 +105,18 @@ impl StableHLOType {
     pub fn dtype(&self) -> &str {
         match self {
             Self::ScalarF32 => "f32",
+            Self::ScalarBF16 => "bf16",
             Self::ScalarF64 => "f64",
             Self::ScalarI64 => "i64",
             Self::ScalarI1 => "i1",
             Self::Tensor { dtype, .. } => dtype,
             Self::Tuple(..) => "tuple",
         }
+    }
+
+    /// Is this a float type (f32 or bf16)?
+    pub fn is_float(&self) -> bool {
+        matches!(self.dtype(), "f32" | "bf16")
     }
 
     /// Check if two types have the same tuple nesting structure.
@@ -109,6 +137,7 @@ impl StableHLOType {
     pub fn to_mlir(&self) -> String {
         match self {
             Self::ScalarF32 => "tensor<f32>".to_string(),
+            Self::ScalarBF16 => "tensor<bf16>".to_string(),
             Self::ScalarF64 => "tensor<f64>".to_string(),
             Self::ScalarI64 => "tensor<i64>".to_string(),
             Self::ScalarI1 => "tensor<i1>".to_string(),
@@ -151,6 +180,7 @@ impl StableHLOType {
             if parts.len() == 1 {
                 return match parts[0] {
                     "f32" => Some(Self::ScalarF32),
+                    "bf16" => Some(Self::ScalarBF16),
                     "f64" => Some(Self::ScalarF64),
                     "i64" => Some(Self::ScalarI64),
                     "i1" => Some(Self::ScalarI1),
@@ -588,7 +618,9 @@ impl StableHLOEmitter {
         reg
     }
 
-    /// Broadcast types: choose result type for binary op
+    /// Broadcast types: choose result type for binary op.
+    /// Preserves dtype: if both sides are bf16, result is bf16.
+    /// If one side is f32 and the other bf16, result is f32 (widening).
     pub(crate) fn broadcast_types(&self, lhs: &StableHLOType, rhs: &StableHLOType) -> StableHLOType {
         let lhs_shape = lhs.shape();
         let rhs_shape = rhs.shape();
@@ -602,6 +634,13 @@ impl StableHLOEmitter {
         if rhs_shape.is_empty() {
             return lhs.clone();
         }
+
+        // Resolve result dtype: both bf16 -> bf16, mixed -> f32
+        let result_dtype = if lhs.dtype() == "bf16" && rhs.dtype() == "bf16" {
+            "bf16"
+        } else {
+            "f32"
+        };
 
         // Numpy-style broadcasting: align from trailing dims, take max of each
         let max_ndim = lhs_shape.len().max(rhs_shape.len());
@@ -619,7 +658,7 @@ impl StableHLOEmitter {
             };
             result_shape.push(l.max(r));
         }
-        StableHLOType::f32_tensor(result_shape)
+        StableHLOType::typed_tensor(result_shape, result_dtype)
     }
 
     /// Emit unary operation (relu, sigmoid, tanh, etc.)

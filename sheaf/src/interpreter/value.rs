@@ -14,8 +14,51 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Dtype {
     F32,
+    BF16,
     I32,
     Bool,
+}
+
+impl Dtype {
+    /// MLIR type string for StableHLO codegen.
+    pub fn to_mlir_str(self) -> &'static str {
+        match self {
+            Dtype::F32 => "f32",
+            Dtype::BF16 => "bf16",
+            Dtype::I32 => "i32",
+            Dtype::Bool => "i1",
+        }
+    }
+
+    /// Byte size per element.
+    pub fn element_size(self) -> usize {
+        match self {
+            Dtype::F32 | Dtype::I32 => 4,
+            Dtype::BF16 => 2,
+            Dtype::Bool => 1,
+        }
+    }
+
+    /// Parse from keyword string (e.g. ":f32", ":bf16").
+    pub fn from_keyword(s: &str) -> Option<Self> {
+        match s {
+            "f32" => Some(Dtype::F32),
+            "bf16" => Some(Dtype::BF16),
+            "i32" => Some(Dtype::I32),
+            "bool" => Some(Dtype::Bool),
+            _ => None,
+        }
+    }
+
+    /// Short name for REPL display (e.g. "f32", "bf16", "i32", "bool").
+    pub fn name(self) -> &'static str {
+        match self {
+            Dtype::F32 => "f32",
+            Dtype::BF16 => "bf16",
+            Dtype::I32 => "i32",
+            Dtype::Bool => "bool",
+        }
+    }
 }
 
 pub type BuiltinFnPtr = fn(&[Value], &BTreeMap<String, Value>) -> Result<Value, crate::core::error::SheafError>;
@@ -55,6 +98,21 @@ impl Value {
             Value::Int(n) => *n != 0,
             Value::Float(f) => *f != 0.0,
             _ => true,
+        }
+    }
+
+    /// Type prefix for REPL display. Returns e.g. "tensor f32[2x3]", "tensor i32[]".
+    /// Returns None for non-tensor types (printed without prefix).
+    pub fn repl_type_prefix(&self) -> Option<String> {
+        match self {
+            Value::Tensor { data, dtype } => {
+                let shape = data.shape();
+                Some(format!("tensor {}{}", dtype.name(), format_shape(shape)))
+            }
+            Value::DeviceBuffer(db) => {
+                Some(format!("tensor {}{}", db.dtype.name(), format_shape(&db.shape)))
+            }
+            _ => None,
         }
     }
 
@@ -112,8 +170,16 @@ impl Value {
         }
     }
 
+    pub fn tensor(data: ArrayD<f32>, dtype: Dtype) -> Self {
+        Value::Tensor { data: Arc::new(data), dtype }
+    }
+
     pub fn tensor_f32(data: ArrayD<f32>) -> Self {
         Value::Tensor { data: Arc::new(data), dtype: Dtype::F32 }
+    }
+
+    pub fn tensor_bf16(data: ArrayD<f32>) -> Self {
+        Value::Tensor { data: Arc::new(data), dtype: Dtype::BF16 }
     }
 
     pub fn tensor_i32(data: ArrayD<f32>) -> Self {
@@ -161,6 +227,15 @@ impl fmt::Debug for Value {
     }
 }
 
+fn format_shape(shape: &[usize]) -> String {
+    if shape.is_empty() {
+        "[]".to_string()
+    } else {
+        let dims: Vec<String> = shape.iter().map(|d| d.to_string()).collect();
+        format!("[{}]", dims.join("x"))
+    }
+}
+
 fn format_scalar_f32(x: f32) -> String {
     if x == x.floor() && x.abs() < 1e15 {
         format!("{}.0", x as i64)
@@ -180,7 +255,7 @@ fn format_tensor_f32(x: f32) -> String {
 fn format_element(x: f32, dtype: Dtype) -> String {
     match dtype {
         Dtype::I32 => format!("{}", x as i32),
-        Dtype::F32 => format_tensor_f32(x),
+        Dtype::F32 | Dtype::BF16 => format_tensor_f32(x),
         Dtype::Bool => if x != 0.0 { " True".to_string() } else { "False".to_string() },
     }
 }
@@ -201,7 +276,7 @@ fn format_tensor_nd(arr: &ArrayD<f32>, dtype: Dtype) -> String {
             let x = arr.first().copied().unwrap_or(0.0);
             match dtype {
                 Dtype::I32 => format!("{}", x as i32),
-                Dtype::F32 => format_tensor_f32(x),
+                Dtype::F32 | Dtype::BF16 => format_tensor_f32(x),
                 Dtype::Bool => if x != 0.0 { "True".to_string() } else { "False".to_string() },
             }
         }
