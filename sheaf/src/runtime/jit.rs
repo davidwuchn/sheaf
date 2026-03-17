@@ -381,7 +381,8 @@ impl JitCompiler {
 
         let cache_dir = PathBuf::from("__sheaf__");
         let safe_name = name.replace('?', "_q").replace('!', "_b");
-        let cached_vmfb = cache_dir.join(format!("{}.vmfb", safe_name));
+        let backend_suffix = target_backend.replace('-', "_");
+        let cached_vmfb = cache_dir.join(format!("{}.{}.vmfb", safe_name, backend_suffix));
 
         // Check manifest for staleness (-vv forces recompile for full debug output)
         let force_recompile = crate::core::config::verbosity() >= 2;
@@ -930,7 +931,8 @@ impl JitCompiler {
 
         let cache_dir = PathBuf::from("__sheaf__");
         let vag_cache_name = format!("{}-vag", vag_fn_name);
-        let cached_vmfb = cache_dir.join(format!("{}.vmfb", vag_cache_name));
+        let backend_suffix = backend.replace('-', "_");
+        let cached_vmfb = cache_dir.join(format!("{}.{}.vmfb", vag_cache_name, backend_suffix));
 
         let force_recompile = crate::core::config::verbosity() >= 2;
         let vmfb_data = if !force_recompile && cached_vmfb.exists() && manifest_hash_matches(&cache_dir, &vag_cache_name, &content_hash) {
