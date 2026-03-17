@@ -4,7 +4,7 @@
 //! Compiler transforms: constant resolution, inlined-get lowering, layout propagation,
 //! and scalar constant extraction. Shared between `sheaf build` (AOT) and JIT compilation.
 
-use crate::core::compiler::CompiledExpr;
+use crate::core::expr::CompiledExpr;
 use crate::interpreter::value::Value;
 use std::collections::{BTreeMap, HashMap};
 
@@ -76,7 +76,7 @@ fn resolve_constants_rec(
             let tail_elems = match &tail {
                 CompiledExpr::Vector(v) => Some(v.clone()),
                 CompiledExpr::Quoted(inner) => {
-                    use crate::ast::SheafValue;
+                    use crate::core::ast::SheafValue;
                     match inner.as_ref() {
                         SheafValue::Vector(v, _loc) => {
                             // Convert SheafValue elements to CompiledExpr
@@ -702,7 +702,7 @@ fn extract_numeric(expr: &CompiledExpr) -> Option<f64> {
 
 // ── Reduce unrolling ──
 
-use crate::compiler::stablehlo::StableHLOType;
+use crate::lowering::stablehlo::StableHLOType;
 use crate::autodiff::replace_symbol;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

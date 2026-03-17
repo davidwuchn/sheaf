@@ -5,9 +5,9 @@
 
 use std::collections::HashMap;
 use crate::autodiff::reverse::{to_anf, reverse_grad};
-use crate::compiler::stablehlo::{Register, StableHLOType};
-use crate::compiler::transforms::try_infer_shape;
-use crate::core::compiler::CompiledExpr;
+use crate::lowering::stablehlo::{Register, StableHLOType};
+use crate::lowering::transforms::try_infer_shape;
+use crate::core::expr::CompiledExpr;
 use crate::core::error::{SheafError, SheafResult};
 use super::CodeGenerator;
 
@@ -621,7 +621,7 @@ impl CodeGenerator {
             for (key, &idx) in layout.iter() {
                 index_map.insert(vec![key.clone()], vec![idx]);
             }
-            crate::compiler::config::lower_get_calls(&body, &elem_param, &index_map)
+            crate::lowering::config::lower_get_calls(&body, &elem_param, &index_map)
         } else {
             body.clone()
         };

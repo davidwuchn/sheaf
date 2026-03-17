@@ -5,13 +5,17 @@
 
 mod autodiff;
 mod builtins;
+mod collection_builtins;
 mod control_flow;
 mod helpers;
+mod math_builtins;
+mod reduction_builtins;
+mod tensor_builtins;
 #[cfg(test)]
 mod tests;
 
-use crate::compiler::stablehlo::{Register, StableHLOEmitter, StableHLOType};
-use crate::core::compiler::CompiledExpr;
+use crate::lowering::stablehlo::{Register, StableHLOEmitter, StableHLOType};
+use crate::core::expr::CompiledExpr;
 use crate::core::error::{SheafError, SheafResult};
 pub(crate) use helpers::{TupleLeaf, collect_tuple_leaves, expand_tuple_to_symbols};
 use helpers::try_flatten_to_constant;
@@ -45,7 +49,7 @@ pub struct CodeGenerator {
     /// Lambdas bound in let forms: stored for inlining, not emitted as SSA.
     lambda_bindings: HashMap<String, CompiledExpr>,
     /// Function registry for user-defined functions
-    function_registry: HashMap<String, crate::core::compiler::FunctionDef>,
+    function_registry: HashMap<String, crate::core::expr::FunctionDef>,
     /// Key-to-index layout for tuple-typed variables.
     /// Allows `(get sym "key")` to resolve when `sym` is bound to a tuple.
     /// Populated from param configs and propagated into reduce/scan lambdas.
@@ -79,7 +83,7 @@ impl CodeGenerator {
         }
     }
 
-    pub fn with_registry(registry: HashMap<String, crate::core::compiler::FunctionDef>) -> Self {
+    pub fn with_registry(registry: HashMap<String, crate::core::expr::FunctionDef>) -> Self {
         Self {
             emitter: StableHLOEmitter::new(),
             bindings: HashMap::new(),
@@ -97,7 +101,7 @@ impl CodeGenerator {
     /// Tuple parameters become virtual tuples in the emitter: each leaf maps to
     /// a separate MLIR %arg, but the CodeGenerator sees normal tuple registers.
     pub fn with_function_params(
-        registry: HashMap<String, crate::core::compiler::FunctionDef>,
+        registry: HashMap<String, crate::core::expr::FunctionDef>,
         param_names: &[String],
         param_types: &[StableHLOType],
     ) -> Self {
@@ -693,7 +697,7 @@ impl CodeGenerator {
         mut self,
         name: &str,
         param_types: &[StableHLOType],
-        result_regs: &[crate::compiler::stablehlo::Register],
+        result_regs: &[crate::lowering::stablehlo::Register],
         result_types: &[StableHLOType],
     ) -> String {
         let flat_params = flatten_param_types(param_types);

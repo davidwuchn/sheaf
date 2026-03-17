@@ -1,0 +1,395 @@
+// Copyright (c) 2025 Damien Boureille
+// Licensed under the MIT License.
+
+//! Collection and indexing builtin codegen: get, first, second, last, assoc,
+//! shape, ndim, count/len, top_k, int, float, get-in.
+
+use crate::lowering::stablehlo::{Register, StableHLOType};
+use crate::core::expr::CompiledExpr;
+use crate::core::error::{SheafError, SheafResult};
+use crate::runtime::tensor_ops;
+use super::CodeGenerator;
+
+impl CodeGenerator {
+    pub(super) fn generate_collection_builtin(
+        &mut self,
+        name: &str,
+        args: &[CompiledExpr],
+    ) -> Option<SheafResult<(Register, StableHLOType)>> {
+        match name {
+            "shape" if !args.is_empty() => Some(self.gen_shape(args)),
+            "ndim" if args.len() == 1 => Some(self.gen_ndim(args)),
+            "count" | "len" if args.len() == 1 => Some(self.gen_count_len(name, args)),
+            "first" if args.len() == 1 => Some(self.gen_first(args)),
+            "second" if args.len() == 1 => Some(self.gen_second(args)),
+            "last" if args.len() == 1 => Some(self.gen_last(args)),
+            "get" if args.len() >= 2 => Some(self.gen_get(args)),
+            "get-in" if args.len() >= 2 => Some(self.gen_get_in()),
+            "assoc" if args.len() >= 3 && args.len() % 2 == 1 => Some(self.gen_assoc(args)),
+            "top_k" if args.len() == 2 => Some(self.gen_top_k(args)),
+            "int" if args.len() == 1 => Some(self.generate(&args[0])),
+            "float" if args.len() == 1 => Some(self.generate(&args[0])),
+            _ => None,
+        }
+    }
+
+    fn gen_shape(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let (_, operand_ty) = self.generate(&args[0])?;
+        let dims = operand_ty.shape();
+        if dims.is_empty() {
+            return Err(SheafError::Compile {
+                message: "shape: cannot query shape of scalar or tuple".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            });
+        }
+        if args.len() >= 2 {
+            if let CompiledExpr::Integer(ax) = &args[1] {
+                let idx = if *ax < 0 { (dims.len() as i64 + *ax) as usize } else { *ax as usize };
+                let reg = self.emitter.emit_constant_f32(dims[idx] as f64);
+                Ok((reg, StableHLOType::ScalarF32))
+            } else {
+                Err(SheafError::Compile {
+                    message: "shape: axis must be integer".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })
+            }
+        } else {
+            let data: Vec<f64> = dims.iter().map(|&d| d as f64).collect();
+            let shape = vec![data.len() as i64];
+            let (reg, ty) = self.emitter.emit_nd_tensor_constant(&data, &shape);
+            Ok((reg, ty))
+        }
+    }
+
+    fn gen_ndim(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let (_, operand_ty) = self.generate(&args[0])?;
+        let ndim = operand_ty.shape().len() as i64;
+        let reg = self.emitter.emit_constant_f32(ndim as f64);
+        Ok((reg, StableHLOType::ScalarF32))
+    }
+
+    fn gen_count_len(
+        &mut self,
+        name: &str,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let (_, operand_ty) = self.generate(&args[0])?;
+        let shape = operand_ty.shape();
+        if shape.is_empty() {
+            return Err(SheafError::Compile {
+                message: format!("{}: cannot get length of scalar", name),
+                location: crate::core::error::SourceLocation::unknown(),
+            });
+        }
+        let len = shape[0];
+        let reg = self.emitter.emit_constant_f32(len as f64);
+        Ok((reg, StableHLOType::ScalarF32))
+    }
+
+    fn gen_first(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let (operand_reg, operand_ty) = self.generate(&args[0])?;
+        match &operand_ty {
+            StableHLOType::Tuple(elems, _) => {
+                let elem_ty = elems[0].clone();
+                let reg = self.emitter.emit_get_tuple_element(&operand_reg, &operand_ty, 0, &elem_ty);
+                Ok((reg, elem_ty))
+            }
+            _ if operand_ty.shape().is_empty() => {
+                Ok((operand_reg, operand_ty))
+            }
+            _ => {
+                let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, 0);
+                Ok((reg, ty))
+            }
+        }
+    }
+
+    fn gen_second(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let (operand_reg, operand_ty) = self.generate(&args[0])?;
+        match &operand_ty {
+            StableHLOType::Tuple(elems, _) => {
+                let elem_ty = elems[1].clone();
+                let reg = self.emitter.emit_get_tuple_element(&operand_reg, &operand_ty, 1, &elem_ty);
+                Ok((reg, elem_ty))
+            }
+            _ if operand_ty.shape().is_empty() => {
+                Err(SheafError::Compile {
+                    message: "second: cannot index a scalar".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })
+            }
+            _ => {
+                let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, 1);
+                Ok((reg, ty))
+            }
+        }
+    }
+
+    fn gen_last(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let (operand_reg, operand_ty) = self.generate(&args[0])?;
+        let shape = operand_ty.shape();
+        if shape.is_empty() {
+            return Err(SheafError::Compile {
+                message: "last: cannot index a scalar".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            });
+        }
+        let last_idx = shape[0] - 1;
+        let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, last_idx);
+        Ok((reg, ty))
+    }
+
+    fn gen_get(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let sym_name = if let CompiledExpr::Symbol(s) = &args[0] { Some(s.clone()) } else { None };
+        let (operand_reg, operand_ty) = self.generate(&args[0])?;
+        match &operand_ty {
+            StableHLOType::Tuple(..) => {
+                let layout_key = sym_name.clone()
+                    .or_else(|| self.layout_key_map.get(&operand_reg).cloned());
+                if let Some(ref start_key) = layout_key {
+                    let keywords: Vec<String> = args[1..].iter().filter_map(|a| match a {
+                        CompiledExpr::Keyword(k) | CompiledExpr::String(k) => Some(k.clone()),
+                        _ => None,
+                    }).collect();
+                    if keywords.len() == args.len() - 1 && !keywords.is_empty() {
+                        let mut cur_reg = operand_reg.clone();
+                        let mut cur_ty = operand_ty.clone();
+                        let mut cur_key = start_key.clone();
+                        let mut ok = true;
+                        for key in &keywords {
+                            if let StableHLOType::Tuple(sub_types, _) = &cur_ty {
+                                if let Some(layout) = self.tuple_key_layouts.get(&cur_key).cloned() {
+                                    if let Some(&idx) = layout.get(key) {
+                                        let sub_ty = sub_types[idx].clone();
+                                        cur_reg = self.emitter.emit_get_tuple_element(
+                                            &cur_reg, &cur_ty, idx, &sub_ty,
+                                        );
+                                        cur_ty = sub_ty;
+                                        cur_key = key.clone();
+                                        continue;
+                                    }
+                                }
+                            }
+                            ok = false;
+                            break;
+                        }
+                        if ok {
+                            self.layout_key_map.insert(cur_reg, cur_key);
+                            return Ok((cur_reg, cur_ty));
+                        }
+                    }
+                }
+                Err(SheafError::Compile {
+                    message: format!(
+                        "get on dict/tuple requires type info (sym={:?} keys={:?})",
+                        sym_name,
+                        args[1..].iter().map(|a| format!("{:?}", a)).collect::<Vec<_>>()
+                    ),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })
+            }
+            _ if !operand_ty.shape().is_empty() => {
+                match &args[1] {
+                    CompiledExpr::Integer(idx) => {
+                        let actual_idx = if *idx < 0 {
+                            operand_ty.shape()[0] + *idx
+                        } else {
+                            *idx
+                        };
+                        let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, actual_idx);
+                        Ok((reg, ty))
+                    }
+                    CompiledExpr::Symbol(s) if s == "..." => {
+                        if args.len() >= 3 {
+                            if let CompiledExpr::Integer(idx) = &args[2] {
+                                let shape = operand_ty.shape();
+                                let ndim = shape.len();
+                                let last_axis_size = shape[ndim - 1];
+                                let actual_idx = if *idx < 0 { last_axis_size + *idx } else { *idx };
+                                let (reg, ty) = self.emitter.emit_slice_last_axis(
+                                    &operand_reg, &operand_ty, actual_idx, actual_idx + 1,
+                                );
+                                Ok((reg, ty))
+                            } else if let CompiledExpr::FunctionCall { name: range_name, args: range_args, .. } = &args[2] {
+                                if (range_name == "range" || range_name == "arange") && range_args.len() == 2 {
+                                    if let (CompiledExpr::Integer(start), CompiledExpr::Integer(end)) = (&range_args[0], &range_args[1]) {
+                                        let (reg, ty) = self.emitter.emit_slice_last_axis(
+                                            &operand_reg, &operand_ty, *start, *end,
+                                        );
+                                        return Ok((reg, ty));
+                                    }
+                                }
+                                Err(SheafError::Compile {
+                                    message: "get with ellipsis: index must be integer or (range start end)".to_string(),
+                                    location: crate::core::error::SourceLocation::unknown(),
+                                })
+                            } else {
+                                Err(SheafError::Compile {
+                                    message: "get with ellipsis: index must be integer or (range start end)".to_string(),
+                                    location: crate::core::error::SourceLocation::unknown(),
+                                })
+                            }
+                        } else {
+                            Err(SheafError::Compile {
+                                message: "get with ellipsis: missing index after ...".to_string(),
+                                location: crate::core::error::SourceLocation::unknown(),
+                            })
+                        }
+                    }
+                    _ => {
+                        let (idx_reg, idx_ty) = self.generate(&args[1])?;
+                        if !idx_ty.shape().is_empty() {
+                            let (reg, ty) = tensor_ops::emit_gather_axis0(
+                                &mut self.emitter,
+                                &operand_reg, &operand_ty,
+                                &idx_reg, &idx_ty,
+                            );
+                            Ok((reg, ty))
+                        } else {
+                            let (idx_1d_reg, idx_1d_ty) = self.emitter.emit_reshape(
+                                &idx_reg, &idx_ty, &[1],
+                            );
+                            let (gathered_reg, gathered_ty) = tensor_ops::emit_gather_axis0(
+                                &mut self.emitter,
+                                &operand_reg, &operand_ty,
+                                &idx_1d_reg, &idx_1d_ty,
+                            );
+                            let gathered_shape = gathered_ty.shape();
+                            let squeezed_shape: Vec<i64> = gathered_shape[1..].to_vec();
+                            let (squeezed_reg, squeezed_ty) = self.emitter.emit_reshape(
+                                &gathered_reg, &gathered_ty, &squeezed_shape,
+                            );
+                            Ok((squeezed_reg, squeezed_ty))
+                        }
+                    }
+                }
+            }
+            _ => {
+                Err(SheafError::Compile {
+                    message: format!("get: unsupported operand type {}", operand_ty.to_mlir()),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })
+            }
+        }
+    }
+
+    fn gen_get_in(&self) -> SheafResult<(Register, StableHLOType)> {
+        Err(SheafError::Compile {
+            message: "get-in requires type info (use --trace-with or auto-trace)".to_string(),
+            location: crate::core::error::SourceLocation::unknown(),
+        })
+    }
+
+    fn gen_assoc(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let sym_name = if let CompiledExpr::Symbol(s) = &args[0] { Some(s.clone()) } else { None };
+        let (base_reg, base_ty) = self.generate(&args[0])?;
+        let elems = match &base_ty {
+            StableHLOType::Tuple(e, _) => e.clone(),
+            _ => {
+                return Err(SheafError::Compile {
+                    message: "assoc: base must be a tuple".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })
+            }
+        };
+        let layout_key = sym_name.clone().or_else(|| self.layout_key_map.get(&base_reg).cloned());
+        let layout = layout_key
+            .as_ref()
+            .and_then(|k| self.tuple_key_layouts.get(k).cloned());
+        let layout = match layout {
+            Some(l) => l,
+            None => {
+                return Err(SheafError::Compile {
+                    message: "assoc: no layout for tuple".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })
+            }
+        };
+        let mut replacements: std::collections::HashMap<usize, (Register, StableHLOType)> =
+            std::collections::HashMap::new();
+        let mut i = 1;
+        while i + 1 < args.len() {
+            let key_name = match &args[i] {
+                CompiledExpr::Keyword(k) | CompiledExpr::String(k) => k.clone(),
+                _ => {
+                    return Err(SheafError::Compile {
+                        message: format!("assoc: expected keyword key, got {:?}", args[i]),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })
+                }
+            };
+            let idx = match layout.get(&key_name) {
+                Some(&idx) => idx,
+                None => {
+                    return Err(SheafError::Compile {
+                        message: format!("assoc: unknown key {:?}", key_name),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    })
+                }
+            };
+            let (val_reg, val_ty) = self.generate(&args[i + 1])?;
+            replacements.insert(idx, (val_reg, val_ty));
+            i += 2;
+        }
+        let mut new_regs = Vec::new();
+        let mut new_tys = Vec::new();
+        for (j, elem_ty) in elems.iter().enumerate() {
+            if let Some((r, t)) = replacements.get(&j) {
+                new_regs.push(*r);
+                new_tys.push(t.clone());
+            } else {
+                let r = self.emitter.emit_get_tuple_element(
+                    &base_reg, &base_ty, j, elem_ty,
+                );
+                new_regs.push(r);
+                new_tys.push(elem_ty.clone());
+            }
+        }
+        Ok(self.emitter.emit_tuple(&new_regs, &new_tys))
+    }
+
+    fn gen_top_k(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let (input_reg, input_ty) = self.generate(&args[0])?;
+        let k = match &args[1] {
+            CompiledExpr::Integer(n) => *n,
+            CompiledExpr::Float(f) => *f as i64,
+            _ => {
+                let (k_reg, _k_ty) = self.generate(&args[1])?;
+                match self.emitter.known_scalar_value(&k_reg) {
+                    Some(v) => v as i64,
+                    None => {
+                        return Err(SheafError::Compile {
+                            message: "top_k: k must be a compile-time constant".to_string(),
+                            location: crate::core::error::SourceLocation::unknown(),
+                        });
+                    }
+                }
+            }
+        };
+        Ok(self.emitter.emit_top_k(&input_reg, &input_ty, k))
+    }
+}

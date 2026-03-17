@@ -3,7 +3,7 @@
 
 //! Helper types and free functions for codegen.
 
-use crate::core::compiler::CompiledExpr;
+use crate::core::expr::CompiledExpr;
 use std::collections::HashSet;
 
 /// A leaf of a tuple parameter: maps indices to a synthetic symbol name.

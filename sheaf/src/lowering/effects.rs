@@ -10,7 +10,7 @@
 //! `sheaf build` refuses to compile functions that have side effects; the
 //! interpreter can use this analysis to suggest compilation for pure files.
 
-use crate::core::compiler::CompiledExpr;
+use crate::core::expr::CompiledExpr;
 
 /// Names of builtins that have side effects.
 ///

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! Sheaf compiler - transforms AST to StableHLO
+//! Lowering: translates Sheaf IR (CompiledExpr) to StableHLO MLIR.
 
 pub mod codegen;
 pub mod config;

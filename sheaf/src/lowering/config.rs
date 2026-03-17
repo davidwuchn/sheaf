@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 
 use serde_json::Value as JsonValue;
 
-use crate::compiler::stablehlo::StableHLOType;
-use crate::core::compiler::CompiledExpr;
+use crate::lowering::stablehlo::StableHLOType;
+use crate::core::expr::CompiledExpr;
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 
 /// Convert a JSON config dict to a `StableHLOType::Tuple` (recursive).
@@ -108,7 +108,7 @@ fn build_index_map_rec(
 ///
 /// Also inserts prefix paths for intermediate levels:
 ///   `["l1"]` -> `[0]` (inferred from children with path starting with "l1")
-pub fn layout_to_index_map(layout: &crate::core::compiler::ParamLayout) -> BTreeMap<Vec<String>, Vec<usize>> {
+pub fn layout_to_index_map(layout: &crate::core::expr::ParamLayout) -> BTreeMap<Vec<String>, Vec<usize>> {
     let mut map = BTreeMap::new();
     for field in &layout.fields {
         // Insert the full path

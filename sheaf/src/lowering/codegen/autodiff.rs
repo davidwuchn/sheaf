@@ -4,8 +4,8 @@
 //! Autodiff-related codegen: tuple gradient assembly and broadcast reduction.
 //! Used by the VAG (value-and-grad) trace-based path in jit.rs.
 
-use crate::compiler::stablehlo::{Register, StableHLOType};
-use crate::core::compiler::CompiledExpr;
+use crate::lowering::stablehlo::{Register, StableHLOType};
+use crate::core::expr::CompiledExpr;
 use crate::core::error::SheafResult;
 use super::helpers::TupleLeaf;
 use super::CodeGenerator;
