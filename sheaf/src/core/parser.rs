@@ -472,11 +472,7 @@ impl Parser {
                 }
                 _ => {
                     let key = self.parse_expr()?;
-                    let value = self.parse_expr().map_err(|_| SheafError::Parse {
-                        message: "Dict requires even number of elements (key-value pairs)"
-                            .to_string(),
-                        location: start_loc.clone(),
-                    })?;
+                    let value = self.parse_expr()?;
                     pairs.push((key, value));
                 }
             }
