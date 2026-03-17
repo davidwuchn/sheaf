@@ -1,0 +1,67 @@
+;; -*- mode: clojure -*-
+;; NanoGPT inference: generate Shakespeare text
+;;
+;; Usage:
+;;   sheaf sample.shf
+;;
+;; Requires pre-trained weights in out-shakespeare-char/
+
+(use model)
+
+
+;; --- Tokenization ---
+
+(defn encode [s char->id]
+  (map (fn [c] (get char->id c)) (chars s)))
+
+(defn encode-prompt [prompt char->id block-size]
+  (let [ids   (encode prompt char->id)
+        zeros (- (arange block-size) (arange block-size))]
+    (reshape (reduce (fn [ctx id] (append-and-roll ctx id)) zeros ids)
+             [1 block-size])))
+
+
+;; --- Autoregressive generation ---
+
+(defn slide-window [ids token B]
+  (reshape (append-and-roll (reshape ids [-1]) token) [1 B]))
+
+(defn generate [context params config key n vocab]
+  (let [B (get config :block_size)]
+
+    (reduce
+      (fn [state _]
+        (let [res   (generate-token (get state :ids) params config
+                                    (get state :key) 200 0.8)
+              token (get res :next_id)]
+
+          (print (nth vocab token) :end "")
+          {:ids (slide-window (get state :ids) token B)
+           :key (get res :key)}))
+
+      {:ids context :key key}
+      (range n))))
+
+
+;; --- Main ---
+
+(let [config  (get (io "load" "out-shakespeare-char/config.json") :model_args)
+      params  (do (print "Loading model...")
+                  (io "load" "out-shakespeare-char/model.safetensors"))
+      _       (print "Loaded:" (get config :n_layer) "layers,"
+                     (get config :n_embd) "dim,"
+                     (get config :vocab_size) "vocab")
+
+      ;; Character-level vocab
+      char->id (io "load" "data/shakespeare_char/vocab.json")
+      vocab    (sort (keys char->id))
+
+      ;; Encode starting prompt into model's context window
+      context  (encode-prompt "\n" char->id (get config :block_size))
+      key      (random-key (io "entropy"))]
+
+  (print "Generating 500 tokens...")
+  (print "---")
+  (generate context params config key 500 vocab)
+  (print "")
+  (print "---"))

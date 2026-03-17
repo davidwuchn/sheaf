@@ -2,8 +2,8 @@
 ;; CLEVR Neuro-Symbolic Reasoning
 ;; Run with: cd examples/clevr && sheaf run.shf
 
-(use ./model.shf)
-(use ./data.shf)
+(use model)
+(use data)
 
 
 ;; --- Helpers ---
@@ -142,7 +142,7 @@
         (print "Symbolic attention shaping:\n")
         (print "Query: {}" custom-query)
         (print "Input: Scene [batch=1, n_objects=5, features=9]")
-        (print "    ↓")
+        (print "    |")
 
         (map (fn [i]
                (let [op-name  (nth op-names i)
@@ -157,7 +157,7 @@
                        (print "  Logits: {}" (format-logits att-flat attr-names)))
                      ;; other steps = attention per object
                      (print "  Attention: {}" (format-attention att-flat (get demo-scene :objects))))
-                   (print "    ↓"))))
+                   (print "    |"))))
              (range n-steps))
 
         (print "[Decision] argmax(logits): {}\n" (str-call "upper" predicted))))))

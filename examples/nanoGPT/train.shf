@@ -1,0 +1,74 @@
+;; -*- mode: clojure -*-
+;; NanoGPT training: fine-tune Shakespeare char-level GPT-2
+;;
+;; Usage:
+;;   sheaf train.shf
+;;
+;; Trains for 100 steps with Adam optimizer and gradient clipping.
+;; Expects pre-trained weights in out-shakespeare-char/
+
+(use model)
+(use nn)
+(use optim)
+
+
+;; --- Data loading ---
+
+(defn get-batch [data key block-size batch-size]
+  ;; Sample random windows from the training text.
+  ;; Returns {:x input-tokens, :y target-tokens} shifted by one.
+  (let [starts  (random-randint key [batch-size] 0 (- (len data) block-size 1))
+        offsets (arange block-size)
+        idx     (+ (reshape starts  [batch-size 1])
+                   (reshape offsets [1 block-size]))]
+    {:x (get data idx)
+     :y (get data (+ idx 1))}))
+
+
+;; --- Training step ---
+
+(defn train-step [state x y config]
+  (let [loss-fn   (fn [p] (cross-entropy-loss (gpt-forward x p config) y))
+        [loss g]  ((value-and-grad loss-fn) (get state :params))
+        g         (clip-by-global-norm g 1.0)
+        [p m v t] (adam-step (get state :params) g
+                             (get state :m) (get state :v) (get state :t)
+                             6e-4 0.9 0.95 1e-8)]
+    (assoc state :params p :m m :v v :t t :loss loss)))
+
+
+;; --- Main ---
+
+(let [config  (-> (io "load" "out-shakespeare-char/config.json")
+                  (get :model_args))
+      params  (do (print "Loading model...")
+                  (io "load" "out-shakespeare-char/model.safetensors"))
+      _       (print "Loaded:" (get config :n_layer) "layers,"
+                     (get config :n_embd) "dim,"
+                     (get config :vocab_size) "vocab")
+
+      ;; Encode training data: text -> char IDs -> flat tensor
+      char->id (io "load" "data/shakespeare_char/vocab.json")
+      data     (tensor (map (fn [c] (get char->id c))
+                            (chars (io "read" "data/shakespeare_char/input.txt"))))
+      _        (print "Training data:" (len data) "tokens")
+
+      ;; Optimizer state: zero-initialized moment estimates
+      state    {:params params
+                :m (tree-map (fn [x] (zeros (shape x))) params)
+                :v (tree-map (fn [x] (zeros (shape x))) params)
+                :t 0 :key (random-key (io "entropy"))}
+
+      B  (get config :block_size)
+      bs 4]
+
+  (print "Training for 100 steps (batch_size={} block_size={})..." bs B)
+
+  (reduce (fn [state step]
+            (let [[k1 k2] (random-split (get state :key))
+                  batch   (get-batch data k1 B bs)
+                  state   (train-step state (get batch :x) (get batch :y) config)]
+              (when (== (mod (+ step 1) 10) 0)
+                (print "Step {:>3} | Loss: {:.4f}" (+ step 1) (get state :loss)))
+              (assoc state :key k2)))
+          state (range 100)))

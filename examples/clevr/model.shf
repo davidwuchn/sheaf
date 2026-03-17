@@ -3,10 +3,7 @@
 ;; Differentiable visual reasoning: symbolic queries -> soft tensor operations.
 ;; Scene tensor: [Batch, N_objects, 9] = [color(4), shape(3), x, y]
 
-(use nn)
-(use optim)
-(use ./utils.shf)
-
+(use utils)
 
 ;; Pre-computed optimal parameters
 

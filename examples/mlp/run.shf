@@ -1,5 +1,5 @@
 ;; -*- mode: clojure -*-
-;; XOR MLP, the "Hello World" of Sheaf
+;; XOR MLP, a "Hello World" in Sheaf
 ;; Run with: sheaf run.shf
 
 (use training)

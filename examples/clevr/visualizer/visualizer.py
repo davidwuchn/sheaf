@@ -337,7 +337,7 @@ def format_pipeline_text(scene, query, op_names, steps, answer, scene_tensor):
             f"  Object {i+1}: {obj['color']:7s} {obj['shape']:8s}  "
             f"x={obj['x']:.2f}  y={obj['y']:.2f}"
         )
-    lines.append("    \u2193")
+    lines.append("    |")
 
     # Steps
     for op, att in zip(op_names, steps):
@@ -367,7 +367,7 @@ def format_pipeline_text(scene, query, op_names, steps, answer, scene_tensor):
             )
             lines.append(f"  Attention: [{att_str}]")
 
-        lines.append("    \u2193")
+        lines.append("    |")
 
     lines.append(f"[Decision] argmax(logits): {answer.upper()}")
     return "\n".join(lines)

@@ -9,10 +9,5 @@ solve XOR. Every 20 epochs, the training loop checks for a loss plateau
 (progress < 0.003). When one is detected, `grow-hydra` appends a new hidden
 layer.
 
-## Zero recompilation at grow
-
-`grow-hydra` appends a new layer and reinitialises the head. This changes the
-parameter structure, but the JIT compiler caches compiled functions by content
-hash. All matmul shapes that appear after a grow (`[4,32]`, `[32,1]`, etc.)
-were already compiled during the initial training phase, so they hit the VMFB
-cache. Growing the network requires zero recompilation.
+In Sheaf, a model is a dictionary. Growing a layer is appending to a list.
+Autodiff and the optimizer follow the updated structure on the next call.

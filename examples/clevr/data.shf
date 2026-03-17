@@ -15,8 +15,8 @@
     {:objects (map (fn [i]
                      (let [shape  (nth (shapes) (int (random-randint (nth keys (+ (* i 4) 0)) '[] 0 3)))
                            color  (nth (colors) (int (random-randint (nth keys (+ (* i 4) 1)) '[] 0 4)))
-                           x      (float (random-uniform (nth keys (+ (* i 4) 2)) '[] :minval 0.1 :maxval 0.9))
-                           y      (float (random-uniform (nth keys (+ (* i 4) 3)) '[] :minval 0.1 :maxval 0.9))]
+                           x      (float (random-range (nth keys (+ (* i 4) 2)) '[] 0.1 0.9))
+                           y      (float (random-range (nth keys (+ (* i 4) 3)) '[] 0.1 0.9))]
                        {:shape shape :color color :x x :y y}))
                    (range n))
      :n_objects n}))

@@ -36,27 +36,20 @@ Each symbolic operation (like "filter-shape") computes a mask that narrows the n
 
    ```
     Input (Scene Tensor)
-        ↓
+        |
    [Filter] "select circles"  -> (Dot product + embedding + Sigmoid)
-        ↓
+        |
    [Select] "pick the leftmost" -> (Softmax + attention)
-        ↓
+        |
    [Extract] "get its color"  -> (Extraction + Logits)
-        ↓
+        |
     Answer (Argmax)
    ```
 
 Note: While CLEVR is fully differentiable, it uses hard-coded one-hot embeddings and works out-of-the-box without further training. Learning embeddings from scratch would add no practical benefit for this demonstration.
 
-### Sheaf’s Role in the Architecture
+### Sheaf's Role in the Architecture
 
-Sheaf queries are data structures (S-expressions) that map 1:1 to the model's call stack. Sheaf can then transform a symbolic tree into a JAX computational graph through simple recursion.
-
-### Files
-
-- `data.py`: Generates random scenes and questions
-- `model.shf`: Core model with soft filters, selections, attribute extraction...
-- `utils.shf`: Differentiable operations (filtering, selection, intersection, existence checking)
-- `run.py`: Evaluation on 10 random test cases
-- `visualizer/run.sh`: Run the interactive visualization
-- `visualizer/visualizer.py`: Streamlit code for visualization
+In a Lisp, code and data share the same structure. A Sheaf query is not
+translated into a call stack: it is one. The same recursion that walks
+a list executes the neural pipeline.

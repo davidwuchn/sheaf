@@ -1,8 +1,5 @@
 ;; -*- mode: clojure -*-
 
-(use nn)
-(use optim)
-
 (defn forward [x p]
   (as-> x h
     (with-params [p :l1] (relu (+ (@ h W) b)))

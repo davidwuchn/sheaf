@@ -1,11 +1,7 @@
-;; CLEVR Utility Functions - Soft Differentiable Operations
+;; CLEVR Utility Functions: Soft Differentiable Operations
 ;;
 ;; Key insight: SIGMOID for filters (independent probabilities),
 ;; SOFTMAX for selection (mutual exclusion).
-
-(use nn)
-(use macros)
-
 
 ;; Soft filtering - uses sigmoid for independent object selection
 ;; Filters objects by similarity to query vector.
