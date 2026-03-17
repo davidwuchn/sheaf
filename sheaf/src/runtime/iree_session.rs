@@ -495,17 +495,52 @@ impl IreeSession {
                     Dtype::F32
                 };
 
-                let db = Arc::new(DeviceBufferInner::new(
-                    bv,
-                    Arc::clone(&self.device_handle),
-                    shape,
-                    dtype,
-                ));
-                // Transfer ownership: nullify ptr to prevent double-free on ref release
-                ref_.ptr = std::ptr::null_mut();
-                iree_vm_ref_release(&mut ref_);
+                // Eagerly transfer scalars to host. Avoids GPU sync in
+                // interpreter hot loops (e.g. nth on generate-token output).
+                if shape.is_empty() {
+                    let buf = iree_hal_buffer_view_buffer(bv);
+                    let byte_len = if dtype == Dtype::BF16 { 2u64 } else { 4u64 };
+                    let mut raw = [0u8; 4];
+                    let status = iree_hal_device_transfer_d2h(
+                        self.device_handle.device,
+                        buf,
+                        0,
+                        raw.as_mut_ptr() as *mut std::ffi::c_void,
+                        byte_len,
+                        0,
+                        iree_timeout_t::infinite(),
+                    );
+                    iree_hal_buffer_view_release(bv);
+                    ref_.ptr = std::ptr::null_mut();
+                    iree_vm_ref_release(&mut ref_);
+                    if iree_status_is_ok(status) {
+                        let val = if dtype == Dtype::BF16 {
+                            let bits = u16::from_le_bytes([raw[0], raw[1]]);
+                            f32::from_bits((bits as u32) << 16)
+                        } else {
+                            f32::from_le_bytes(raw)
+                        };
+                        if dtype == Dtype::I32 {
+                            results.push(Value::Int(val as i64));
+                        } else {
+                            results.push(Value::Float(val));
+                        }
+                    } else {
+                        results.push(Value::Float(0.0));
+                    }
+                } else {
+                    let db = Arc::new(DeviceBufferInner::new(
+                        bv,
+                        Arc::clone(&self.device_handle),
+                        shape,
+                        dtype,
+                    ));
+                    // Transfer ownership: nullify ptr to prevent double-free on ref release
+                    ref_.ptr = std::ptr::null_mut();
+                    iree_vm_ref_release(&mut ref_);
 
-                results.push(Value::DeviceBuffer(db));
+                    results.push(Value::DeviceBuffer(db));
+                }
             }
             iree_vm_list_release(output_list);
 
