@@ -21,8 +21,18 @@ pub mod tensor_ops;
 #[cfg(iree_runtime)]
 pub mod iree_ffi;
 #[cfg(iree_runtime)]
+pub mod device_buffer;
+#[cfg(iree_runtime)]
+pub mod buffer_cache;
+#[cfg(iree_runtime)]
+pub mod buffer_convert;
+#[cfg(iree_runtime)]
+pub mod signature;
+#[cfg(iree_runtime)]
 pub mod iree_session;
 #[cfg(iree_runtime)]
 pub mod jit;
+#[cfg(iree_runtime)]
+pub mod toolchain;
 #[cfg(iree_runtime)]
 pub mod vmfb_loader;

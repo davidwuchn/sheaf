@@ -4,8 +4,8 @@
 //! JIT auto-compilation: transparently compile pure functions on first call.
 //!
 //! When the interpreter calls a function that has no pre-compiled VMFB,
-//! the JIT attempts to compile it on the fly via the same pipeline as
-//! `sheaf build`: type inference -> dict lowering -> inlining -> codegen -> MLIR
+//! the JIT attempts to compile it on the fly via the following pipeline:
+//! type inference -> dict lowering -> inlining -> codegen -> MLIR
 //! -> iree-compile -> load VMFB. On success, subsequent calls dispatch via IREE.
 //! On failure, the function is added to a blocklist and the interpreter
 //! handles it normally.
@@ -14,22 +14,21 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// IREE compiler version, single source of truth in Cargo.toml [package.metadata]
-const IREE_COMPILER_VERSION: &str = env!("IREE_VERSION");
+use super::toolchain::{IREE_COMPILER_VERSION, find_iree_compile, ensure_toolchain};
 
 use crate::sheaf_msg;
 use crate::autodiff::reverse::{to_anf, reverse_grad};
-use crate::compiler::codegen::{
+use crate::lowering::codegen::{
     collect_tuple_leaves, expand_tuple_to_symbols, CodeGenerator,
 };
-use crate::compiler::config::{layout_to_index_map, lower_get_calls};
-use crate::compiler::effects::{collect_effects, collect_hof_calls};
-use crate::compiler::stablehlo::{Register, StableHLOEmitter};
-use crate::compiler::transforms::{
+use crate::lowering::config::{layout_to_index_map, lower_get_calls};
+use crate::lowering::effects::{collect_effects, collect_hof_calls};
+use crate::lowering::stablehlo::{Register, StableHLOEmitter};
+use crate::lowering::transforms::{
     extract_scalar_constants, lower_inlined_gets, propagate_let_layouts,
     resolve_static_constants, unroll_reduces,
 };
-use crate::core::compiler::{CompiledExpr, FunctionDef, VmfbSession};
+use crate::core::expr::{CompiledExpr, FunctionDef, VmfbSession};
 use crate::core::inference::{infer_function_signature_with_known, FunctionSignature};
 use crate::core::trace::{value_to_param_layout, value_to_stablehlo_type};
 use crate::interpreter::value::Value;
@@ -160,7 +159,7 @@ impl JitCompiler {
         }
 
         // Signature inference
-        let dummy_compiler = crate::core::compiler::CompilerContext::new();
+        let dummy_compiler = crate::core::expr::CompilerContext::new();
         let mut sig = match infer_function_signature_with_known(
             &dummy_compiler,
             &func_def.params,
@@ -561,7 +560,7 @@ impl JitCompiler {
         }
 
         // Signature inference
-        let dummy_compiler = crate::core::compiler::CompilerContext::new();
+        let dummy_compiler = crate::core::expr::CompilerContext::new();
         let mut sig = match infer_function_signature_with_known(
             &dummy_compiler,
             &all_param_names,
@@ -708,7 +707,7 @@ impl JitCompiler {
             log_unresolved_shapes(&body, "before codegen");
         }
 
-        // Value-and-grad codegen (catch panics gracefully)
+        // Value-and-grad codegen
         let backend = self.target_backend.clone();
         let codegen_result = {
             let registry_clone = registry.clone();
@@ -727,9 +726,9 @@ impl JitCompiler {
 
                 let inlined_body = body_clone;
 
-                // 1. Expand tuple params to synthetic leaf symbols
+                // Expand tuple params to synthetic leaf symbols
                 let mut expanded_body = inlined_body.clone();
-                let mut all_leaves: Vec<(usize, Vec<crate::compiler::codegen::TupleLeaf>)> = Vec::new();
+                let mut all_leaves: Vec<(usize, Vec<crate::lowering::codegen::TupleLeaf>)> = Vec::new();
                 let mut all_wrt_symbols: Vec<String> = Vec::new();
 
                 for &idx in &wrt_idx {
@@ -753,7 +752,7 @@ impl JitCompiler {
                     }
                 }
 
-                // 2. Convert to ANF
+                // Convert to ANF
                 let anf_expr = to_anf(&expanded_body);
                 let (anf_bindings, anf_body) = match &anf_expr {
                     CompiledExpr::Let { bindings, body } => {
@@ -762,8 +761,8 @@ impl JitCompiler {
                     other => (vec![], other.clone()),
                 };
 
-                // 3. Bind tuple leaves for codegen (use generate to handle both
-                //    leaf lookups and sub-tuple reconstruction from flat args)
+                // Bind tuple leaves for codegen (use generate to handle both
+                // leaf lookups and sub-tuple reconstruction from flat args)
                 for &(idx, ref leaves) in &all_leaves {
                     let param_name = &param_names[idx];
                     for leaf in leaves {
@@ -776,8 +775,8 @@ impl JitCompiler {
                     }
                 }
 
-                // 4. Generate forward bindings (flat scope, no Let scoping).
-                //    Use generate_binding to handle Lambda, destructuring, layouts.
+                // Generate forward bindings (flat scope, no Let scoping).
+                // Use generate_binding to handle Lambda, destructuring, layouts.
                 for (name, value_expr) in &anf_bindings {
                     codegen.generate_binding(name, value_expr)?;
                 }
@@ -785,10 +784,10 @@ impl JitCompiler {
                 // Generate the ANF body (loss value)
                 let (loss_reg, loss_ty) = codegen.generate(&anf_body)?;
 
-                // 5. Build shape map from forward codegen for reverse-mode AD
+                // Build shape map from forward codegen for reverse-mode AD
                 let shape_map: HashMap<String, Vec<i64>> = codegen.binding_shapes();
 
-                // 6. Run reverse-mode AD on ANF with shape info
+                // Run reverse-mode AD on ANF with shape info
                 let (backward_bindings, grad_sym_map) =
                     reverse_grad(&anf_bindings, &anf_body, &all_wrt_symbols, &shape_map);
 
@@ -817,14 +816,14 @@ impl JitCompiler {
                     }
                 }
 
-                // 7. Generate backward bindings (adjoint computations).
-                //    Backward bindings are always simple name=expr (no Lambda/destructuring).
+                // Generate backward bindings (adjoint computations).
+                // Backward bindings are always simple name=expr (no Lambda/destructuring).
                 for (name, value_expr) in &backward_bindings {
                     let (reg, ty) = codegen.generate(value_expr)?;
                     codegen.bind_symbol(name, reg, ty);
                 }
 
-                // 6. Collect gradient registers for each wrt param.
+                // Collect gradient registers for each wrt param.
                 let mut grad_regs: Vec<Register> = Vec::new();
                 let mut grad_tys: Vec<StableHLOType> = Vec::new();
 
@@ -1131,175 +1130,6 @@ fn substitute_scalar(expr: &CompiledExpr, name: &str, val: f64) -> CompiledExpr 
         ),
         other => other.clone(),
     }
-}
-
-/// Locate the `iree-compile` binary. Returns None if not found.
-pub fn find_iree_compile() -> Option<String> {
-    // Explicit env var
-    if let Ok(path) = std::env::var("IREE_COMPILE") {
-        if std::path::Path::new(&path).exists() {
-            return Some(path);
-        }
-    }
-    // Auto-downloaded toolchain cache
-    if let Some(path) = find_cached_toolchain() {
-        return Some(path);
-    }
-    // PATH lookup
-    which("iree-compile")
-}
-
-fn toolchain_dir() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".sheaf/toolchain"))
-}
-
-fn find_cached_toolchain() -> Option<String> {
-    let dir = toolchain_dir()?;
-    let binary = dir.join("iree-compile");
-    if !binary.exists() {
-        return None;
-    }
-    // Check version matches
-    let version_file = dir.join("version");
-    if let Ok(cached_version) = std::fs::read_to_string(&version_file) {
-        if cached_version.trim() != IREE_COMPILER_VERSION {
-            return None; // stale version, will trigger re-download
-        }
-    } else {
-        return None;
-    }
-    Some(binary.to_string_lossy().to_string())
-}
-
-fn platform_wheel_tag() -> Option<&'static str> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", _) => Some("macosx_13_0_universal2"),
-        ("linux", "x86_64") => Some("manylinux_2_28_x86_64"),
-        ("linux", "aarch64") => Some("manylinux_2_28_aarch64"),
-        _ => None,
-    }
-}
-
-fn compiler_lib_name() -> &'static str {
-    if cfg!(target_os = "macos") { "libIREECompiler.dylib" }
-    else { "libIREECompiler.so" }
-}
-
-/// Download and install the IREE compiler toolchain from PyPI.
-pub fn ensure_toolchain() -> Result<String, Box<dyn std::error::Error>> {
-    let platform_tag = platform_wheel_tag()
-        .ok_or("unsupported platform for auto-download")?;
-    let dir = toolchain_dir()
-        .ok_or("cannot determine home directory")?;
-    std::fs::create_dir_all(&dir)?;
-
-    for tool in &["curl", "unzip"] {
-        if which(tool).is_none() {
-            return Err(format!("'{}' is required to download the compiler toolchain", tool).into());
-        }
-    }
-
-    sheaf_msg!("sheaf: downloading compiler toolchain...");
-
-    // Fetch PyPI JSON metadata to find the wheel URL
-    let pypi_url = format!(
-        "https://pypi.org/pypi/iree-base-compiler/{}/json",
-        IREE_COMPILER_VERSION
-    );
-    let json_path = std::env::temp_dir().join("sheaf-pypi-metadata.json");
-    let curl_status = std::process::Command::new("curl")
-        .args(["-sSf", "-o"])
-        .arg(&json_path)
-        .arg(&pypi_url)
-        .status()?;
-    if !curl_status.success() {
-        return Err("failed to fetch PyPI metadata (check network connection)".into());
-    }
-
-    let json_str = std::fs::read_to_string(&json_path)?;
-    let _ = std::fs::remove_file(&json_path);
-
-    // Parse JSON to find matching wheel URL
-    let json: serde_json::Value = serde_json::from_str(&json_str)?;
-    let urls = json["urls"].as_array()
-        .ok_or("unexpected PyPI JSON format")?;
-
-    let wheel_url = urls.iter()
-        .filter_map(|entry| {
-            let filename = entry["filename"].as_str()?;
-            if filename.ends_with(".whl") && filename.contains(platform_tag) {
-                entry["url"].as_str().map(|s| s.to_string())
-            } else {
-                None
-            }
-        })
-        .next()
-        .ok_or_else(|| format!(
-            "no wheel found for platform '{}' at version {}",
-            platform_tag, IREE_COMPILER_VERSION
-        ))?;
-
-    // Download the wheel
-    let wheel_path = std::env::temp_dir().join("sheaf-iree-compiler.whl");
-    let curl_status = std::process::Command::new("curl")
-        .args(["-sSfL", "-o"])
-        .arg(&wheel_path)
-        .arg(&wheel_url)
-        .status()?;
-    if !curl_status.success() {
-        return Err("failed to download IREE compiler wheel".into());
-    }
-
-    // Extract iree-compile and libIREECompiler from the wheel (ZIP file)
-    let lib_name = compiler_lib_name();
-    let unzip_status = std::process::Command::new("unzip")
-        .args(["-j", "-o"])
-        .arg(&wheel_path)
-        .arg("iree/compiler/_mlir_libs/iree-compile")
-        .arg("iree/compiler/_mlir_libs/iree-lld")
-        .arg(format!("iree/compiler/_mlir_libs/{}", lib_name))
-        .arg("-d")
-        .arg(&dir)
-        .stdout(std::process::Stdio::null())
-        .status()?;
-    let _ = std::fs::remove_file(&wheel_path);
-    if !unzip_status.success() {
-        return Err("failed to extract iree-compile from wheel".into());
-    }
-
-    // Ensure binaries are executable
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        for bin in &["iree-compile", "iree-lld"] {
-            let path = dir.join(bin);
-            if let Ok(meta) = std::fs::metadata(&path) {
-                let mut perms = meta.permissions();
-                perms.set_mode(0o755);
-                let _ = std::fs::set_permissions(&path, perms);
-            }
-        }
-    }
-
-    // Write version file
-    std::fs::write(dir.join("version"), IREE_COMPILER_VERSION)?;
-
-    let binary = dir.join("iree-compile");
-    sheaf_msg!("sheaf: compiler successfully installed in {}", dir.display());
-    Ok(binary.to_string_lossy().to_string())
-}
-
-fn which(name: &str) -> Option<String> {
-    std::env::var("PATH").ok().and_then(|path_var| {
-        path_var.split(':').find_map(|dir| {
-            let candidate = format!("{}/{}", dir, name);
-            if std::path::Path::new(&candidate).exists() {
-                Some(candidate)
-            } else {
-                None
-            }
-        })
-    })
 }
 
 #[cfg(iree_runtime)]
