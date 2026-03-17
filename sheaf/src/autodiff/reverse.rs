@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Reverse-mode autodiff on ANF (Administrative Normal Form).
+//! Reverse-mode autodiff on Administrative Normal Form (ANF).
 //!
 //! Two passes:
 //! 1. `to_anf`: flatten a CompiledExpr tree into a flat Let chain where every
@@ -10,8 +10,7 @@
 //!
 //! 2. `reverse_grad`: walk the ANF bindings in reverse, emitting backward
 //!    bindings that compute adjoint contributions.  Each adjoint is itself a
-//!    named binding, so the backward expression is also flat (ANF): no tree
-//!    duplication, guaranteed O(n) size.
+//!    named binding, so the backward expression is also flat.
 
 use crate::autodiff::replace_symbol;
 use crate::core::expr::CompiledExpr;
