@@ -7,7 +7,6 @@ use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::core::expr::CompiledExpr;
 use crate::core::error::{SheafError, SheafResult};
 use crate::core::ast::SheafValue;
-use crate::runtime::tensor_ops;
 use super::CodeGenerator;
 
 impl CodeGenerator {
@@ -51,7 +50,7 @@ impl CodeGenerator {
     fn gen_zeros(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
         if let CompiledExpr::Vector(shape_elems) = &args[0] {
             let shape = self.parse_shape_vec(shape_elems)?;
-            let (reg, ty) = tensor_ops::emit_zeros(&mut self.emitter, &shape);
+            let (reg, ty) = self.emitter.emit_zeros(&shape);
             Ok((reg, ty))
         } else {
             Err(SheafError::Compile {
@@ -64,7 +63,7 @@ impl CodeGenerator {
     fn gen_ones(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
         if let CompiledExpr::Vector(shape_elems) = &args[0] {
             let shape = self.parse_shape_vec(shape_elems)?;
-            let (reg, ty) = tensor_ops::emit_ones(&mut self.emitter, &shape);
+            let (reg, ty) = self.emitter.emit_ones(&shape);
             Ok((reg, ty))
         } else {
             Err(SheafError::Compile {
@@ -90,7 +89,7 @@ impl CodeGenerator {
         } else {
             n
         };
-        let (reg, ty) = tensor_ops::emit_eye(&mut self.emitter, n, m);
+        let (reg, ty) = self.emitter.emit_eye(n, m);
         Ok((reg, ty))
     }
 
@@ -103,7 +102,7 @@ impl CodeGenerator {
                 location: crate::core::error::SourceLocation::unknown(),
             }),
         };
-        let (reg, ty) = tensor_ops::emit_one_hot(&mut self.emitter, &indices_reg, &indices_ty, num_classes);
+        let (reg, ty) = self.emitter.emit_one_hot(&indices_reg, &indices_ty, num_classes);
         Ok((reg, ty))
     }
 
@@ -140,8 +139,7 @@ impl CodeGenerator {
                 new_shape[neg_idx] = input_size / known_size;
             }
         }
-        let (reg, ty) = tensor_ops::emit_reshape(
-            &mut self.emitter,
+        let (reg, ty) = self.emitter.emit_reshape(
             &operand_reg,
             &operand_ty,
             &new_shape,
@@ -172,8 +170,7 @@ impl CodeGenerator {
             perm.swap((ndim - 2) as usize, (ndim - 1) as usize);
             perm
         };
-        let (reg, ty) = tensor_ops::emit_transpose(
-            &mut self.emitter,
+        let (reg, ty) = self.emitter.emit_transpose(
             &operand_reg,
             &operand_ty,
             &permutation,
@@ -226,7 +223,7 @@ impl CodeGenerator {
         if args.len() == 1 {
             if let CompiledExpr::Integer(n) = &args[0] {
                 let shape = vec![*n];
-                let (reg, ty) = tensor_ops::emit_arange(&mut self.emitter, &shape, 0);
+                let (reg, ty) = self.emitter.emit_iota(&shape, 0);
                 Ok((reg, ty))
             } else {
                 Err(SheafError::Compile {
@@ -245,7 +242,7 @@ impl CodeGenerator {
                         });
                     }
                     let shape = vec![len];
-                    let (iota_reg, iota_ty) = tensor_ops::emit_arange(&mut self.emitter, &shape, 0);
+                    let (iota_reg, iota_ty) = self.emitter.emit_iota(&shape, 0);
                     if *start == 0 {
                         return Ok((iota_reg, iota_ty));
                     }
@@ -272,8 +269,7 @@ impl CodeGenerator {
                 operand_types.push(ty);
             }
             if let CompiledExpr::Integer(dim) = &args[1] {
-                let (reg, ty) = tensor_ops::emit_concatenate(
-                    &mut self.emitter,
+                let (reg, ty) = self.emitter.emit_concatenate(
                     &operand_regs,
                     &operand_types,
                     *dim,
@@ -313,8 +309,7 @@ impl CodeGenerator {
                 });
             }
         };
-        let (reg, ty) = tensor_ops::emit_swapaxes(
-            &mut self.emitter,
+        let (reg, ty) = self.emitter.emit_swapaxes(
             &operand_reg,
             &operand_ty,
             axis1,
@@ -325,7 +320,7 @@ impl CodeGenerator {
 
     fn gen_tril(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
-        let (reg, ty) = tensor_ops::emit_tril(&mut self.emitter, &operand_reg, &operand_ty);
+        let (reg, ty) = self.emitter.emit_tril(&operand_reg, &operand_ty);
         Ok((reg, ty))
     }
 
@@ -333,8 +328,7 @@ impl CodeGenerator {
         let (condition_reg, condition_ty) = self.generate(&args[0])?;
         let (x_reg, x_ty) = self.generate(&args[1])?;
         let (y_reg, y_ty) = self.generate(&args[2])?;
-        let (reg, ty) = tensor_ops::emit_where(
-            &mut self.emitter,
+        let (reg, ty) = self.emitter.emit_where(
             &condition_reg,
             &x_reg,
             &y_reg,
@@ -388,7 +382,7 @@ impl CodeGenerator {
         } else {
             shape[axis_usize]
         };
-        let (reg, ty) = tensor_ops::emit_slice(&mut self.emitter, &operand_reg, &operand_ty, start, end, axis_usize);
+        let (reg, ty) = self.emitter.emit_slice_axis(&operand_reg, &operand_ty, start, end, axis_usize);
         Ok((reg, ty))
     }
 
@@ -412,7 +406,7 @@ impl CodeGenerator {
                 });
             }
         };
-        let (reg, ty) = tensor_ops::emit_dynamic_slice(&mut self.emitter, &operand_reg, &operand_ty, start, end);
+        let (reg, ty) = self.emitter.emit_slice_range(&operand_reg, &operand_ty, start, end);
         Ok((reg, ty))
     }
 
@@ -427,7 +421,7 @@ impl CodeGenerator {
                 });
             }
         };
-        let (reg, ty) = tensor_ops::emit_tensor_split(&mut self.emitter, &operand_reg, &operand_ty, num_sections);
+        let (reg, ty) = self.emitter.emit_tensor_split(&operand_reg, &operand_ty, num_sections);
         Ok((reg, ty))
     }
 
@@ -442,7 +436,7 @@ impl CodeGenerator {
                 });
             }
         };
-        let (reg, ty) = tensor_ops::emit_roll(&mut self.emitter, &operand_reg, &operand_ty, shift);
+        let (reg, ty) = self.emitter.emit_roll(&operand_reg, &operand_ty, shift);
         Ok((reg, ty))
     }
 
@@ -458,23 +452,34 @@ impl CodeGenerator {
             }
         };
         let (value_reg, value_ty) = self.generate(&args[2])?;
-        let (reg, ty) = tensor_ops::emit_index_update(&mut self.emitter, &operand_reg, &operand_ty, idx, &value_reg, &value_ty);
+        let (reg, ty) = self.emitter.emit_index_update(&operand_reg, &operand_ty, idx, &value_reg, &value_ty);
         Ok((reg, ty))
     }
 
     fn gen_append_and_roll(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
         let (value_reg, value_ty) = self.generate(&args[1])?;
-        let (reg, ty) = tensor_ops::emit_append_and_roll(&mut self.emitter, &operand_reg, &operand_ty, &value_reg, &value_ty);
+        let n = operand_ty.shape()[0];
+        let (tail, tail_ty) = self.emitter.emit_slice_range(&operand_reg, &operand_ty, 1, n - 1);
+        let val_1d_ty = StableHLOType::f32_tensor(vec![1]);
+        let val_1d = self.emitter.fresh_register();
+        self.emitter.body.push(format!(
+            "    {} = stablehlo.reshape {} : ({}) -> {}",
+            val_1d.to_mlir(),
+            value_reg.to_mlir(),
+            value_ty.to_mlir(),
+            val_1d_ty.to_mlir(),
+        ));
+        let (reg, ty) = self.emitter.emit_concatenate(&[tail, val_1d], &[tail_ty, val_1d_ty], 0);
         Ok((reg, ty))
     }
 
     fn gen_random_key(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
         if let CompiledExpr::Integer(seed) = &args[0] {
-            let (reg, ty) = tensor_ops::emit_random_key(&mut self.emitter, *seed);
+            let (reg, ty) = self.emitter.emit_random_key( *seed);
             Ok((reg, ty))
         } else if let CompiledExpr::Float(f) = &args[0] {
-            let (reg, ty) = tensor_ops::emit_random_key(&mut self.emitter, *f as i64);
+            let (reg, ty) = self.emitter.emit_random_key( *f as i64);
             Ok((reg, ty))
         } else {
             Err(SheafError::Compile {

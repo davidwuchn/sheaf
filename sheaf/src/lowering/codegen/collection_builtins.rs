@@ -7,7 +7,6 @@
 use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::core::expr::CompiledExpr;
 use crate::core::error::{SheafError, SheafResult};
-use crate::runtime::tensor_ops;
 use super::CodeGenerator;
 
 impl CodeGenerator {
@@ -257,8 +256,7 @@ impl CodeGenerator {
                     _ => {
                         let (idx_reg, idx_ty) = self.generate(&args[1])?;
                         if !idx_ty.shape().is_empty() {
-                            let (reg, ty) = tensor_ops::emit_gather_axis0(
-                                &mut self.emitter,
+                            let (reg, ty) = self.emitter.emit_gather_axis0(
                                 &operand_reg, &operand_ty,
                                 &idx_reg, &idx_ty,
                             );
@@ -267,8 +265,7 @@ impl CodeGenerator {
                             let (idx_1d_reg, idx_1d_ty) = self.emitter.emit_reshape(
                                 &idx_reg, &idx_ty, &[1],
                             );
-                            let (gathered_reg, gathered_ty) = tensor_ops::emit_gather_axis0(
-                                &mut self.emitter,
+                            let (gathered_reg, gathered_ty) = self.emitter.emit_gather_axis0(
                                 &operand_reg, &operand_ty,
                                 &idx_1d_reg, &idx_1d_ty,
                             );

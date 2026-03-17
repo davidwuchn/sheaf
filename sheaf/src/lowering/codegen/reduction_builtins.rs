@@ -6,7 +6,6 @@
 use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::core::expr::CompiledExpr;
 use crate::core::error::SheafResult;
-use crate::runtime::tensor_ops;
 use super::CodeGenerator;
 
 impl CodeGenerator {
@@ -72,9 +71,9 @@ impl CodeGenerator {
         let (reg, ty) = match axis {
             Some(ax) => {
                 if name == "sum" {
-                    tensor_ops::emit_sum(&mut self.emitter, &operand_reg, &operand_ty, ax, keepdims)
+                    self.emitter.emit_reduce_sum(&operand_reg, &operand_ty, ax, keepdims)
                 } else {
-                    tensor_ops::emit_mean(&mut self.emitter, &operand_reg, &operand_ty, ax, keepdims)
+                    self.emitter.emit_reduce_mean(&operand_reg, &operand_ty, ax, keepdims)
                 }
             }
             None => {
@@ -86,9 +85,9 @@ impl CodeGenerator {
                     let mut cur_ty = operand_ty;
                     for _ in (0..ndim).rev() {
                         let (r, t) = if name == "sum" {
-                            tensor_ops::emit_sum(&mut self.emitter, &cur_reg, &cur_ty, -1, false)
+                            self.emitter.emit_reduce_sum(&cur_reg, &cur_ty, -1, false)
                         } else {
-                            tensor_ops::emit_mean(&mut self.emitter, &cur_reg, &cur_ty, -1, false)
+                            self.emitter.emit_reduce_mean(&cur_reg, &cur_ty, -1, false)
                         };
                         cur_reg = r;
                         cur_ty = t;
@@ -129,7 +128,7 @@ impl CodeGenerator {
 
         let (reg, ty) = match axis {
             Some(ax) => {
-                tensor_ops::emit_product(&mut self.emitter, &operand_reg, &operand_ty, ax, keepdims)
+                self.emitter.emit_reduce_product(&operand_reg, &operand_ty, ax, keepdims)
             }
             None => {
                 let ndim = operand_ty.shape().len();
@@ -139,7 +138,7 @@ impl CodeGenerator {
                     let mut cur_reg = operand_reg;
                     let mut cur_ty = operand_ty;
                     for _ in (0..ndim).rev() {
-                        let (r, t) = tensor_ops::emit_product(&mut self.emitter, &cur_reg, &cur_ty, -1, false);
+                        let (r, t) = self.emitter.emit_reduce_product(&cur_reg, &cur_ty, -1, false);
                         cur_reg = r;
                         cur_ty = t;
                     }
@@ -178,14 +177,16 @@ impl CodeGenerator {
             }
         }
 
-        let emit_fn = if name == "min" {
-            tensor_ops::emit_min_reduce
-        } else {
-            tensor_ops::emit_max_reduce
-        };
+        let is_min = name == "min";
 
         let (reg, ty) = match axis {
-            Some(ax) => emit_fn(&mut self.emitter, &operand_reg, &operand_ty, ax, keepdims),
+            Some(ax) => {
+                if is_min {
+                    self.emitter.emit_reduce_min(&operand_reg, &operand_ty, ax, keepdims)
+                } else {
+                    self.emitter.emit_reduce_max(&operand_reg, &operand_ty, ax, keepdims)
+                }
+            }
             None => {
                 let ndim = operand_ty.shape().len();
                 if ndim == 0 {
@@ -194,7 +195,11 @@ impl CodeGenerator {
                     let mut cur_reg = operand_reg;
                     let mut cur_ty = operand_ty;
                     for _ in (0..ndim).rev() {
-                        let (r, t) = emit_fn(&mut self.emitter, &cur_reg, &cur_ty, -1, false);
+                        let (r, t) = if is_min {
+                            self.emitter.emit_reduce_min(&cur_reg, &cur_ty, -1, false)
+                        } else {
+                            self.emitter.emit_reduce_max(&cur_reg, &cur_ty, -1, false)
+                        };
                         cur_reg = r;
                         cur_ty = t;
                     }
@@ -226,9 +231,9 @@ impl CodeGenerator {
         }
 
         let (reg, ty) = if name == "argmax" {
-            tensor_ops::emit_argmax(&mut self.emitter, &operand_reg, &operand_ty, axis)
+            self.emitter.emit_argmax(&operand_reg, &operand_ty, axis)
         } else {
-            tensor_ops::emit_argmin(&mut self.emitter, &operand_reg, &operand_ty, axis)
+            self.emitter.emit_argmin(&operand_reg, &operand_ty, axis)
         };
         Ok((reg, ty))
     }
@@ -271,7 +276,12 @@ impl CodeGenerator {
 
         let (reg, ty) = match axis {
             Some(ax) => {
-                tensor_ops::emit_var(&mut self.emitter, &operand_reg, &operand_ty, ax, keepdims)
+                {
+                    let (mean_reg, mean_ty) = self.emitter.emit_reduce_mean(&operand_reg, &operand_ty, ax, true);
+                    let (diff, diff_ty) = self.emitter.emit_binop("-", &operand_reg, &mean_reg, &operand_ty, &mean_ty);
+                    let (sq, sq_ty) = self.emitter.emit_binop("*", &diff, &diff, &diff_ty, &diff_ty);
+                    self.emitter.emit_reduce_mean(&sq, &sq_ty, ax, keepdims)
+                }
             }
             None => {
                 let ndim = operand_ty.shape().len();
@@ -282,7 +292,12 @@ impl CodeGenerator {
                     let mut cur_reg = operand_reg;
                     let mut cur_ty = operand_ty;
                     for _ in (0..ndim).rev() {
-                        let (r, t) = tensor_ops::emit_var(&mut self.emitter, &cur_reg, &cur_ty, -1, false);
+                        let (r, t) = {
+                            let (mean_reg, mean_ty) = self.emitter.emit_reduce_mean(&cur_reg, &cur_ty, -1, true);
+                            let (diff, diff_ty) = self.emitter.emit_binop("-", &cur_reg, &mean_reg, &cur_ty, &mean_ty);
+                            let (sq, sq_ty) = self.emitter.emit_binop("*", &diff, &diff, &diff_ty, &diff_ty);
+                            self.emitter.emit_reduce_mean(&sq, &sq_ty, -1, false)
+                        };
                         cur_reg = r;
                         cur_ty = t;
                     }
@@ -314,7 +329,8 @@ impl CodeGenerator {
         }
 
         let ax = axis.unwrap_or(-1);
-        let (reg, ty) = tensor_ops::emit_normalize(&mut self.emitter, &operand_reg, &operand_ty, ax);
+        let (sum_reg, sum_ty) = self.emitter.emit_reduce_sum(&operand_reg, &operand_ty, ax, true);
+        let (reg, ty) = self.emitter.emit_binop("/", &operand_reg, &sum_reg, &operand_ty, &sum_ty);
         Ok((reg, ty))
     }
 }

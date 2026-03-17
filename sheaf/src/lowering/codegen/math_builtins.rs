@@ -6,7 +6,6 @@
 use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::core::expr::CompiledExpr;
 use crate::core::error::SheafResult;
-use crate::runtime::{math_ops, nn_ops};
 use super::CodeGenerator;
 
 impl CodeGenerator {
@@ -68,14 +67,7 @@ impl CodeGenerator {
         let (mut acc_reg, mut acc_ty) = self.generate(&args[0])?;
         for arg in &args[1..] {
             let (rhs_reg, rhs_ty) = self.generate(arg)?;
-            (acc_reg, acc_ty) = math_ops::emit_arithmetic_binop(
-                &mut self.emitter,
-                name,
-                &acc_reg,
-                &rhs_reg,
-                &acc_ty,
-                &rhs_ty,
-            );
+            (acc_reg, acc_ty) = self.emitter.emit_binop(name, &acc_reg, &rhs_reg, &acc_ty, &rhs_ty);
         }
         Ok((acc_reg, acc_ty))
     }
@@ -87,14 +79,7 @@ impl CodeGenerator {
     ) -> SheafResult<(Register, StableHLOType)> {
         let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
         let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
-        let (result_reg, result_ty) = math_ops::emit_extended_arithmetic(
-            &mut self.emitter,
-            name,
-            &lhs_reg,
-            &rhs_reg,
-            &lhs_ty,
-            &rhs_ty,
-        );
+        let (result_reg, result_ty) = self.emitter.emit_binop(name, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
         Ok((result_reg, result_ty))
     }
 
@@ -105,14 +90,7 @@ impl CodeGenerator {
     ) -> SheafResult<(Register, StableHLOType)> {
         let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
         let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
-        let (result_reg, result_ty) = math_ops::emit_minmax(
-            &mut self.emitter,
-            name,
-            &lhs_reg,
-            &rhs_reg,
-            &lhs_ty,
-            &rhs_ty,
-        );
+        let (result_reg, result_ty) = self.emitter.emit_binop(name, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
         Ok((result_reg, result_ty))
     }
 
@@ -123,14 +101,7 @@ impl CodeGenerator {
     ) -> SheafResult<(Register, StableHLOType)> {
         let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
         let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
-        let (result_reg, result_ty) = math_ops::emit_comparison(
-            &mut self.emitter,
-            name,
-            &lhs_reg,
-            &rhs_reg,
-            &lhs_ty,
-            &rhs_ty,
-        );
+        let (result_reg, result_ty) = self.emitter.emit_compare(name, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
         Ok((result_reg, result_ty))
     }
 
@@ -140,8 +111,7 @@ impl CodeGenerator {
     ) -> SheafResult<(Register, StableHLOType)> {
         let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
         let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
-        let (result_reg, result_ty) =
-            math_ops::emit_matmul(&mut self.emitter, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
+        let (result_reg, result_ty) = self.emitter.emit_matmul(&lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
         Ok((result_reg, result_ty))
     }
 
@@ -152,14 +122,7 @@ impl CodeGenerator {
     ) -> SheafResult<(Register, StableHLOType)> {
         let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
         let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
-        let (result_reg, result_ty) = math_ops::emit_boolean_binop(
-            &mut self.emitter,
-            name,
-            &lhs_reg,
-            &rhs_reg,
-            &lhs_ty,
-            &rhs_ty,
-        );
+        let (result_reg, result_ty) = self.emitter.emit_bool_binop(name, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
         Ok((result_reg, result_ty))
     }
 
@@ -169,8 +132,7 @@ impl CodeGenerator {
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
-        let result_reg =
-            math_ops::emit_math_unary(&mut self.emitter, name, &operand_reg, &operand_ty);
+        let result_reg = self.emitter.emit_unary(name, &operand_reg, &operand_ty);
         Ok((result_reg, operand_ty))
     }
 
@@ -179,7 +141,9 @@ impl CodeGenerator {
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
-        let result_reg = math_ops::emit_not(&mut self.emitter, &operand_reg, &operand_ty);
+        let one = self.emitter.emit_constant_f32(1.0);
+        let one_ty = StableHLOType::ScalarF32;
+        let (result_reg, _) = self.emitter.emit_binop("-", &one, &operand_reg, &one_ty, &operand_ty);
         Ok((result_reg, operand_ty))
     }
 
@@ -188,7 +152,7 @@ impl CodeGenerator {
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
-        let result_reg = nn_ops::emit_tanh(&mut self.emitter, &operand_reg, &operand_ty);
+        let result_reg = self.emitter.emit_unary("tanh", &operand_reg, &operand_ty);
         Ok((result_reg, operand_ty))
     }
 
@@ -200,9 +164,7 @@ impl CodeGenerator {
         let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
         let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
         let op = if name == "minimum" { "min" } else { "max" };
-        let (result_reg, result_ty) = math_ops::emit_minmax(
-            &mut self.emitter, op, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty,
-        );
+        let (result_reg, result_ty) = self.emitter.emit_binop(op, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
         Ok((result_reg, result_ty))
     }
 }

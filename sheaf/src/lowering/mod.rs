@@ -2,6 +2,9 @@
 // Licensed under the MIT License.
 
 //! Lowering: translates Sheaf IR (CompiledExpr) to StableHLO MLIR.
+//!
+//! - `codegen`: instruction selection -> maps Sheaf builtins to StableHLO ops.
+//! - `stablehlo`: MLIR emission -> serializes ops, types, and broadcasts.
 
 pub mod codegen;
 pub mod config;

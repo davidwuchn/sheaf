@@ -265,7 +265,7 @@ fn get_runtime_hint(message: &str) -> Option<String> {
     // Index out of bounds
     if message.contains("is out of bounds for axis") {
         // Extract index and size for a more helpful hint
-        if let (Some(idx), Some(size)) = (
+        if let (Some(_idx), Some(size)) = (
             message.split("index ").nth(1).and_then(|s| s.split_whitespace().next()).and_then(|s| s.parse::<usize>().ok()),
             message.split("with size ").nth(1).and_then(|s| s.parse::<usize>().ok()),
         ) {
