@@ -288,6 +288,16 @@ pub(self) fn get_axis(kw: &BTreeMap<String, Value>) -> Option<i64> {
     })
 }
 
+/// Extract dtype override from kwargs (e.g. `:bf16` flag).
+pub(self) fn get_dtype_kwarg(kw: &BTreeMap<String, Value>) -> Option<Dtype> {
+    for key in kw.keys() {
+        if let Some(dt) = Dtype::from_keyword(key) {
+            return Some(dt);
+        }
+    }
+    None
+}
+
 pub(self) fn reduce_along_axis(arr: &ArrayD<f32>, axis: usize, op: fn(&[f32]) -> f32) -> ArrayD<f32> {
     let shape = arr.shape();
     if shape.is_empty() || axis >= shape.len() {

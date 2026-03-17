@@ -12,6 +12,7 @@ use rustyline::{Editor, Helper};
 use sheaf_compiler::forms::special_forms_registry;
 use sheaf_compiler::interpreter::eval::Interpreter;
 use sheaf_compiler::interpreter::tracer::{Tracer, TraceLevel, LogFormat, TracerConfig};
+use sheaf_compiler::core::color;
 use sheaf_compiler::interpreter::value::Value;
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -133,7 +134,7 @@ impl Hinter for SheafHelper {
 
 impl Highlighter for SheafHelper {
     fn highlight_prompt<'b, 's: 'b, 'p: 'b>(&'s self, prompt: &'p str, _default: bool) -> Cow<'b, str> {
-        Cow::Borrowed(prompt)
+        Cow::Owned(format!("{}{}{}", color::color(), prompt, color::reset()))
     }
 }
 
@@ -237,7 +238,11 @@ pub fn run() {
                 match interp.eval(trimmed) {
                     Ok(val) => {
                         if !is_silent_result(&val) {
-                            println!("{}", val);
+                            if let Some(prefix) = val.repl_type_prefix() {
+                                println!("=> {} = {}", prefix, val);
+                            } else {
+                                println!("=> {}", val);
+                            }
                         }
                     }
                     Err(e) => eprint!("{}", sheaf_compiler::core::error_format::format_error(&e)),

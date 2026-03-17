@@ -19,14 +19,15 @@ fn keepdims(kw: &BTreeMap<String, Value>) -> bool {
 }
 
 fn builtin_sum(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, input_dt) = to_array(&args[0])?;
+    let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
         let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
         let result = reduce_along_axis(&arr, ax, |v| v.iter().sum());
         if keepdims(kw) {
-            Ok(Value::tensor_f32(result.insert_axis(ndarray::Axis(ax))))
+            Ok(Value::tensor(result.insert_axis(ndarray::Axis(ax)), dt))
         } else {
-            Ok(Value::tensor_f32(result))
+            Ok(Value::tensor(result, dt))
         }
     } else {
         Ok(Value::Float(arr.iter().sum::<f32>()))
@@ -34,14 +35,15 @@ fn builtin_sum(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_mean(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, input_dt) = to_array(&args[0])?;
+    let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
         let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
         let result = reduce_along_axis(&arr, ax, |v| v.iter().sum::<f32>() / v.len() as f32);
         if keepdims(kw) {
-            Ok(Value::tensor_f32(result.insert_axis(ndarray::Axis(ax))))
+            Ok(Value::tensor(result.insert_axis(ndarray::Axis(ax)), dt))
         } else {
-            Ok(Value::tensor_f32(result))
+            Ok(Value::tensor(result, dt))
         }
     } else {
         let n = arr.len() as f32;
@@ -50,14 +52,15 @@ fn builtin_mean(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_product(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, input_dt) = to_array(&args[0])?;
+    let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
         let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
         let result = reduce_along_axis(&arr, ax, |v| v.iter().product());
         if result.shape().is_empty() {
             Ok(Value::Float(*result.first().unwrap()))
         } else {
-            Ok(Value::tensor_f32(result))
+            Ok(Value::tensor(result, dt))
         }
     } else {
         Ok(Value::Float(arr.iter().product::<f32>()))
@@ -65,14 +68,15 @@ fn builtin_product(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_min(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, input_dt) = to_array(&args[0])?;
+    let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
         let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
         let result = reduce_along_axis(&arr, ax, |v| v.iter().copied().fold(f32::INFINITY, f32::min));
         if keepdims(kw) {
-            Ok(Value::tensor_f32(result.insert_axis(ndarray::Axis(ax))))
+            Ok(Value::tensor(result.insert_axis(ndarray::Axis(ax)), dt))
         } else {
-            Ok(Value::tensor_f32(result))
+            Ok(Value::tensor(result, dt))
         }
     } else {
         Ok(Value::Float(arr.iter().copied().fold(f32::INFINITY, f32::min)))
@@ -88,14 +92,15 @@ fn builtin_max(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         let vals: Result<Vec<f32>, _> = items.iter().map(|a| a.to_f64().map(|v| v as f32).ok_or_else(|| runtime_error("max: list must contain numbers"))).collect();
         return Ok(Value::Float(vals?.into_iter().fold(f32::NEG_INFINITY, f32::max)));
     }
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, input_dt) = to_array(&args[0])?;
+    let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
         let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
         let result = reduce_along_axis(&arr, ax, |v| v.iter().copied().fold(f32::NEG_INFINITY, f32::max));
         if keepdims(kw) {
-            Ok(Value::tensor_f32(result.insert_axis(ndarray::Axis(ax))))
+            Ok(Value::tensor(result.insert_axis(ndarray::Axis(ax)), dt))
         } else {
-            Ok(Value::tensor_f32(result))
+            Ok(Value::tensor(result, dt))
         }
     } else {
         Ok(Value::Float(arr.iter().copied().fold(f32::NEG_INFINITY, f32::max)))
@@ -137,7 +142,8 @@ fn builtin_argmin(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_var(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, input_dt) = to_array(&args[0])?;
+    let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
         let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
         let mean_arr = reduce_along_axis(&arr, ax, |v| v.iter().sum::<f32>() / v.len() as f32);
@@ -146,9 +152,9 @@ fn builtin_var(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         let sq = &diff * &diff;
         let result = reduce_along_axis(&sq, ax, |v| v.iter().sum::<f32>() / v.len() as f32);
         if keepdims(kw) {
-            Ok(Value::tensor_f32(result.insert_axis(ndarray::Axis(ax))))
+            Ok(Value::tensor(result.insert_axis(ndarray::Axis(ax)), dt))
         } else {
-            Ok(Value::tensor_f32(result))
+            Ok(Value::tensor(result, dt))
         }
     } else {
         let n = arr.len() as f32;
@@ -159,14 +165,15 @@ fn builtin_var(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_normalize(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, input_dt) = to_array(&args[0])?;
+    let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
         let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
         let sum_arr = reduce_along_axis(&arr, ax, |v| v.iter().sum());
         let sum_bc = sum_arr.insert_axis(ndarray::Axis(ax));
-        Ok(Value::tensor_f32(&arr / &sum_bc))
+        Ok(Value::tensor(&arr / &sum_bc, dt))
     } else {
         let total: f32 = arr.iter().sum();
-        Ok(Value::tensor_f32(arr.mapv(|x| x / total)))
+        Ok(Value::tensor(arr.mapv(|x| x / total), dt))
     }
 }
