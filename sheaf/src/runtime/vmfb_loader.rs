@@ -8,8 +8,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::compiler::effects::has_side_effects;
-use crate::core::compiler::CompilerContext;
+use crate::lowering::effects::has_side_effects;
+use crate::core::expr::CompilerContext;
 use crate::core::inference::FunctionSignature;
 use crate::runtime::iree_session::IreeSession;
 
@@ -232,17 +232,17 @@ fn parse_manifest_signature(
     // Get param order from the function definition in the registry
     let fd = compiler.registry.get(fn_name)?;
 
-    let param_types: Vec<crate::compiler::stablehlo::StableHLOType> = fd.params.iter()
+    let param_types: Vec<crate::lowering::stablehlo::StableHLOType> = fd.params.iter()
         .map(|p| {
             params_obj.get(p)
                 .and_then(|v| v.as_str())
-                .and_then(|s| crate::compiler::stablehlo::StableHLOType::parse(s))
-                .unwrap_or_else(crate::compiler::stablehlo::StableHLOType::scalar_f32)
+                .and_then(|s| crate::lowering::stablehlo::StableHLOType::parse(s))
+                .unwrap_or_else(crate::lowering::stablehlo::StableHLOType::scalar_f32)
         })
         .collect();
 
-    let return_type = crate::compiler::stablehlo::StableHLOType::parse(return_str)
-        .unwrap_or_else(crate::compiler::stablehlo::StableHLOType::scalar_f32);
+    let return_type = crate::lowering::stablehlo::StableHLOType::parse(return_str)
+        .unwrap_or_else(crate::lowering::stablehlo::StableHLOType::scalar_f32);
 
     Some(FunctionSignature {
         param_types,

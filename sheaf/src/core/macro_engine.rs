@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 
-use crate::ast::SheafValue;
-use crate::core::compiler::FunctionDef;
+use crate::core::ast::SheafValue;
+use crate::core::expr::FunctionDef;
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 
 /// A user-defined macro registered via (defmacro name [params] body-template).

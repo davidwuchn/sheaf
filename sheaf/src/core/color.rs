@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Sheaf terminal output: violet system messages on stderr.
+//! Sheaf terminal output: colored system messages on stderr.
 
 use std::sync::OnceLock;
 

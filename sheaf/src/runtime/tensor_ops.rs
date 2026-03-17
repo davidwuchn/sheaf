@@ -10,7 +10,7 @@
 //!
 //! This module provides runtime emission helpers for StableHLO tensor operations.
 
-use crate::compiler::stablehlo::{Register, StableHLOEmitter, StableHLOType};
+use crate::lowering::stablehlo::{Register, StableHLOEmitter, StableHLOType};
 
 /// Emit zeros tensor: (zeros [M N]) -> tensor<MxNxf32>
 pub fn emit_zeros(emitter: &mut StableHLOEmitter, shape: &[i64]) -> (Register, StableHLOType) {

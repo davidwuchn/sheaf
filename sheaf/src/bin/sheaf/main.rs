@@ -294,7 +294,7 @@ fn run_file(args: &[String]) {
 /// Parse a guard spec: `[scope:]check[:args]`
 /// Examples: `no-nan`, `loss:no-nan`, `range:0:10`, `forward:range:-1:1`
 fn parse_guard_spec(spec: &str) -> Result<sheaf_compiler::interpreter::tracer::CliGuard, String> {
-    use sheaf_compiler::core::compiler::GuardCheck;
+    use sheaf_compiler::core::expr::GuardCheck;
     use sheaf_compiler::interpreter::tracer::CliGuard;
 
     let parts: Vec<&str> = spec.split(':').collect();

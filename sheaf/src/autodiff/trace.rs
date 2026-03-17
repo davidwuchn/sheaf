@@ -8,7 +8,7 @@
 //! computations symbolic. The result is a flat expression the symbolic
 //! AD engine can differentiate.
 
-use crate::core::compiler::CompiledExpr;
+use crate::core::expr::CompiledExpr;
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::Value;

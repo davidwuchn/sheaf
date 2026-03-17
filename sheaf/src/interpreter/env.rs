@@ -3,7 +3,7 @@
 
 //! Environment for the Sheaf interpreter: scoped variable bindings.
 
-use crate::core::compiler::{FunctionDef, VmfbSession};
+use crate::core::expr::{FunctionDef, VmfbSession};
 use crate::core::error::SheafError;
 use crate::interpreter::value::{BuiltinFnPtr, Value};
 use std::collections::HashMap;

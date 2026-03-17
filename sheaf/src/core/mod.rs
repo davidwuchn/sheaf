@@ -3,17 +3,18 @@
 
 //! Core compiler components
 
+pub mod ast;
 pub mod color;
-pub mod compiler;
 pub mod config;
 pub mod error;
 pub mod error_format;
+pub mod expr;
 pub mod inference;
 pub mod macro_engine;
 pub mod parser;
 pub mod trace;
 
-pub use compiler::{CompiledExpr, CompilerContext, FunctionDef};
+pub use expr::{CompiledExpr, CompilerContext, FunctionDef};
 pub use error::{SheafError, SheafResult};
 pub use inference::{FunctionSignature, infer_function_signature};
 pub use parser::parse;

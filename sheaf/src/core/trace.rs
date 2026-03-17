@@ -10,8 +10,8 @@
 //! This is the same approach as JAX's abstract interpretation: trace once, observe
 //! shapes, use those for compilation/dispatch.
 
-use crate::compiler::stablehlo::StableHLOType;
-use crate::core::compiler::{CompilerContext, FunctionDef, ParamField, ParamLayout};
+use crate::lowering::stablehlo::StableHLOType;
+use crate::core::expr::{CompilerContext, FunctionDef, ParamField, ParamLayout};
 use crate::core::error::{SheafError, SheafResult};
 use crate::core::inference::FunctionSignature;
 use crate::interpreter::builtins::register_builtins;

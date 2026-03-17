@@ -6,17 +6,16 @@
 //! A functional language for differentiable programming,
 //! compiling directly to StableHLO and running on IREE.
 
-pub mod ast;
 pub mod autodiff;
-pub mod compiler;
 pub mod core;
 pub mod forms;
 pub mod interpreter;
+pub mod lowering;
 pub mod runtime;
 
 // Re-export main types
-pub use ast::SheafValue;
-pub use compiler::{collect_hof_calls, CodeGenerator, StableHLOEmitter, StableHLOType};
-pub use core::compiler::{CompiledExpr, CompilerContext};
+pub use core::ast::SheafValue;
+pub use lowering::{collect_hof_calls, CodeGenerator, StableHLOEmitter, StableHLOType};
+pub use core::expr::{CompiledExpr, CompilerContext};
 pub use core::error::{SheafError, SheafResult, SourceLocation};
 pub use core::parse;

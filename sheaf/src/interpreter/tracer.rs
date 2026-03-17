@@ -3,7 +3,7 @@
 
 //! Runtime tracer: function call logging, ring-buffer backtrace, and CLI guards.
 
-use crate::core::compiler::GuardCheck;
+use crate::core::expr::GuardCheck;
 use crate::sheaf_msg;
 use crate::interpreter::value::Value;
 use std::collections::{HashSet, VecDeque};

@@ -3,9 +3,9 @@
 
 //! ML-specific special forms: with-params, grad, value-and-grad
 
-use crate::ast::SheafValue;
-use crate::compiler::stablehlo::StableHLOType;
-use crate::core::compiler::{CompiledExpr, CompilerContext, ParamField, ParamLayout};
+use crate::core::ast::SheafValue;
+use crate::lowering::stablehlo::StableHLOType;
+use crate::core::expr::{CompiledExpr, CompilerContext, ParamField, ParamLayout};
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 use crate::forms::base::{SpecialForm, check_min_arity};
 

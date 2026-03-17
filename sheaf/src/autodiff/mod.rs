@@ -9,7 +9,7 @@ pub mod trace;
 // `grad(expr, wrt)` returns a new `CompiledExpr` representing dL/d(wrt),
 // assuming `expr` is the scalar loss (so the incoming gradient is 1.0).
 
-use crate::core::compiler::{CompiledExpr, FunctionDef};
+use crate::core::expr::{CompiledExpr, FunctionDef};
 use std::collections::HashMap;
 
 // helpers

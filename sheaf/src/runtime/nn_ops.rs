@@ -7,7 +7,7 @@
 //!
 //! This module provides runtime emission helpers for StableHLO neural network operations.
 
-use crate::compiler::stablehlo::{Register, StableHLOEmitter, StableHLOType};
+use crate::lowering::stablehlo::{Register, StableHLOEmitter, StableHLOType};
 
 /// Emit ReLU activation: max(x, 0)
 pub fn emit_relu(

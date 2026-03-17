@@ -3,8 +3,8 @@
 
 //! Binding special forms: defn, let, fn
 
-use crate::ast::SheafValue;
-use crate::core::compiler::{CompiledExpr, CompilerContext, FunctionDef};
+use crate::core::ast::SheafValue;
+use crate::core::expr::{CompiledExpr, CompilerContext, FunctionDef};
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 use crate::core::macro_engine::MacroDef;
 use crate::forms::base::{SpecialForm, check_min_arity, expect_symbol, expect_vector};
@@ -167,7 +167,7 @@ impl SpecialForm for DefnForm {
                 // Build known param types from type and shape annotations
                 let mut known_param_types: Vec<(
                     String,
-                    crate::compiler::stablehlo::StableHLOType,
+                    crate::lowering::stablehlo::StableHLOType,
                 )> = Vec::new();
                 for (param, type_name) in &type_annotations {
                     if let Some(layout) = compiler.param_types.get(type_name) {
@@ -178,7 +178,7 @@ impl SpecialForm for DefnForm {
                 for (param, shape) in &shape_annotations {
                     known_param_types.push((
                         param.clone(),
-                        crate::compiler::stablehlo::StableHLOType::f32_tensor(shape.clone()),
+                        crate::lowering::stablehlo::StableHLOType::f32_tensor(shape.clone()),
                     ));
                 }
 
@@ -438,7 +438,7 @@ impl SpecialForm for FnForm {
         for p in &param_names {
             compiler.local_vars.insert(
                 p.clone(),
-                crate::ast::SheafValue::Symbol(p.clone(), loc.clone()),
+                crate::core::ast::SheafValue::Symbol(p.clone(), loc.clone()),
             );
         }
 

@@ -14,7 +14,7 @@
 //!    duplication, guaranteed O(n) size.
 
 use crate::autodiff::replace_symbol;
-use crate::core::compiler::CompiledExpr;
+use crate::core::expr::CompiledExpr;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

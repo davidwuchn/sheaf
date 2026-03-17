@@ -3,7 +3,7 @@
 
 //! Runtime values for the Sheaf interpreter.
 
-use crate::core::compiler::CompiledExpr;
+use crate::core::expr::CompiledExpr;
 use crate::core::error::SheafError;
 use crate::runtime::iree_session::DeviceBufferInner;
 use ndarray::{ArrayD, IxDyn};

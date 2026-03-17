@@ -3,8 +3,8 @@
 
 //! Base trait and utilities for special forms
 
-use crate::ast::SheafValue;
-use crate::core::compiler::{CompiledExpr, CompilerContext};
+use crate::core::ast::SheafValue;
+use crate::core::expr::{CompiledExpr, CompilerContext};
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 
 /// Special form trait - defines compilation behavior for language constructs

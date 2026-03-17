@@ -3,8 +3,8 @@
 
 //! Threading and composition special forms: ->, as->
 
-use crate::ast::SheafValue;
-use crate::core::compiler::{CompiledExpr, CompilerContext};
+use crate::core::ast::SheafValue;
+use crate::core::expr::{CompiledExpr, CompilerContext};
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 use crate::forms::base::SpecialForm;
 

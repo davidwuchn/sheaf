@@ -3,7 +3,7 @@
 
 //! Sheaf parser - converts source code to AST
 
-use crate::ast::{SheafValue, SourceLocation};
+use crate::core::ast::{SheafValue, SourceLocation};
 use crate::core::error::{SheafError, SheafResult};
 use std::rc::Rc;
 

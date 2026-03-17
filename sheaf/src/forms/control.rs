@@ -3,8 +3,8 @@
 
 //! Control flow special forms: if, do, case, while, repeat, guard
 
-use crate::ast::SheafValue;
-use crate::core::compiler::{CompiledExpr, CompilerContext, GuardCheck};
+use crate::core::ast::SheafValue;
+use crate::core::expr::{CompiledExpr, CompilerContext, GuardCheck};
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 use crate::forms::base::{SpecialForm, check_arity, check_min_arity, expect_symbol, expect_vector};
 

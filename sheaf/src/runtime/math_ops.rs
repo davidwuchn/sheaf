@@ -12,7 +12,7 @@
 //!
 //! This module provides runtime emission helpers for StableHLO math operations.
 
-use crate::compiler::stablehlo::{Register, StableHLOEmitter, StableHLOType};
+use crate::lowering::stablehlo::{Register, StableHLOEmitter, StableHLOType};
 
 /// Emit arithmetic binary operation: +, -, *, /
 pub fn emit_arithmetic_binop(

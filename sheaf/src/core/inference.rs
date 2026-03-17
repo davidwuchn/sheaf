@@ -3,8 +3,8 @@
 
 //! Type inference for function signatures
 
-use crate::compiler::stablehlo::StableHLOType;
-use crate::core::compiler::{CompiledExpr, CompilerContext};
+use crate::lowering::stablehlo::StableHLOType;
+use crate::core::expr::{CompiledExpr, CompilerContext};
 use crate::core::error::SheafResult;
 
 /// Recursive value structure layout for reconstructing dicts/lists from flat tuples.

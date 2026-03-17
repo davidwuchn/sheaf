@@ -3,8 +3,8 @@
 
 //! Utility special forms: get, dict, last, use, quote
 
-use crate::ast::SheafValue;
-use crate::core::compiler::{CompiledExpr, CompilerContext};
+use crate::core::ast::SheafValue;
+use crate::core::expr::{CompiledExpr, CompilerContext};
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 use crate::forms::base::{SpecialForm, check_arity};
 
