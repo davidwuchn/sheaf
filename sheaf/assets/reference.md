@@ -1002,6 +1002,20 @@ Samples random values from a uniform distribution over the semi-open interval `[
 
 ---
 
+### random-range
+
+**Type:** stdlib function (misc.shf)
+**Signature:** `(random-range key shape lo hi)`
+
+Samples uniform random values in the range `[lo, hi)`. Built on `random-uniform`.
+
+```sheaf
+(random-range (random-key 42) '[3] 0.1 0.9)
+;; => tensor f32[3] with values in [0.1, 0.9)
+```
+
+---
+
 ### random-randint
 
 **Type:** function  
@@ -2656,6 +2670,24 @@ Defines a function that auto-vectorizes over batch dimensions via `vmap`. The ax
 ;; Expands to:
 (defn linear-layer [x w b]
   ((vmap (lambda [x w b] (+ (@ x w) b)) [0 nil nil]) x w b))
+```
+
+---
+
+### Utilities (misc.shf)
+
+General-purpose helpers loaded in the prelude.
+
+#### random-range
+
+**Type:** function
+**Signature:** `(random-range key shape lo hi)`
+
+Uniform random values in `[lo, hi)`. Equivalent to `(+ lo (* (- hi lo) (random-uniform key shape)))`.
+
+```sheaf
+(random-range (random-key 0) '[] 0.1 0.9)  ; => scalar in [0.1, 0.9)
+(random-range (random-key 0) '[2 3] -1.0 1.0)  ; => 2x3 tensor in [-1, 1)
 ```
 
 ---

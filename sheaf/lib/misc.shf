@@ -1,0 +1,4 @@
+;; General-purpose utilities
+
+(defn random-range [key shape lo hi]
+  (+ lo (* (- hi lo) (random-uniform key shape))))

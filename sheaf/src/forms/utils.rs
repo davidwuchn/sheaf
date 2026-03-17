@@ -204,9 +204,12 @@ impl SpecialForm for UseForm {
 
         // Parse and compile all expressions into current context
         let exprs = crate::core::parse(&source, resolved.to_str().unwrap_or("<use>"))
-            .map_err(|e| SheafError::Compile {
-                message: format!("use: parse error in '{}': {}", resolved.display(), e),
-                location: loc.clone(),
+            .map_err(|e| match e {
+                SheafError::Parse { .. } => e,
+                other => SheafError::Compile {
+                    message: format!("use: error in '{}': {}", resolved.display(), other),
+                    location: loc.clone(),
+                },
             })?;
 
         // Track which functions exist before compiling the module

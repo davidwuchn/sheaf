@@ -203,6 +203,7 @@ impl CompilerContext {
     fn load_prelude(&mut self) {
         const STDLIB: &[(&str, &str)] = &[
             ("macros.shf", include_str!("../../lib/macros.shf")),
+            ("misc.shf", include_str!("../../lib/misc.shf")),
             ("nn.shf", include_str!("../../lib/nn.shf")),
             ("optim.shf", include_str!("../../lib/optim.shf")),
         ];
