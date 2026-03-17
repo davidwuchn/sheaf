@@ -78,6 +78,7 @@ pub enum Value {
     Tuple(Vec<Value>),
     Dict(BTreeMap<String, Value>),
     Function {
+        name: Option<String>,
         params: Vec<String>,
         body: CompiledExpr,
         closure: Vec<(String, Value)>,
@@ -256,12 +257,15 @@ fn format_element(x: f32, dtype: Dtype) -> String {
     match dtype {
         Dtype::I32 => format!("{}", x as i32),
         Dtype::F32 | Dtype::BF16 => format_tensor_f32(x),
-        Dtype::Bool => if x != 0.0 { " True".to_string() } else { "False".to_string() },
+        Dtype::Bool => if x != 0.0 { "true".to_string() } else { "false".to_string() },
     }
 }
 
 fn format_tensor_1d(data: &[f32], dtype: Dtype) -> String {
     let formatted: Vec<String> = data.iter().map(|&x| format_element(x, dtype)).collect();
+    if dtype == Dtype::Bool {
+        return format!("[{}]", formatted.join(" "));
+    }
     let max_width = formatted.iter().map(|s| s.len()).max().unwrap_or(0);
     let padded: Vec<String> = formatted.iter().map(|s| {
         format!("{:>width$}", s, width = max_width)
@@ -277,7 +281,7 @@ fn format_tensor_nd(arr: &ArrayD<f32>, dtype: Dtype) -> String {
             match dtype {
                 Dtype::I32 => format!("{}", x as i32),
                 Dtype::F32 | Dtype::BF16 => format_tensor_f32(x),
-                Dtype::Bool => if x != 0.0 { "True".to_string() } else { "False".to_string() },
+                Dtype::Bool => if x != 0.0 { "true".to_string() } else { "false".to_string() },
             }
         }
         1 => format_tensor_1d(arr.as_slice().unwrap(), dtype),
@@ -302,6 +306,9 @@ fn format_tensor_2d(arr: &ArrayD<f32>, dtype: Dtype) -> String {
         all_formatted.iter().map(|row| row[c].len()).max().unwrap_or(0)
     }).collect();
     let rows: Vec<String> = all_formatted.iter().map(|row| {
+        if dtype == Dtype::Bool {
+            return format!("[{}]", row.join(" "));
+        }
         let padded: Vec<String> = row.iter().enumerate().map(|(c, s)| {
             format!("{:>width$}", s, width = col_widths[c])
         }).collect();
@@ -315,8 +322,8 @@ impl fmt::Display for Value {
         match self {
             Value::Int(n) => write!(f, "{}", n),
             Value::Float(x) => write!(f, "{}", format_scalar_f32(*x)),
-            Value::Bool(true) => write!(f, "True"),
-            Value::Bool(false) => write!(f, "False"),
+            Value::Bool(true) => write!(f, "true"),
+            Value::Bool(false) => write!(f, "false"),
             Value::Nil => write!(f, "nil"),
             Value::String(s) => write!(f, "{}", s),
             Value::Keyword(k) => write!(f, ":{}", k),
@@ -340,7 +347,8 @@ impl fmt::Display for Value {
                 }).collect();
                 write!(f, "{{{}}}", pairs.join(", "))
             }
-            Value::Function { .. } => write!(f, "<function>"),
+            Value::Function { name: Some(n), .. } => write!(f, "<fn:{}>", n),
+            Value::Function { name: None, .. } => write!(f, "<function>"),
             Value::BuiltinFn { name, .. } => write!(f, "<builtin:{}>", name),
             Value::DeviceBuffer(db) => {
                 match db.to_host() {
