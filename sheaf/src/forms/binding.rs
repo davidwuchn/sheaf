@@ -251,8 +251,7 @@ impl SpecialForm for DefnForm {
             },
         );
 
-        // defn returns nil (side effect: registers function)
-        Ok(CompiledExpr::Nil)
+        Ok(CompiledExpr::FunctionRef(name.to_string()))
     }
 }
 

@@ -52,6 +52,7 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
             if let Some(func_def) = env.registry.get(name).cloned() {
                 if let Some(body) = func_def.body_compiled {
                     return Ok(Value::Function {
+                        name: Some(name.to_string()),
                         params: func_def.params,
                         body,
                         closure: vec![],
@@ -103,6 +104,7 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
 
         CompiledExpr::Lambda { params, body } => {
             Ok(Value::Function {
+                name: None,
                 params: params.clone(),
                 body: *body.clone(),
                 closure: vec![],
@@ -629,7 +631,7 @@ fn split_kwargs(args: &[CompiledExpr], env: &mut Env) -> Result<(Vec<Value>, BTr
 
 pub(crate) fn call_function(func: &Value, args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
     match func {
-        Value::Function { params: _, body: _, closure } => {
+        Value::Function { closure, .. } => {
             // Detect vmap HOF closure: contains __vmap_fn__
             if let Some((_, vmap_fn)) = closure.iter().find(|(k, _)| k == "__vmap_fn__") {
                 let axes = closure.iter().find(|(k, _)| k == "__vmap_axes__").map(|(_, v)| v.clone());
@@ -643,7 +645,7 @@ pub(crate) fn call_function(func: &Value, args: &[Value], env: &mut Env) -> Resu
                 return vag::eval_value_and_grad_call(vag_fn, &args[0], env);
             }
             // Normal function call
-            let Value::Function { params, body, closure } = func else { unreachable!() };
+            let Value::Function { params, body, closure, .. } = func else { unreachable!() };
             if let Some(ref mut p) = env.profiler { p.enter("<lambda>"); }
             env.push_scope();
             for (name, val) in closure {

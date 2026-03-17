@@ -160,7 +160,7 @@ pub(super) fn try_jit_vag(
 /// Sheaf lambdas have empty closures (dynamic scoping) but the JIT needs explicit captures.
 fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
     let (fn_params, body, closure) = match func {
-        Value::Function { params, body, closure } => (params, body, closure),
+        Value::Function { params, body, closure, .. } => (params, body, closure),
         _ => return None,
     };
 
@@ -189,6 +189,7 @@ fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
     }
 
     Some(Value::Function {
+        name: None,
         params: fn_params.clone(),
         body: body.clone(),
         closure: augmented_closure,

@@ -361,6 +361,7 @@ pub(super) fn eval_vmap(args: &[Value], _env: &mut Env) -> Result<Value, SheafEr
         closure.push(("__vmap_axes__".to_string(), args[1].clone()));
     }
     Ok(Value::Function {
+        name: None,
         params: vec!["__vmap_arg__".to_string()],
         body: crate::core::expr::CompiledExpr::Symbol("__vmap_arg__".to_string()),
         closure,

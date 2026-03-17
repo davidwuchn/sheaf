@@ -28,6 +28,7 @@ pub(super) fn eval_value_and_grad_hof(args: &[Value], _env: &mut Env) -> Result<
     // When called with params, call_function detects __vag_fn__ and dispatches
     // to eval_value_and_grad_call which computes (loss, grad) via finite differences.
     Ok(Value::Function {
+        name: None,
         params: vec!["__vag_params__".to_string()],
         body: crate::core::expr::CompiledExpr::Symbol("__vag_params__".to_string()),
         closure: vec![("__vag_fn__".to_string(), func)],
@@ -54,7 +55,7 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
 
     use crate::autodiff::{contains_undiffable_ops, grad_simplified, inline_function_calls};
 
-    if let Value::Function { params: fn_params, body, closure } = func {
+    if let Value::Function { params: fn_params, body, closure, .. } = func {
         if fn_params.len() == 1 {
             let param_name = &fn_params[0];
             let inlined = inline_function_calls(body, &env.registry);

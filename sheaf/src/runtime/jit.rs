@@ -460,6 +460,7 @@ impl JitCompiler {
                 params,
                 body,
                 closure,
+                ..
             } => (params, body, closure),
             _ => return None,
         };
