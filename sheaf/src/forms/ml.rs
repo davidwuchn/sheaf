@@ -597,30 +597,3 @@ fn field_to_tensor_type(field: &ParamField) -> StableHLOType {
         StableHLOType::f32_tensor(field.shape.clone())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::error::SourceLocation;
-
-    fn loc() -> SourceLocation {
-        SourceLocation::unknown()
-    }
-
-    fn make_keyword(k: &str) -> SheafValue {
-        SheafValue::Keyword(k.to_string(), loc())
-    }
-
-    fn make_int(n: i64) -> SheafValue {
-        SheafValue::Integer(n, loc())
-    }
-
-    fn make_vec(elems: Vec<SheafValue>) -> SheafValue {
-        SheafValue::Vector(elems, loc())
-    }
-
-    fn make_dict(pairs: Vec<(SheafValue, SheafValue)>) -> SheafValue {
-        SheafValue::Dict(pairs, loc())
-    }
-
-}

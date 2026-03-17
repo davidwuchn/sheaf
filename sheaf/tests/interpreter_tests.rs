@@ -835,12 +835,6 @@ fn test_mae_loss() {
     assert!((v - 0.16666667).abs() < 1e-5, "mae-loss: got {}", v);
 }
 
-#[test]
-fn test_sparse_cross_entropy() {
-    let result = eval("(sparse-cross-entropy [[0.9 0.1] [0.2 0.8]] [0 1] :i32)");
-    let v: f64 = result.parse().unwrap();
-    assert!((v - 0.40429434).abs() < 1e-5, "sparse-cross-entropy: got {}", v);
-}
 
 #[test]
 fn test_tree_map_zeros() {

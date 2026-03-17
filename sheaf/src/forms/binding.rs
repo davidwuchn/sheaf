@@ -463,7 +463,6 @@ impl SpecialForm for FnForm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::error::SourceLocation;
 
     #[test]
     fn test_defn_form_name() {

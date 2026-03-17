@@ -20,14 +20,14 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("append-and-roll", builtin_append_and_roll);
 }
 
-fn builtin_add(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+fn builtin_add(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if args.len() == 1 {
         return Ok(args[0].clone());
     }
-    binary_op(args, |a, b| a + b)
+    with_dtype_kwarg(binary_op(args, |a, b| a + b), kw)
 }
 
-fn builtin_sub(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+fn builtin_sub(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if args.len() == 1 {
         let (arr, dt) = to_array(&args[0])?;
         let result = arr.mapv(|x| -x);
@@ -38,28 +38,29 @@ fn builtin_sub(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         }
         return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
     }
-    binary_op(args, |a, b| a - b)
+    with_dtype_kwarg(binary_op(args, |a, b| a - b), kw)
 }
 
-fn builtin_mul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    binary_op(args, |a, b| a * b)
+fn builtin_mul(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
+    with_dtype_kwarg(binary_op(args, |a, b| a * b), kw)
 }
 
-fn builtin_div(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+fn builtin_div(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let result = binary_op(args, |a, b| a / b)?;
-    match result {
+    let result = match result {
         Value::Int(n) => Ok(Value::Float(n as f32)),
         Value::Tensor { data, .. } => Ok(Value::Tensor { data, dtype: Dtype::F32 }),
         other => Ok(other),
-    }
+    };
+    with_dtype_kwarg(result, kw)
 }
 
-fn builtin_floor_div(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    binary_op(args, |a, b| (a / b).floor())
+fn builtin_floor_div(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
+    with_dtype_kwarg(binary_op(args, |a, b| (a / b).floor()), kw)
 }
 
-fn builtin_mod(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    binary_op(args, |a, b| ((a % b) + b) % b)
+fn builtin_mod(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
+    with_dtype_kwarg(binary_op(args, |a, b| ((a % b) + b) % b), kw)
 }
 
 fn builtin_pow(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {

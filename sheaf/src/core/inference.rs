@@ -660,11 +660,6 @@ fn infer_function_call_type(name: &str, args: &[CompiledExpr]) -> SheafResult<St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::error::SourceLocation;
-
-    fn make_compiled_int(n: i64) -> CompiledExpr {
-        CompiledExpr::Integer(n)
-    }
 
     fn make_compiled_float(x: f64) -> CompiledExpr {
         CompiledExpr::Float(x)

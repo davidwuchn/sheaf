@@ -11,7 +11,6 @@ use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Editor, Helper};
 use sheaf_compiler::forms::special_forms_registry;
 use sheaf_compiler::interpreter::eval::Interpreter;
-use sheaf_compiler::interpreter::tracer::{Tracer, TraceLevel, LogFormat, TracerConfig};
 use sheaf_compiler::core::color;
 use sheaf_compiler::interpreter::value::Value;
 use std::borrow::Cow;
@@ -25,9 +24,6 @@ const REPL_COMMANDS: &[&str] = &[
     ":env",
     ":registry", ":reg",
     ":show",
-    ":trace",
-    ":scope",
-    ":blame",
     ":clear",
 ];
 
@@ -189,8 +185,7 @@ fn is_silent_result(val: &Value) -> bool {
 }
 
 pub fn run() {
-    println!("Sheaf {}", env!("CARGO_PKG_VERSION"));
-    println!("Type :help or :h for help, :quit or :q to exit.\n");
+    println!("Sheaf {} (:h for help)", env!("CARGO_PKG_VERSION"));
 
     let history_file = std::env::var_os("HOME")
         .map(|h| std::path::PathBuf::from(h).join(".sheaf_history"));
@@ -350,109 +345,6 @@ fn handle_command(input: &str, interp: &mut Interpreter) -> bool {
             }
         }
 
-        ":trace" => {
-            match arg {
-                "" => {
-                    let status = interp.env().tracer.as_ref()
-                        .map(|t| if t.enabled { "on" } else { "off" })
-                        .unwrap_or("off");
-                    println!("Trace: {}", status);
-                }
-                "off" => {
-                    interp.env_mut().tracer = None;
-                    println!("Trace disabled.");
-                }
-                level_str => {
-                    let level = match level_str {
-                        "fast" => TraceLevel::Fast,
-                        "normal" => TraceLevel::Normal,
-                        "verbose" => TraceLevel::Verbose,
-                        _ => {
-                            eprintln!("Usage: :trace [off|fast|normal|verbose]");
-                            return false;
-                        }
-                    };
-                    let config = TracerConfig {
-                        enabled: true,
-                        scope_filter: None,
-                        level,
-                        format: LogFormat::Console,
-                        cli_guards: Vec::new(),
-                    };
-                    interp.env_mut().tracer = Some(Tracer::from_config(config));
-                    println!("Trace enabled ({}).", level_str);
-                }
-            }
-        }
-
-        ":scope" => {
-            match arg {
-                "" => {
-                    let scope = interp.env().tracer.as_ref()
-                        .and_then(|t| t.scope_filter.as_ref())
-                        .map(|s| {
-                            let mut v: Vec<&String> = s.iter().collect();
-                            v.sort();
-                            v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
-                        });
-                    match scope {
-                        Some(s) => println!("Scope filter: {}", s),
-                        None => println!("Scope filter: off (tracing all functions)"),
-                    }
-                }
-                "off" => {
-                    if let Some(ref mut tracer) = interp.env_mut().tracer {
-                        tracer.scope_filter = None;
-                        println!("Scope filter disabled.");
-                    } else {
-                        eprintln!("Trace is not active. Use :trace to enable first.");
-                    }
-                }
-                names => {
-                    if let Some(ref mut tracer) = interp.env_mut().tracer {
-                        tracer.scope_filter = Some(
-                            names.split(',').map(|s| s.trim().to_string()).collect()
-                        );
-                        println!("Scope filter: {}", names);
-                    } else {
-                        eprintln!("Trace is not active. Use :trace to enable first.");
-                    }
-                }
-            }
-        }
-
-        ":blame" => {
-            match arg {
-                "" => {
-                    let status = if interp.env().profiler.is_some() { "on" } else { "off" };
-                    println!("Blame: {}", status);
-                }
-                "on" => {
-                    interp.env_mut().profiler = Some(
-                        sheaf_compiler::interpreter::profiler::Profiler::new()
-                    );
-                    println!("Profiler enabled.");
-                }
-                "off" => {
-                    if let Some(ref profiler) = interp.env().profiler {
-                        profiler.report();
-                    }
-                    interp.env_mut().profiler = None;
-                    println!("Profiler disabled.");
-                }
-                "report" => {
-                    if let Some(ref profiler) = interp.env().profiler {
-                        profiler.report();
-                    } else {
-                        eprintln!("Profiler is not active. Use :blame on to enable first.");
-                    }
-                }
-                _ => {
-                    eprintln!("Usage: :blame [on|off|report]");
-                }
-            }
-        }
-
         ":clear" => {
             print!("\x1b[2J\x1b[H");
             let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -460,7 +352,6 @@ fn handle_command(input: &str, interp: &mut Interpreter) -> bool {
 
         _ => {
             eprintln!("Unknown command: {}", cmd);
-            eprintln!("Type :help for a list of commands.");
         }
     }
 
@@ -483,18 +374,14 @@ fn format_env_value(val: &Value) -> String {
 }
 
 fn print_general_help() {
-    println!("Sheaf REPL commands:
-
+    println!("Sheaf console usage:
   :help, :h              Show this help
   :help, :h <name>       Help for a specific function or form
   :env                   List all functions and variables
   :registry, :reg        List user-defined functions
   :show <name>           Show a variable's value
-  :trace [off|fast|normal|verbose]  Control execution tracing
-  :scope [name|off]      Filter tracing to specific functions
-  :blame [on|off|report] Profile execution and print timing report
-  :clear                 Clear the screen
-  :quit, :q              Exit the REPL");
+  :clear                 Clear screen
+  :quit, :q              Exit");
 }
 
 fn print_symbol_help(name: &str) {

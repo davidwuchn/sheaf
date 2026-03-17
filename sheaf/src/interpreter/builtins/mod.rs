@@ -79,7 +79,15 @@ fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
 }
 
 pub(self) fn result_dtype(a: Dtype, b: Dtype) -> Dtype {
-    if a == Dtype::F32 || b == Dtype::F32 { Dtype::F32 } else if a == Dtype::Bool && b == Dtype::Bool { Dtype::Bool } else { Dtype::I32 }
+    if a == b { return a; }
+    if a == Dtype::Bool { return b; }
+    if b == Dtype::Bool { return a; }
+    // Promote: any float wins over I32; F32 wins over BF16/F16
+    match (a, b) {
+        (Dtype::F32, _) | (_, Dtype::F32) => Dtype::F32,
+        (Dtype::BF16, _) | (_, Dtype::BF16) => Dtype::BF16,
+        _ => Dtype::I32,
+    }
 }
 
 pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
@@ -91,11 +99,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
         return binary_op_two(&args[0], &args[1], op);
     }
     let (mut acc, mut dt) = to_array(&args[0])?;
-    let mut any_tensor = !matches!(&args[0], Value::Int(_) | Value::Float(_) | Value::Bool(_));
     for arg in &args[1..] {
-        if !matches!(arg, Value::Int(_) | Value::Float(_) | Value::Bool(_)) {
-            any_tensor = true;
-        }
         // Borrow RHS from Arc when possible, avoiding clone
         match arg {
             Value::Int(n) => {
@@ -126,7 +130,6 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
                 }
             }
             Value::Tensor { data: b, dtype: bdt } => {
-                any_tensor = true;
                 dt = result_dtype(dt, *bdt);
                 if acc.ndim() == 0 && b.ndim() != 0 {
                     let scalar = *acc.first().unwrap();
@@ -148,7 +151,6 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
             _ => return Err(runtime_error(format!("Expected numeric value, got {}", arg.type_name()))),
         }
     }
-    if any_tensor { dt = Dtype::F32; }
     if acc.ndim() == 0 {
         let x = *acc.first().unwrap();
         if dt == Dtype::I32 && x == x.floor() {
@@ -172,11 +174,9 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
 
     let a_scalar = scalar_of(a);
     let b_scalar = scalar_of(b);
-    let any_tensor = matches!(a, Value::Tensor { .. }) || matches!(b, Value::Tensor { .. });
     let adt = dtype_of(a);
     let bdt = dtype_of(b);
-    let mut dt = result_dtype(adt, bdt);
-    if any_tensor { dt = Dtype::F32; }
+    let dt = result_dtype(adt, bdt);
 
     // scalar op scalar
     if let (Some(sa), Some(sb)) = (a_scalar, b_scalar) {
@@ -296,6 +296,18 @@ pub(self) fn get_dtype_kwarg(kw: &BTreeMap<String, Value>) -> Option<Dtype> {
         }
     }
     None
+}
+
+/// Apply dtype kwarg override to a result value.
+pub(self) fn with_dtype_kwarg(result: R, kw: &BTreeMap<String, Value>) -> R {
+    if let Some(dt) = get_dtype_kwarg(kw) {
+        match result? {
+            Value::Tensor { data, .. } => Ok(Value::Tensor { data, dtype: dt }),
+            other => Ok(other),
+        }
+    } else {
+        result
+    }
 }
 
 pub(self) fn reduce_along_axis(arr: &ArrayD<f32>, axis: usize, op: fn(&[f32]) -> f32) -> ArrayD<f32> {
