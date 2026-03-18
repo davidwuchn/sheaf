@@ -210,7 +210,7 @@ fn get_compile_hint(message: &str) -> Option<String> {
     // Shape quote reminder
     if message.contains("shape") && message.contains("must be") {
         return Some(
-            "Shape arguments must be static. Quote your shape: (zeros '[3 4]) not (zeros [3 4])"
+            "Shape arguments must be static. Quote your shape: (zeros '[3 4]) rather than (zeros [3 4])"
                 .to_string(),
         );
     }
@@ -258,7 +258,7 @@ fn get_runtime_hint(message: &str) -> Option<String> {
     // Shape errors
     if message.contains("shape") && message.contains("must be") {
         return Some(
-            "Quote shape arguments: (zeros '[3 4]) not (zeros [3 4])".to_string(),
+            "Quote shape arguments: (zeros '[3 4]) rather than (zeros [3 4])".to_string(),
         );
     }
 

@@ -7,7 +7,7 @@ use rustyline::completion::Completer;
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
-use rustyline::validate::{ValidationContext, ValidationResult, Validator};
+use rustyline::validate::Validator;
 use rustyline::{Editor, Helper};
 use sheaf_compiler::forms::special_forms_registry;
 use sheaf_compiler::interpreter::eval::Interpreter;
@@ -106,20 +106,7 @@ impl Completer for SheafHelper {
     }
 }
 
-impl Validator for SheafHelper {
-    fn validate(&self, ctx: &mut ValidationContext<'_>) -> rustyline::Result<ValidationResult> {
-        let input = ctx.input();
-        let trimmed = input.trim();
-        if trimmed.is_empty() || trimmed.starts_with(':') {
-            return Ok(ValidationResult::Valid(None));
-        }
-        if is_balanced(trimmed) {
-            Ok(ValidationResult::Valid(None))
-        } else {
-            Ok(ValidationResult::Incomplete)
-        }
-    }
-}
+impl Validator for SheafHelper {}
 
 impl Hinter for SheafHelper {
     type Hint = String;
@@ -129,8 +116,13 @@ impl Hinter for SheafHelper {
 }
 
 impl Highlighter for SheafHelper {
-    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(&'s self, prompt: &'p str, _default: bool) -> Cow<'b, str> {
-        Cow::Owned(format!("{}{}{}", color::color(), prompt, color::reset()))
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(&'s self, prompt: &'p str, default: bool) -> Cow<'b, str> {
+        if default {
+            Cow::Owned(format!("{}{}{}", color::color(), prompt, color::reset()))
+        } else {
+            // Continuation prompt for multi-line input
+            Cow::Owned(format!("{}     > {}", color::color(), color::reset()))
+        }
     }
 }
 
@@ -194,6 +186,7 @@ pub fn run() {
     let config = rustyline::Config::builder()
         .completion_type(rustyline::CompletionType::List)
         .completion_prompt_limit(500)
+        .behavior(rustyline::config::Behavior::PreferTerm)
         .build();
     let mut rl = Editor::with_config(config).expect("failed to init line editor");
     let term_cols = rl.dimensions().map(|(c, _)| c).unwrap_or(80);
@@ -221,14 +214,45 @@ pub fn run() {
                     continue;
                 }
 
-                rl.add_history_entry(&line).ok();
-
                 if trimmed.starts_with(':') {
+                    rl.add_history_entry(&line).ok();
                     if handle_command(trimmed, &mut interp) {
                         break;
                     }
                     continue;
                 }
+
+                // Accumulate lines until parentheses are balanced
+                let mut input = line.clone();
+                while !is_balanced(&input) {
+                    match rl.readline("     > ") {
+                        Ok(cont) => {
+                            input.push('\n');
+                            input.push_str(&cont);
+                        }
+                        Err(ReadlineError::Interrupted) => {
+                            eprintln!("^C");
+                            input.clear();
+                            break;
+                        }
+                        Err(_) => {
+                            input.clear();
+                            break;
+                        }
+                    }
+                }
+
+                let trimmed = input.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                // Collapse multi-line input to single line for history recall
+                let history_entry: String = trimmed.split('\n')
+                    .map(|l| l.trim())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                rl.add_history_entry(&history_entry).ok();
 
                 match interp.eval(trimmed) {
                     Ok(val) => {
