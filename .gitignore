@@ -1,36 +1,12 @@
-docs/
+target/
+*.rustc-ice*
 
-__pycache__/
-*.py[cod]
-*$py.class
-
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-.venv/
-venv/
-ENV/
-env/
-bin/
+__sheaf__/
 
 .[a-zA-Z0-9]*
 !.gitignore
 !.gitattributes
+.DS_Store
 
 *.jsonl
 *.log
