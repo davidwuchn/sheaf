@@ -64,12 +64,19 @@ impl IreeSession {
                 return Err(iree_err("failed to create IREE instance"));
             }
 
-            // Try drivers in preference order: GPU > CPU
+            // Try drivers in preference order based on platform
             let device_override = crate::core::config::device_override();
             let driver_names: Vec<&str> = match device_override {
                 Some("cpu") => vec!["local-task"],
                 Some(d) => vec![d, "local-task"],
-                None => vec!["cuda", "metal", "vulkan", "local-task"],
+                // Apple Silicon: Metal only
+                None if cfg!(all(target_os = "macos", target_arch = "aarch64")) =>
+                    vec!["metal", "local-task"],
+                // Intel Mac: CUDA, then Metal
+                None if cfg!(target_os = "macos") =>
+                    vec!["cuda", "metal", "local-task"],
+                // Linux / other Unixes: CUDA, Vulkan, CPU
+                None => vec!["cuda", "vulkan", "local-task"],
             };
             let mut device: *mut iree_hal_device_t = std::ptr::null_mut();
             let mut chosen_driver = "";
