@@ -27,6 +27,18 @@ impl SpecialForm for DefnForm {
         check_min_arity("defn", args, 3, loc)?;
 
         let name = expect_symbol(&args[0], "defn name", loc)?;
+
+        // Prevent redefinition of user-defined functions
+        if compiler.registry.contains_key(name) {
+            return Err(SheafError::Compile {
+                message: format!(
+                    "Function '{}' is already defined. Redefinition is not allowed.",
+                    name
+                ),
+                location: loc.clone(),
+            });
+        }
+
         let params_vec = expect_vector(&args[1], "defn parameters", loc)?;
 
         // Extract parameter names, handling typed params:
