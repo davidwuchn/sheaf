@@ -878,15 +878,12 @@ Converts a tensor, scalar, or DeviceBuffer to the specified dtype. Supported dty
 The `[vec] :dtype` syntax is syntactic sugar that desugars to `cast` at parse time.
 
 ```sheaf
-(cast [1 2 3] :bf16)         ; => tensor bf16[3] = [1. 2. 3.]
-(cast [1 2 3] :f32)          ; => tensor f32[3] = [1. 2. 3.]
-
 ;; Equivalent shorthand via type annotation
 [1 2 3] :bf16                ; => tensor bf16[3] = [1. 2. 3.]
 
 ;; Cast an existing tensor
-(def x [1 2 3])
-(cast x :bf16)               ; => tensor bf16[3] = [1. 2. 3.]
+(let [x [1 2 3] :bf16]
+  (cast x :f32))             ; => tensor bf16[3] = [1. 2. 3.]
 
 ;; Cast scalars
 (cast 3.14 :bf16)            ; => tensor bf16[] = 3.14
