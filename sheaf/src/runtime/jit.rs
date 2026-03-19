@@ -1033,6 +1033,7 @@ impl JitCompiler {
         if backend == "llvm-cpu" {
             cmd.arg("--iree-llvmcpu-target-cpu=host");
             cmd.arg("--iree-llvmcpu-enable-ukernels=all");
+            cmd.arg("--iree-opt-data-tiling");
         }
         let status = cmd.status();
 
