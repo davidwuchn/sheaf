@@ -225,12 +225,12 @@ Context usage counts GPT-4 tokens (tiktoken) across model, training, and samplin
   <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.4rem;"><span><strong>Code size</strong> (GPT-4 tokens)</span></div>
   <div style="display: flex; align-items: center; gap: 0.8rem; margin-bottom: 0.2rem;">
     <span style="font-size: 0.78rem; width: 80px; color: #666;">Sheaf</span>
-    <div style="flex: 1; background: #e8e8e8; border-radius: 6px; height: 10px; overflow: hidden;"><div style="background: linear-gradient(90deg, #612156, #8a3a7a); width: 25%; height: 100%; border-radius: 6px;"></div></div>
+    <div style="flex: 1; background: #e8e8e8; border-radius: 6px; height: 20px; overflow: hidden;"><div style="background: rgb(255, 110, 66); width: 24%; height: 100%; border-radius: 6px;"></div></div>
     <span style="font-size: 0.78rem; width: 80px; text-align: right;">1,908</span>
   </div>
   <div style="display: flex; align-items: center; gap: 0.8rem;">
     <span style="font-size: 0.78rem; width: 80px; color: #666;">PyTorch</span>
-    <div style="flex: 1; background: #e8e8e8; border-radius: 6px; height: 10px; overflow: hidden;"><div style="background: #c0c0c0; width: 100%; height: 100%; border-radius: 6px;"></div></div>
+    <div style="flex: 1; background: #e8e8e8; border-radius: 6px; height: 20px; overflow: hidden;"><div style="background: #612156; width: 93%; height: 100%; border-radius: 6px;"></div></div>
     <span style="font-size: 0.78rem; width: 80px; text-align: right;">7,486</span>
   </div>
 </div>
@@ -238,12 +238,12 @@ Context usage counts GPT-4 tokens (tiktoken) across model, training, and samplin
   <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.4rem;"><span><strong>Deploy size</strong></span></div>
   <div style="display: flex; align-items: center; gap: 0.8rem; margin-bottom: 0.2rem;">
     <span style="font-size: 0.78rem; width: 80px; color: #666;">Sheaf</span>
-    <div style="flex: 1; background: #e8e8e8; border-radius: 6px; height: 10px; overflow: hidden;"><div style="background: linear-gradient(90deg, #612156, #8a3a7a); width: 2%; height: 100%; border-radius: 6px; min-width: 6px;"></div></div>
+    <div style="flex: 1; background: #e8e8e8; border-radius: 6px; height: 20px; overflow: hidden;"><div style="background: rgb(255, 110, 66); width: 2%; height: 100%; border-radius: 6px; min-width: 6px;"></div></div>
     <span style="font-size: 0.78rem; width: 80px; text-align: right;">4 MB</span>
   </div>
   <div style="display: flex; align-items: center; gap: 0.8rem;">
     <span style="font-size: 0.78rem; width: 80px; color: #666;">PyTorch</span>
-    <div style="flex: 1; background: #e8e8e8; border-radius: 6px; height: 10px; overflow: hidden;"><div style="background: #c0c0c0; width: 100%; height: 100%; border-radius: 6px;"></div></div>
+    <div style="flex: 1; background: #e8e8e8; border-radius: 6px; height: 20px; overflow: hidden;"><div style="background: #612156; width: 98%; height: 100%; border-radius: 6px;"></div></div>
     <span style="font-size: 0.78rem; width: 80px; text-align: right;">~2.4 GB</span>
   </div>
 </div>
@@ -282,7 +282,7 @@ Loading model...
 Loaded: 6 layers, 384 dim, 65 vocab
 Training data: 1115394 tokens
 Training for 100 steps (batch_size=4 block_size=256)...
-Step 100 | Loss: 1.4573
+Step 100 | Loss: 2.4573
 ```
 
 </div>
