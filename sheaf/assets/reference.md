@@ -1947,9 +1947,9 @@ For RNNs, state is the hidden vector. Each step processes `(h_prev, x_t) -> (h_n
               h0 X)]
     outputs))                                ; Return all hidden states
 
-; => [[0.09966799 0.36936549]
-;     [0.29131263 0.47375143]
-;     [0.36652097 0.52315444]]
+; => [[0.09966800 0.29131263]
+;     [0.27194715 0.46786020]
+;     [0.44845095 0.71373075]]
 ```
 
 **Example 3: Multiple state components (like LSTM)**
