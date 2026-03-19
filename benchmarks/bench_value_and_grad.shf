@@ -1,0 +1,88 @@
+;; -*- mode: clojure -*-
+;; GPT-2 124M value-and-grad (forward + backward).
+;; Run with: sheaf bench_value_and_grad.shf --device metal --blame
+
+(defn layer-norm-nb [x gamma]
+  (let [m (mean x :axis -1 :keepdims)
+        v (var x :axis -1 :keepdims)]
+    (* (/ (- x m) (sqrt (+ v 1e-5))) gamma)))
+
+(defn causal-self-attention [x attn-p config]
+  (let [D  (get config :n_embd)
+        H  (get config :n_head)
+        Hd (/ D H)
+        T  (get (shape x) -2)
+        W  (get-in attn-p [:c_attn :weight])
+        Wq (slice W 0 D)
+        Wk (slice W D (* 2 D))
+        Wv (slice W (* 2 D) (* 3 D))
+        q (swapaxes (reshape (@ x (tr Wq)) [-1 T H Hd]) 1 2)
+        k (swapaxes (reshape (@ x (tr Wk)) [-1 T H Hd]) 1 2)
+        v (swapaxes (reshape (@ x (tr Wv)) [-1 T H Hd]) 1 2)
+        att (/ (@ q (swapaxes k -1 -2)) (sqrt Hd))
+        att (softmax (where (== (tril (ones [T T])) 1.0) att -1e10)
+                     :axis -1)
+        Wo (get-in attn-p [:c_proj :weight])]
+    (@ (reshape (swapaxes (@ att v) 1 2) [-1 T D])
+       (transpose Wo))))
+
+(defn mlp-block [x mlp-p]
+  (as-> x h
+    (@ h (transpose (get-in mlp-p [:c_fc :weight])))
+    (gelu h)
+    (@ h (transpose (get-in mlp-p [:c_proj :weight])))))
+
+(defn transformer-block [x block-p config]
+  (as-> x h
+    (+ h (causal-self-attention
+            (layer-norm-nb h (get-in block-p [:ln_1 :weight]))
+            (get block-p :attn) config))
+    (+ h (mlp-block
+            (layer-norm-nb h (get-in block-p [:ln_2 :weight]))
+            (get block-p :mlp)))))
+
+(defn forward [idx params config]
+  (let [T  (get (shape idx) -1)
+        D  (get config :n_embd)
+        x (+ (get (get-in params [:transformer :wte :weight]) idx)
+             (reshape (slice (get-in params [:transformer :wpe :weight]) 0 T)
+                      [1 T D]))
+        x (reduce (fn [h bp] (transformer-block h bp config))
+                  x
+                  (get-in params [:transformer :h]))
+        x (layer-norm-nb x (get-in params [:transformer :ln_f :weight]))]
+    (@ x (transpose (get-in params [:lm_head :weight])))))
+
+
+(defn init-block [key D]
+  (let [[k1 k2 k3 k4] (random-split key 4)]
+    {:ln_1 {:weight (ones [D])}
+     :attn {:c_attn {:weight (/ (random-normal k1 [(* 3 D) D]) (sqrt D))}
+            :c_proj {:weight (/ (random-normal k2 [D D]) (sqrt D))}}
+     :ln_2 {:weight (ones [D])}
+     :mlp  {:c_fc   {:weight (/ (random-normal k3 [(* 4 D) D]) (sqrt D))}
+            :c_proj {:weight (/ (random-normal k4 [D (* 4 D)]) (sqrt (* 4 D)))}}}))
+
+(defn init-params [key config]
+  (let [D (get config :n_embd)
+        V (get config :vocab_size)
+        T (get config :block_size)
+        L (get config :n_layer)
+        [k0 k1 k2] (random-split key 3)
+        block-keys  (random-split k0 L)
+        blocks      (map (fn [bk] (init-block bk D)) block-keys)]
+    {:transformer {:wte {:weight (/ (random-normal k1 [V D]) (sqrt D))}
+                   :wpe {:weight (/ (random-normal k2 [T D]) (sqrt D))}
+                   :ln_f {:weight (ones [D])}
+                   :h blocks}
+     :lm_head {:weight (/ (random-normal k1 [V D]) (sqrt D))}}))
+
+
+(let [config {:n_layer 12 :n_head 12 :n_embd 768
+              :vocab_size 50257 :block_size 1024}
+      key    (random-key 42)
+      params (init-params key config)
+      V      (get config :vocab_size)
+      idx    (random-randint key [1 64] 0 V)
+      loss-fn (fn [p] (mean (forward idx p config)))]
+  ((value-and-grad loss-fn) params))

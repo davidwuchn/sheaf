@@ -1,0 +1,18 @@
+{
+  "git": "a78c4c8",
+  "device": "metal",
+  "sheaf": {
+    "matmul [128x128]": 0.039,
+    "matmul [512x512]": 2.33,
+    "matmul [1024x1024]": 17.78,
+    "gelu [100000]": 10.24,
+    "softmax [32x1000]": 10.4,
+    "softmax [32x50000]": 27.27,
+    "layer-norm [4x256x768]": 13.26,
+    "sum [1000000]": 0.5328,
+    "cross-entropy [1x256x50257]": 52.13,
+    "value-and-grad [4x512]->[512x512]": 13.6,
+    "GPT-2 124M forward": 1120.0,
+    "GPT-2 124M value-and-grad": 1310.0
+  }
+}
