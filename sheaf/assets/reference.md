@@ -635,7 +635,7 @@ Gives a new shape to a tensor without changing its underlying data. The total nu
 **Signature:** `(transpose x [perm])`
 **Alias:** `tr`
 
-Permutes the dimensions of a tensor according to the sequence of axes provided. This is a zero-copy operation in XLA that is critical for reordering dimensions (e.g., swapping batch and sequence axes or head dimensions).
+Permutes the dimensions of a tensor according to the sequence of axes provided. This is a zero-copy operation that is critical for reordering dimensions (e.g., swapping batch and sequence axes or head dimensions).
 
 ```sheaf
 ;; Default transpose (reverse axes): (2 3 2) -> (2 3 2)
@@ -2544,7 +2544,7 @@ Updates model parameters using Stochastic Gradient Descent. It performs the oper
 
 **Type:** function  
 **Signature:** `(adam-step params grads m v t lr [beta1 beta2 eps])`
-Adam optimizer step. Maintains first moment `m` (mean) and second moment `v` (variance). Returns `[new-params, new-m, new-v]`.
+Adam optimizer step. Maintains first moment `m` (mean) and second moment `v` (variance). Returns `[new-params, new-m, new-v, new-t]`.
 
 ```sheaf
 (let [p {:w 1.0} g {:w 0.1}  ; Params and gradients
