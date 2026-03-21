@@ -660,6 +660,42 @@
   test: (let [f (fn [x] (** x 2.0)) [v g] ((value-and-grad f) 3.0)] g)
   expected: '6.0'
 
+# VAG on dict params (MLP-style)
+- name: vag-mlp-loss
+  test: >
+    (let [p {:W (random-normal (random-key 0) '[4 2]) :b (zeros '[2])}
+          x (random-normal (random-key 1) '[3 4])
+          y (random-normal (random-key 2) '[3 2])
+          [loss grad] ((value-and-grad (fn [p] (mean (** (- (+ (@ x (get p :W)) (get p :b)) y) 2)))) p)]
+      loss)
+  expected: '4.080512'
+- name: vag-mlp-grad-shapes
+  test: >
+    (let [p {:W (random-normal (random-key 0) '[4 2]) :b (zeros '[2])}
+          x (random-normal (random-key 1) '[3 4])
+          y (random-normal (random-key 2) '[3 2])
+          [loss grad] ((value-and-grad (fn [p] (mean (** (- (+ (@ x (get p :W)) (get p :b)) y) 2)))) p)]
+      [(shape (get grad :W)) (shape (get grad :b))])
+  expected: '[[4. 2.], [2.]]'
+- name: vag-mlp-grad-nonzero
+  test: >
+    (let [p {:W (random-normal (random-key 0) '[4 2]) :b (zeros '[2])}
+          x (random-normal (random-key 1) '[3 4])
+          y (random-normal (random-key 2) '[3 2])
+          [loss grad] ((value-and-grad (fn [p] (mean (** (- (+ (@ x (get p :W)) (get p :b)) y) 2)))) p)]
+      (> (sum (abs (get grad :W))) 0.0))
+  expected: 'true'
+
+# VAG with activation function (relu)
+- name: vag-mlp-relu
+  test: >
+    (let [p {:W (random-normal (random-key 0) '[4 2]) :b (zeros '[2])}
+          x (random-normal (random-key 1) '[3 4])
+          y (random-normal (random-key 2) '[3 2])
+          [loss grad] ((value-and-grad (fn [p] (mean (** (- (relu (+ (@ x (get p :W)) (get p :b))) y) 2)))) p)]
+      (> (sum (abs (get grad :W))) 0.0))
+  expected: 'true'
+
 # Regression: first/second/last/nth on tensors (DeviceBuffer handled via ensure_host)
 - name: first-tensor
   test: (first [10 20 30])
