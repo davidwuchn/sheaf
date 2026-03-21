@@ -248,8 +248,16 @@ pub fn run() {
                 }
 
                 // Collapse multi-line input to single line for history recall
+                // Strip comments first so `;` doesn't eat the rest of the line
                 let history_entry: String = trimmed.split('\n')
-                    .map(|l| l.trim())
+                    .map(|l| {
+                        let l = l.trim();
+                        match l.find(';') {
+                            Some(pos) => l[..pos].trim_end(),
+                            None => l,
+                        }
+                    })
+                    .filter(|l| !l.is_empty())
                     .collect::<Vec<_>>()
                     .join(" ");
                 rl.add_history_entry(&history_entry).ok();
