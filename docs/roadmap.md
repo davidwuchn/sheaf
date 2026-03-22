@@ -23,6 +23,8 @@ hide:
 
 - **`:trace` and `:blame` in the REPL**: These observability modes were tied to V1 semantics and temporarily removed. They will be re-introduced with behavior adapted to the V2 execution model.
 
-### Misc
+### Operations
+
+- **Convolution primitives**: `conv1d` and `conv2d` via `stablehlo.convolution`, exposed through the standard library.
 
 - **`vmap` on dictionaries**: `vmap` currently only accepts tensor arguments. PyTree support (automatic flattening/unflattening of dicts) will be added to match the behavior of `value-and-grad`.

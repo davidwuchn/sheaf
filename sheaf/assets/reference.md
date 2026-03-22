@@ -206,9 +206,9 @@ Performs matrix multiplication, dot product, or tensor contraction depending on 
 Performs structural equality comparison. Returns a single scalar boolean indicating whether the two inputs have the same shape and identical values across all elements.
 
 ```sheaf
-(= 1 1)              ; => True
-(= [1 2] [1 2])      ; => True
-(= [1 2] [1 3])      ; => False
+(= 1 1)              ; => true
+(= [1 2] [1 2])      ; => true
+(= [1 2] [1 3])      ; => false
 ```
 
 ---
@@ -235,7 +235,7 @@ Performs element-wise equality comparison with broadcasting support. Returns a b
 Performs element-wise inequality comparison with broadcasting support. Returns a boolean tensor where each entry is true if the corresponding elements are not equal.
 
 ```sheaf
-(!= [1 2] [1 3])     ; => [False  True]
+(!= [1 2] [1 3])     ; => [false true]
 (!= 1 2)             ; => true
 ```
 
@@ -296,8 +296,8 @@ Evaluates expressions from left to right. It short-circuits and returns the firs
 Computes the logical negation of the input. Returns `true` if the argument is `false` or `nil`, and `false` for any other truthy value.
 
 ```sheaf
-(not true)           ; => False
-(not false)          ; => True
+(not true)           ; => false
+(not false)          ; => true
 ```
 
 ---

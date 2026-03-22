@@ -239,7 +239,7 @@ Each argument position holds up to 8 cached buffers with most-recently-used orde
 
 ## Known Limitations
 
-- **Static shapes.** All tensor shapes must be known at compile time. Dynamic batch sizes trigger recompilation.
+- **Shape specialization.** Functions are compiled for the tensor shapes seen at the first call. A different shape (e.g., a different batch size) triggers automatic recompilation and caching. This is the same tracing model as `jax.jit`.
 - **Control flow.** `if` expressions inside compiled functions cause fallback to the interpreter. Conditional logic must live outside the hot path, or use `where`, which compiles to `stablehlo.select`.
 - **Metal backend.** IREE's Metal/SPIR-V backend is less optimized than CUDA. Some operations are slower on Apple GPUs than on equivalent NVIDIA hardware.
 - **Memory management.** No automatic model sharding or gradient checkpointing. Large models may exceed device memory.
