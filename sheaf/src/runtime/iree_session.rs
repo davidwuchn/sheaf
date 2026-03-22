@@ -64,19 +64,12 @@ impl IreeSession {
                 return Err(iree_err("failed to create IREE instance"));
             }
 
-            // Try drivers in preference order based on platform
+            // Try drivers in preference order: CUDA > Metal > Vulkan > CPU
             let device_override = crate::core::config::device_override();
             let driver_names: Vec<&str> = match device_override {
                 Some("cpu") => vec!["local-task"],
                 Some(d) => vec![d, "local-task"],
-                // Apple Silicon: Metal only
-                None if cfg!(all(target_os = "macos", target_arch = "aarch64")) =>
-                    vec!["metal", "local-task"],
-                // Intel Mac: CUDA, then Metal
-                None if cfg!(target_os = "macos") =>
-                    vec!["cuda", "metal", "local-task"],
-                // Linux / other Unixes: CUDA, Vulkan, CPU
-                None => vec!["cuda", "vulkan", "local-task"],
+                None => vec!["cuda", "metal", "vulkan", "local-task"],
             };
             let mut device: *mut iree_hal_device_t = std::ptr::null_mut();
             let mut chosen_driver = "";
@@ -112,11 +105,14 @@ impl IreeSession {
                 static PRINTED: AtomicBool = AtomicBool::new(false);
                 if !PRINTED.swap(true, Ordering::Relaxed) {
                     let display = match chosen_driver {
-                        "local-task" => "CPU",
-                        "metal" => "Metal GPU",
-                        "cuda" => "CUDA GPU",
-                        "vulkan" => "Vulkan GPU",
-                        other => other,
+                        "local-task" => "CPU".to_string(),
+                        "metal" => "Metal GPU".to_string(),
+                        "cuda" => match super::jit::detect_cuda_target() {
+                            Some(target) => format!("CUDA GPU ({})", target),
+                            None => "CUDA GPU".to_string(),
+                        },
+                        "vulkan" => "Vulkan GPU".to_string(),
+                        other => other.to_string(),
                     };
                     sheaf_msg!("sheaf: running on {}", display);
                 }

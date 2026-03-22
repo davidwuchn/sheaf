@@ -1,6 +1,6 @@
 [package]
 name = "sheaf-compiler"
-version = "2.0.0-rc1"
+version = "2.0.0"
 edition = "2024"
 authors = ["Damien Boureille"]
 license = "MIT"
@@ -23,6 +23,7 @@ clap = { version = "4.5", features = ["derive"] }
 ndarray = "0.16"
 getrandom = "0.2"
 rustyline = "14"
+nvml-wrapper = "0.10"
 
 [package.metadata]
 iree-version = "3.10.0"

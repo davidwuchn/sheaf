@@ -12,7 +12,33 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// Cached CUDA target architecture (e.g. "sm_75"), detected once via NVML.
+static CUDA_TARGET: OnceLock<Option<String>> = OnceLock::new();
+
+pub fn detect_cuda_target() -> Option<String> {
+    CUDA_TARGET.get_or_init(|| {
+        let nvml = nvml_wrapper::Nvml::init()
+            .or_else(|_| nvml_wrapper::Nvml::builder()
+                .lib_path(std::ffi::OsStr::new("libnvidia-ml.so.1"))
+                .init());
+        let nvml = match nvml {
+            Ok(n) => n,
+            Err(e) => { eprintln!("nvml: init failed: {}", e); return None; }
+        };
+        let device = match nvml.device_by_index(0) {
+            Ok(d) => d,
+            Err(e) => { eprintln!("nvml: device_by_index failed: {}", e); return None; }
+        };
+        let cc = match device.cuda_compute_capability() {
+            Ok(c) => c,
+            Err(e) => { eprintln!("nvml: compute_capability failed: {}", e); return None; }
+        };
+        let target = format!("sm_{}{}", cc.major, cc.minor);
+        Some(target)
+    }).clone()
+}
 
 use super::toolchain::{IREE_COMPILER_VERSION, find_iree_compile, ensure_toolchain};
 
@@ -1029,6 +1055,11 @@ impl JitCompiler {
             .stderr(stderr_cfg);
         if backend == "metal-spirv" {
             cmd.arg("--iree-metal-compile-to-metallib=false");
+        }
+        if backend == "cuda" {
+            if let Some(target) = detect_cuda_target() {
+                cmd.arg(format!("--iree-cuda-target={}", target));
+            }
         }
         if backend == "llvm-cpu" {
             cmd.arg("--iree-llvmcpu-target-cpu=host");
