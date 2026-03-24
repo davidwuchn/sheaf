@@ -75,8 +75,16 @@ impl JitCompiler {
             match ensure_toolchain() {
                 Ok(path) => Some(path),
                 Err(e) => {
-                    sheaf_msg!("sheaf: JIT compilation unavailable: {}", e);
-                    sheaf_msg!("sheaf: functions without cached .vmfb will run in interpreter (slow)");
+                    // Check if cached VMFBs exist, if so, we can still run
+                    let has_cache = std::path::Path::new("__sheaf__/manifest.json").exists();
+                    if has_cache {
+                        sheaf_msg!("sheaf: compiler toolchain not available, using cached compilations");
+                    } else {
+                        eprintln!("error: Could not download the compiler toolchain and no cached compilation found.");
+                        eprintln!("       Reason: {}", e);
+                        eprintln!("       Install curl and unzip, or set IREE_COMPILE to a local iree-compile binary.");
+                        std::process::exit(1);
+                    }
                     None
                 }
             }
