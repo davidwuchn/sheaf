@@ -41,10 +41,15 @@ Sheaf implements reverse-mode automatic differentiation at the expression level.
 (defn loss [params x y]
   (mean (** (- (@ x (get params :W)) y) 2)))
 
-;; Compute loss and gradients in a single call
-(let [[loss grads] ((value-and-grad loss) params x y)]
-  (println "loss:" loss)
-  (println "dW shape:" (shape (get grads :W))))
+;; Sample data
+(let [params {:W (random-normal (random-key 0) '[4 1])}
+      x      (random-normal (random-key 1) '[8 4])
+      y      (random-normal (random-key 2) '[8 1])
+      ;; Compute loss and gradients in a single call
+      ;; value-and-grad differentiates w.r.t. the first argument (params)
+      [loss grads] ((value-and-grad (fn [p] (loss p x y))) params)]
+  (print "loss:" loss)
+  (print "dW shape:" (shape (get grads :W))))
 ```
 
 The gradients have the same structure as the input parameters: if `params` is a nested dict, `grads` is a nested dict with identical keys and shapes.
