@@ -16,6 +16,8 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("log", builtin_log);
     env.set_builtin("sqrt", builtin_sqrt);
     env.set_builtin("@", builtin_matmul);
+    env.set_builtin("@-grad-lhs", builtin_matmul_grad_lhs);
+    env.set_builtin("@-grad-rhs", builtin_matmul_grad_rhs);
     env.set_builtin("einsum", builtin_einsum);
     env.set_builtin("append-and-roll", builtin_append_and_roll);
 }
@@ -379,6 +381,110 @@ fn einsum_naive(
         }
     }
     ArrayD::from_shape_vec(IxDyn(&out_shape), result).unwrap()
+}
+
+/// dL/dA for C = A @ B, given (A, B, adj)
+/// Handles 1D edge cases: when A is 1D [K], adj is 1D [N], B is [K, N]
+/// Standard: adj @ B^T, but when adj is 1D we need reshape.
+fn matmul_result_shape(a: &ArrayD<f32>, b: &ArrayD<f32>) -> Vec<usize> {
+    match (a.ndim(), b.ndim()) {
+        (1, 1) => vec![],
+        (1, _) => b.shape()[1..].to_vec(),
+        (_, 1) => a.shape()[..a.ndim()-1].to_vec(),
+        _ => {
+            let mut s = a.shape()[..a.ndim()-1].to_vec();
+            s.push(b.shape()[b.ndim()-1]);
+            s
+        }
+    }
+}
+
+fn broadcast_adj(adj: ArrayD<f32>, target_shape: &[usize]) -> ArrayD<f32> {
+    if adj.shape() == target_shape {
+        return adj;
+    }
+    if adj.ndim() == 0 {
+        let scalar = adj.first().copied().unwrap_or(0.0);
+        ArrayD::from_elem(IxDyn(target_shape), scalar)
+    } else {
+        adj
+    }
+}
+
+fn builtin_matmul_grad_lhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    if args.len() != 3 { return Err(runtime_error("@-grad-lhs requires 3 arguments: A, B, adj")); }
+    let (a, _) = to_array(&args[0])?;
+    let (b, _) = to_array(&args[1])?;
+    let (adj_raw, _) = to_array(&args[2])?;
+    let result_shape = matmul_result_shape(&a, &b);
+    let adj = broadcast_adj(adj_raw, &result_shape);
+    let a_ndim = a.ndim();
+    let b_ndim = b.ndim();
+
+    let result = match (a_ndim, b_ndim) {
+        (1, 1) => {
+            (&adj * &b).into_dyn()
+        }
+        (1, 2) => {
+            let n = adj.len();
+            let k = a.len();
+            let adj2d = adj.to_owned().into_shape_with_order((1, n)).unwrap();
+            let bt = b.t();
+            let bt2 = bt.to_owned().into_shape_with_order((n, k)).unwrap();
+            let r = adj2d.dot(&bt2);
+            r.into_shape_with_order(ndarray::IxDyn(&[k])).unwrap()
+        }
+        (2, 1) => {
+            let m = a.shape()[0];
+            let k = b.len();
+            let adj_col = adj.to_owned().into_shape_with_order((m, 1)).unwrap();
+            let b_row = b.to_owned().into_shape_with_order((1, k)).unwrap();
+            adj_col.dot(&b_row).into_dyn()
+        }
+        _ => {
+            let bt = b.t().to_owned().into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
+            let adj2 = adj.into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
+            adj2.dot(&bt).into_dyn()
+        }
+    };
+    Ok(Value::tensor_f32(result))
+}
+
+/// dL/dB for C = A @ B, given (A, B, adj)
+/// Handles 1D edge cases: when A is 1D [K], need outer product.
+fn builtin_matmul_grad_rhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    if args.len() != 3 { return Err(runtime_error("@-grad-rhs requires 3 arguments: A, B, adj")); }
+    let (a, _) = to_array(&args[0])?;
+    let (b, _) = to_array(&args[1])?;
+    let (adj_raw, _) = to_array(&args[2])?;
+    let result_shape = matmul_result_shape(&a, &b);
+    let adj = broadcast_adj(adj_raw, &result_shape);
+    let a_ndim = a.ndim();
+    let b_ndim = b.ndim();
+
+    let result = match (a_ndim, b_ndim) {
+        (1, 1) => {
+            (&adj * &a).into_dyn()
+        }
+        (1, 2) => {
+            let k = a.len();
+            let n = adj.len();
+            let a_col = a.to_owned().into_shape_with_order((k, 1)).unwrap();
+            let adj_row = adj.to_owned().into_shape_with_order((1, n)).unwrap();
+            a_col.dot(&adj_row).into_dyn()
+        }
+        (2, 1) => {
+            let at = a.t().to_owned().into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
+            let adj1 = adj.into_dimensionality::<ndarray::Ix1>().map_err(|e| runtime_error(e.to_string()))?;
+            at.dot(&adj1).into_dyn()
+        }
+        _ => {
+            let at = a.t().to_owned().into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
+            let adj2 = adj.into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
+            at.dot(&adj2).into_dyn()
+        }
+    };
+    Ok(Value::tensor_f32(result))
 }
 
 fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {

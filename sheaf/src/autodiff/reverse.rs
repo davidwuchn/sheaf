@@ -374,6 +374,29 @@ fn distribute_fn_adjoint_named(
                 let da = emit_binding(bindings, call("*", vec![adj.clone(), args[1].clone()]));
                 let da_ub = maybe_unbroadcast(sym(&da), &args[0], shapes, bindings);
                 acc_arg(&args[0], da_ub, adj_names, bindings);
+            } else if a_ndim == 1 {
+                // A is 1D [m], B is 2D [m, n], result is 1D [n], adj is 1D [n]
+                // dL/dA = adj @ B^T but adj is 1D: reshape to [1, n], matmul, reshape back to [m]
+                if let Some(b_shape) = arg_shape(&args[1], shapes) {
+                    let n = b_shape[b_shape.len() - 1];
+                    let adj_row = emit_binding(bindings, call("reshape", vec![
+                        adj.clone(),
+                        CompiledExpr::Vector(vec![CompiledExpr::Integer(1), CompiledExpr::Integer(n)]),
+                    ]));
+                    let bt = emit_binding(bindings, call("transpose", vec![args[1].clone()]));
+                    let da_2d = emit_binding(bindings, call("@", vec![sym(&adj_row), sym(&bt)]));
+                    let m = b_shape[0];
+                    let da = emit_binding(bindings, call("reshape", vec![
+                        sym(&da_2d),
+                        CompiledExpr::Vector(vec![CompiledExpr::Integer(m)]),
+                    ]));
+                    acc_arg(&args[0], sym(&da), adj_names, bindings);
+                } else {
+                    let bt = emit_binding(bindings, call("transpose", vec![args[1].clone()]));
+                    let da = emit_binding(bindings, call("@", vec![adj.clone(), sym(&bt)]));
+                    let da_ub = maybe_unbroadcast(sym(&da), &args[0], shapes, bindings);
+                    acc_arg(&args[0], da_ub, adj_names, bindings);
+                }
             } else {
                 let bt = emit_binding(bindings, call("transpose", vec![args[1].clone()]));
                 let da = emit_binding(bindings, call("@", vec![adj.clone(), sym(&bt)]));

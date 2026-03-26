@@ -47,10 +47,6 @@ fn mul(a: CompiledExpr, b: CompiledExpr) -> CompiledExpr {
     call("*", vec![a, b])
 }
 
-fn matmul(a: CompiledExpr, b: CompiledExpr) -> CompiledExpr {
-    call("@", vec![a, b])
-}
-
 fn transpose(a: CompiledExpr) -> CompiledExpr {
     call("transpose", vec![a])
 }
@@ -435,11 +431,12 @@ fn grad_function_call(
         // Matrix ops
         "@" => {
             // C = A @ B
-            // dL/dA = dL/dC @ B^T
-            // dL/dB = A^T @ dL/dC
+            // dL/dA = dL/dC @ B^T  (via @-grad-lhs)
+            // dL/dB = A^T @ dL/dC  (via @-grad-rhs)
+            // These builtins handle 1D edge cases with proper reshape.
             let (a, b) = (&args[0], &args[1]);
-            let g_a = matmul(g.clone(), transpose(b.clone()));
-            let g_b = matmul(transpose(a.clone()), g.clone());
+            let g_a = call("@-grad-lhs", vec![a.clone(), b.clone(), g.clone()]);
+            let g_b = call("@-grad-rhs", vec![a.clone(), b.clone(), g.clone()]);
             add(grad_with(a, wrt, g_a), grad_with(b, wrt, g_b))
         }
 
