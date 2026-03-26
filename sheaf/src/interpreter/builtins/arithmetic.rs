@@ -150,12 +150,27 @@ fn builtin_floor(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     unary_op(args, f32::floor)
 }
 
+fn check_matmul_shapes(a: &ArrayD<f32>, b: &ArrayD<f32>) -> Result<(), SheafError> {
+    let contract_a = a.shape().last().copied().unwrap_or(0);
+    let contract_b = if b.ndim() >= 2 { b.shape()[b.ndim() - 2] } else { b.shape().first().copied().unwrap_or(0) };
+    if contract_a != contract_b {
+        Err(runtime_error(format!(
+            "@ shape mismatch: {:?} and {:?} are not compatible (contracting dims {} vs {})",
+            a.shape(), b.shape(), contract_a, contract_b
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 2 {
         return Err(arity_error("@", 2, args.len()));
     }
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
+
+    check_matmul_shapes(&a, &b)?;
 
     match (a.ndim(), b.ndim()) {
         (1, 1) => {

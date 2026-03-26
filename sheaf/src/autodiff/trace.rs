@@ -170,7 +170,7 @@ fn trace_rec(
                     let items = match concrete {
                         Value::List(items) | Value::Tuple(items) => items,
                         other => return Err(runtime_error(format!(
-                            "trace: destructuring expected list/tuple, got {}", other.type_name()
+                            "destructuring expected list/tuple, got {}", other.type_name()
                         ))),
                     };
                     for (n, v) in names.iter().zip(items.into_iter()) {
@@ -262,7 +262,9 @@ fn trace_reduce(
     is_scan: bool,
 ) -> Result<CompiledExpr, SheafError> {
     if args.len() != 3 {
-        return Err(runtime_error("trace: reduce requires 3 args (f init coll)"));
+        return Err(runtime_error(
+            "reduce requires 3 arguments: (reduce (fn [acc x] ...) init collection)"
+        ));
     }
 
     let lambda = &args[0];
@@ -271,11 +273,15 @@ fn trace_reduce(
 
     let (lambda_params, lambda_body) = match lambda {
         CompiledExpr::Lambda { params, body } => (params.clone(), body.as_ref().clone()),
-        _ => return Err(runtime_error("trace: reduce function must be a lambda")),
+        _ => return Err(runtime_error(
+            "reduce requires a lambda, e.g. (reduce (fn [acc x] (+ acc x)) 0.0 items)"
+        )),
     };
 
     if lambda_params.len() != 2 {
-        return Err(runtime_error("trace: reduce lambda must take 2 params (acc, item)"));
+        return Err(runtime_error(
+            "reduce lambda must take 2 parameters: (fn [accumulator item] ...)"
+        ));
     }
 
     let acc_param = &lambda_params[0];
@@ -289,7 +295,7 @@ fn trace_reduce(
             let n = dict_scan_length(map)?;
             (0..n).map(|i| slice_dict(map, i).unwrap()).collect()
         }
-        _ => return Err(runtime_error("trace: reduce collection must be a list or dict of tensors")),
+        _ => return Err(runtime_error("reduce collection must be a list or dict of tensors")),
     };
 
     // Trace init
@@ -351,7 +357,7 @@ fn trace_reduce(
                     }
                 };
             } else {
-                return Err(runtime_error("trace: scan fn must return [carry output]"));
+                return Err(runtime_error("scan fn must return [carry output]"));
             }
         } else {
             acc_val = step_val;
