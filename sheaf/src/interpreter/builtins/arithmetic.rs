@@ -426,12 +426,14 @@ fn builtin_matmul_grad_lhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             (&adj * &b).into_dyn()
         }
         (1, 2) => {
+            // dA for [K] @ [K, N] -> [N], adj=[N]
+            // dA = adj @ B^T: reshape adj to [1, N], matmul with B^T [N, K], squeeze to [K]
             let n = adj.len();
             let k = a.len();
             let adj2d = adj.to_owned().into_shape_with_order((1, n)).unwrap();
-            let bt = b.t();
-            let bt2 = bt.to_owned().into_shape_with_order((n, k)).unwrap();
-            let r = adj2d.dot(&bt2);
+            let bt = b.t().to_owned().into_dimensionality::<ndarray::Ix2>()
+                .map_err(|e| runtime_error(e.to_string()))?;
+            let r = adj2d.dot(&bt);
             r.into_shape_with_order(ndarray::IxDyn(&[k])).unwrap()
         }
         (2, 1) => {

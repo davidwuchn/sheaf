@@ -208,6 +208,7 @@ impl CompilerContext {
             ("optim.shf", include_str!("../../lib/optim.shf")),
         ];
         for (name, source) in STDLIB {
+            crate::core::error_format::register_source(name, source);
             if let Ok(exprs) = crate::core::parse(source, *name) {
                 for expr in &exprs {
                     let _ = self.compile(expr);

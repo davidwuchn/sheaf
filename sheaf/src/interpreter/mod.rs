@@ -23,6 +23,11 @@ use crate::interpreter::value::Value;
 use ndarray::{ArrayD, IxDyn};
 use std::collections::BTreeMap;
 
+fn is_stdlib_location(loc: &crate::core::ast::SourceLocation) -> bool {
+    let f = loc.filename.as_ref();
+    f.ends_with("nn.shf") || f.ends_with("optim.shf") || f.ends_with("macros.shf") || f.ends_with("misc.shf")
+}
+
 pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
     match expr {
         CompiledExpr::Integer(n) => Ok(Value::Int(*n)),
@@ -68,6 +73,22 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
                     message,
                     location: loc.clone(),
                 },
+                SheafError::Runtime { message, location: Some(ref err_loc) }
+                    if is_stdlib_location(err_loc)
+                        && loc.is_some()
+                        && !is_stdlib_location(loc.as_ref().unwrap())
+                        && !message.contains("called from") =>
+                {
+                    // Error in stdlib, called from user code: show function name + call site
+                    let call_loc = loc.as_ref().unwrap();
+                    SheafError::Runtime {
+                        message: format!(
+                            "{}: {}\n  = called from {}:{}",
+                            name, message, call_loc.filename, call_loc.line
+                        ),
+                        location: Some(err_loc.clone()),
+                    }
+                }
                 other => other,
             })
         }
