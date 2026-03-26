@@ -175,6 +175,7 @@ impl JitCompiler {
         let mut constants: HashMap<(String, Vec<usize>), f64> = HashMap::new();
 
         for (param_name, arg_val) in func_def.params.iter().zip(args) {
+
             let ty = match value_to_stablehlo_type(arg_val) {
                 Ok(ty) => ty,
                 Err(e) => {
@@ -1037,11 +1038,12 @@ impl JitCompiler {
             sheaf_msg!("jit: compiling {} [{}]...", name, backend);
         }
 
-        let tmp_dir = std::env::temp_dir();
-        let stamp = std::process::id();
         let safe_name = name.replace('?', "_q").replace('!', "_b");
-        let mlir_path = tmp_dir.join(format!("sheaf-jit-{}-{}.mlir", safe_name, stamp));
-        let vmfb_path = tmp_dir.join(format!("sheaf-jit-{}-{}.vmfb", safe_name, stamp));
+        let stamp = std::process::id();
+        let cache_dir = std::path::PathBuf::from("__sheaf__");
+        let _ = std::fs::create_dir_all(&cache_dir);
+        let mlir_path = cache_dir.join(format!("{}-{}.mlir", safe_name, stamp));
+        let vmfb_path = cache_dir.join(format!("{}-{}.vmfb", safe_name, stamp));
 
         if std::fs::write(&mlir_path, mlir).is_err() {
             eprintln!("sheaf: failed to write temp MLIR, aborting");
@@ -1077,9 +1079,9 @@ impl JitCompiler {
         let status = cmd.status();
 
         if crate::core::config::verbosity() >= 2 {
-            let debug_mlir = format!("__sheaf__/{}-debug.mlir", safe_name);
+            let debug_mlir = cache_dir.join(format!("{}-debug.mlir", safe_name));
             let _ = std::fs::rename(&mlir_path, &debug_mlir);
-            sheaf_msg!("jit: {} | saved {}", name, debug_mlir);
+            sheaf_msg!("jit: {} | saved {}", name, debug_mlir.display());
         } else {
             let _ = std::fs::remove_file(&mlir_path);
         }
