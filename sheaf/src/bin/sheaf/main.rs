@@ -31,6 +31,10 @@ fn main() {
     let mut verbosity: u8 = 0;
     let mut device: Option<String> = None;
     let mut jit_profile = false;
+    let mut blame = false;
+    let mut trace_enabled = false;
+    let mut trace_scope: Option<Vec<String>> = None;
+    let mut guard_specs: Vec<String> = Vec::new();
     let mut remaining: Vec<String> = Vec::new();
     let mut i = 0;
     while i < tail.len() {
@@ -48,6 +52,24 @@ fn main() {
                 }
             }
             "--jit-profile" => jit_profile = true,
+            "--blame" => blame = true,
+            "--trace" => {
+                trace_enabled = true;
+                if tail.get(i + 1).map(|a| !a.starts_with('-')).unwrap_or(false) {
+                    i += 1;
+                    trace_scope = Some(tail[i].split(',').map(|s| s.to_string()).collect());
+                }
+            }
+            "--guard" => {
+                i += 1;
+                match tail.get(i) {
+                    Some(spec) => guard_specs.push(spec.clone()),
+                    None => {
+                        sheaf_msg!("sheaf: --guard requires a SPEC argument");
+                        exit(1);
+                    }
+                }
+            }
             other => remaining.push(other.to_string()),
         }
         i += 1;
@@ -57,6 +79,17 @@ fn main() {
     // Find the first positional argument (not starting with '-')
     let first_positional = remaining.iter().position(|a| !a.starts_with('-'));
 
+    // Parse guard specs
+    let cli_guards: Vec<_> = guard_specs.iter().map(|spec| {
+        match parse_guard_spec(spec) {
+            Ok(guard) => guard,
+            Err(msg) => {
+                sheaf_msg!("sheaf: invalid guard spec '{}': {}", spec, msg);
+                exit(1);
+            }
+        }
+    }).collect();
+
     match first_positional.map(|i| remaining[i].as_str()) {
         Some("init-ai") => run_init_ai(),
 
@@ -64,21 +97,19 @@ fn main() {
 
         Some(file) if file.ends_with(".shf") || std::path::Path::new(file).exists() => {
             let pos = first_positional.unwrap();
-            let mut reordered = vec![remaining[pos].clone()];
-            for (j, a) in remaining.iter().enumerate() {
-                if j != pos { reordered.push(a.clone()); }
-            }
-            run_file(&reordered);
+            run_file_v2(
+                &remaining[pos],
+                blame,
+                trace_enabled,
+                trace_scope,
+                cli_guards,
+            );
         }
 
         _ => {
             if let Some(ci) = remaining.iter().position(|a| a == "-c") {
-                let mut blame = false;
                 let expr = remaining[ci + 1..].iter()
-                    .filter(|a| {
-                        if *a == "--blame" { blame = true; return false; }
-                        !a.starts_with('-') || a.parse::<f64>().is_ok()
-                    })
+                    .filter(|a| !a.starts_with('-') || a.parse::<f64>().is_ok())
                     .cloned()
                     .collect::<Vec<_>>()
                     .join(" ");
@@ -86,7 +117,7 @@ fn main() {
                     sheaf_msg!("sheaf: -c requires an expression");
                     exit(1);
                 }
-                run_expr(&expr, blame);
+                run_expr_v2(&expr, blame, trace_enabled, trace_scope, cli_guards);
             } else if remaining.is_empty() {
                 run_repl();
             } else {
@@ -139,10 +170,39 @@ fn is_silent_result(val: &sheaf_compiler::interpreter::value::Value) -> bool {
     }
 }
 
-fn run_expr(source: &str, blame: bool) {
-    use sheaf_compiler::interpreter::eval::{eval_source, eval_source_with_blame};
+fn run_expr_v2(
+    source: &str,
+    blame: bool,
+    trace_enabled: bool,
+    trace_scope: Option<Vec<String>>,
+    cli_guards: Vec<sheaf_compiler::interpreter::tracer::CliGuard>,
+) {
+    use sheaf_compiler::interpreter::eval::{eval_source, eval_source_with_blame, eval_source_with_tracing};
+    use sheaf_compiler::interpreter::tracer::{LogFormat, TraceLevel, TracerConfig};
+
+    let needs_tracing = trace_enabled || !cli_guards.is_empty();
     let result = if blame {
-        eval_source_with_blame(source, None, None)
+        let tracer_config = if needs_tracing {
+            Some(TracerConfig {
+                enabled: trace_enabled,
+                scope_filter: trace_scope,
+                level: TraceLevel::Normal,
+                format: LogFormat::Console,
+                cli_guards,
+            })
+        } else {
+            None
+        };
+        eval_source_with_blame(source, None, tracer_config)
+    } else if needs_tracing {
+        let config = TracerConfig {
+            enabled: trace_enabled,
+            scope_filter: trace_scope,
+            level: TraceLevel::Normal,
+            format: LogFormat::Console,
+            cli_guards,
+        };
+        eval_source_with_tracing(source, None, config)
     } else {
         eval_source(source)
     };
@@ -159,81 +219,16 @@ fn run_expr(source: &str, blame: bool) {
     }
 }
 
-fn run_file(args: &[String]) {
+fn run_file_v2(
+    path: &str,
+    blame: bool,
+    trace_enabled: bool,
+    trace_scope: Option<Vec<String>>,
+    cli_guards: Vec<sheaf_compiler::interpreter::tracer::CliGuard>,
+) {
     use std::path::PathBuf;
     use sheaf_compiler::interpreter::eval::{eval_source_with_blame, eval_source_with_path, eval_source_with_tracing};
-    use sheaf_compiler::interpreter::tracer::{CliGuard, LogFormat, TraceLevel, TracerConfig};
-
-    let path = &args[0];
-
-    let mut trace_enabled = false;
-    let mut trace_scope: Option<Vec<String>> = None;
-    let mut trace_level = TraceLevel::Normal;
-    let mut trace_format = LogFormat::Console;
-    let mut cli_guards: Vec<CliGuard> = Vec::new();
-    let mut blame = false;
-
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--trace" => {
-                trace_enabled = true;
-                // Optional: comma-separated function names
-                if args.get(i + 1).map(|a| !a.starts_with('-')).unwrap_or(false) {
-                    i += 1;
-                    trace_scope = Some(args[i].split(',').map(|s| s.to_string()).collect());
-                }
-            }
-            "--trace-level" => {
-                i += 1;
-                match args.get(i).map(|s| s.as_str()) {
-                    Some("fast") => trace_level = TraceLevel::Fast,
-                    Some("normal") => trace_level = TraceLevel::Normal,
-                    Some("verbose") => trace_level = TraceLevel::Verbose,
-                    _ => {
-                        sheaf_msg!("sheaf: --trace-level expects fast|normal|verbose");
-                        exit(1);
-                    }
-                }
-            }
-            "--trace-out" => {
-                i += 1;
-                match args.get(i).map(|s| s.as_str()) {
-                    Some("console") => trace_format = LogFormat::Console,
-                    Some("json") => trace_format = LogFormat::Json,
-                    _ => {
-                        sheaf_msg!("sheaf: --trace-out expects console|json");
-                        exit(1);
-                    }
-                }
-            }
-            "--guard" => {
-                i += 1;
-                match args.get(i) {
-                    Some(spec) => match parse_guard_spec(spec) {
-                        Ok(guard) => cli_guards.push(guard),
-                        Err(msg) => {
-                            sheaf_msg!("sheaf: invalid guard spec '{}': {}", spec, msg);
-                            exit(1);
-                        }
-                    }
-                    None => {
-                        sheaf_msg!("sheaf: --guard requires a SPEC argument");
-                        exit(1);
-                    }
-                }
-            }
-            "--blame" => {
-                blame = true;
-            }
-            arg => {
-                sheaf_msg!("sheaf: unknown option '{}' for file mode", arg);
-                eprintln!("Run 'sheaf --help' for usage.");
-                exit(1);
-            }
-        }
-        i += 1;
-    }
+    use sheaf_compiler::interpreter::tracer::{LogFormat, TraceLevel, TracerConfig};
 
     let abs_path = PathBuf::from(path)
         .canonicalize()
@@ -257,8 +252,8 @@ fn run_file(args: &[String]) {
             Some(TracerConfig {
                 enabled: trace_enabled,
                 scope_filter: trace_scope,
-                level: trace_level,
-                format: trace_format,
+                level: TraceLevel::Normal,
+                format: LogFormat::Console,
                 cli_guards,
             })
         } else {
@@ -269,8 +264,8 @@ fn run_file(args: &[String]) {
         let config = TracerConfig {
             enabled: trace_enabled,
             scope_filter: trace_scope,
-            level: trace_level,
-            format: trace_format,
+            level: TraceLevel::Normal,
+            format: LogFormat::Console,
             cli_guards,
         };
         eval_source_with_tracing(&source, Some(&abs_path), config)
