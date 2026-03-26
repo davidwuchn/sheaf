@@ -107,13 +107,6 @@ impl CodeGenerator {
             return result;
         }
 
-        // NN ops: sparse-cross-entropy
-        if name == "sparse-cross-entropy" && args.len() == 2 {
-            let (logits_reg, logits_ty) = self.generate(&args[0])?;
-            let (labels_reg, labels_ty) = self.generate(&args[1])?;
-            let (reg, ty) = self.emit_sparse_cross_entropy(&logits_reg, &labels_reg, &logits_ty, &labels_ty);
-            Ok((reg, ty))
-        }
         // einsum: (einsum "spec" lhs rhs)
         else if name == "einsum" && args.len() >= 3 {
             let spec = match &args[0] {
@@ -295,33 +288,4 @@ impl CodeGenerator {
         }
     }
 
-    fn emit_sparse_cross_entropy(
-        &mut self,
-        logits: &Register,
-        labels: &Register,
-        logits_ty: &StableHLOType,
-        labels_ty: &StableHLOType,
-    ) -> (Register, StableHLOType) {
-        let num_classes = *logits_ty.shape().last().unwrap();
-
-        // log-softmax along last axis
-        let (max_reg, max_ty) = self.emitter.emit_reduce_max(logits, logits_ty, -1, true);
-        let (shifted, shifted_ty) = self.emitter.emit_binop("-", logits, &max_reg, logits_ty, &max_ty);
-        let exp_reg = self.emitter.emit_unary("exp", &shifted, &shifted_ty);
-        let (sum_reg, sum_ty) = self.emitter.emit_reduce_sum(&exp_reg, &shifted_ty, -1, true);
-        let log_sum = self.emitter.emit_unary("log", &sum_reg, &sum_ty);
-        let (log_sm, log_sm_ty) = self.emitter.emit_binop("-", &shifted, &log_sum, &shifted_ty, &sum_ty);
-
-        // one-hot encoding
-        let (oh, oh_ty) = self.emitter.emit_one_hot(labels, labels_ty, num_classes);
-
-        // pick correct class log-probs, sum along class axis
-        let (prod, prod_ty) = self.emitter.emit_binop("*", &oh, &log_sm, &oh_ty, &log_sm_ty);
-        let (batch_loss, batch_loss_ty) = self.emitter.emit_reduce_sum(&prod, &prod_ty, -1, false);
-
-        // negate and mean over batch
-        let neg_one = self.emitter.emit_constant_f32(-1.0);
-        let (neg_loss, neg_loss_ty) = self.emitter.emit_binop("*", &neg_one, &batch_loss, &StableHLOType::scalar_f32(), &batch_loss_ty);
-        self.emitter.emit_reduce_mean(&neg_loss, &neg_loss_ty, 0, false)
-    }
 }

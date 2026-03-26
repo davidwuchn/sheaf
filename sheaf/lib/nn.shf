@@ -75,6 +75,7 @@
 
 (defn xavier-uniform [key shape]
   ;; Xavier/Glorot uniform: U(-limit, limit), limit = sqrt(6 / (fan_in + fan_out))
+  ;; Usage: (xavier-uniform (random-key 0) '[768 512])
   (let [fan-in  (first shape)
         fan-out (second shape)
         limit (sqrt (/ 6.0 (+ fan-in fan-out)))]
@@ -82,28 +83,33 @@
 
 (defn xavier-normal [key shape]
   ;; Xavier/Glorot normal: N(0, sqrt(2 / (fan_in + fan_out)))
+  ;; Usage: (xavier-normal (random-key 0) '[768 512])
   (let [fan-in  (first shape)
         fan-out (second shape)]
     (* (random-normal key shape) (sqrt (/ 2.0 (+ fan-in fan-out))))))
 
 (defn kaiming-uniform [key shape]
   ;; Kaiming/He uniform: U(-limit, limit), limit = sqrt(6 / fan_in)
+  ;; Usage: (kaiming-uniform (random-key 0) '[768 512])
   (let [fan-in (first shape)
         limit (sqrt (/ 6.0 fan-in))]
     (* (- (* (random-uniform key shape) 2.0) 1.0) limit)))
 
 (defn kaiming-normal [key shape]
   ;; Kaiming/He normal: N(0, sqrt(2 / fan_in))
+  ;; Usage: (kaiming-normal (random-key 0) '[768 512])
   (let [fan-in (first shape)]
     (* (random-normal key shape) (sqrt (/ 2.0 fan-in)))))
 
 (defn lecun-normal [key shape]
   ;; LeCun normal: N(0, sqrt(1 / fan_in))
+  ;; Usage: (lecun-normal (random-key 0) '[768 512])
   (let [fan-in (first shape)]
     (* (random-normal key shape) (sqrt (/ 1.0 fan-in)))))
 
 (defn lecun-uniform [key shape]
   ;; LeCun uniform: U(-limit, limit), limit = sqrt(3 / fan_in)
+  ;; Usage: (lecun-uniform (random-key 0) '[768 512])
   (let [fan-in (first shape)
         limit (sqrt (/ 3.0 fan-in))]
     (* (- (* (random-uniform key shape) 2.0) 1.0) limit)))

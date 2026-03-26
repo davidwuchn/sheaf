@@ -895,7 +895,7 @@ The `[vec] :dtype` syntax is syntactic sugar that desugars to `cast` at parse ti
 
 ## Initializers
 
-Provided by `(use nn)`. All follow the `(init key shape)` convention, matching PyTorch naming.
+All follow the `(init key shape)` convention, matching PyTorch naming. These functions are available by default (no import needed).
 Use a quoted vector for the shape (e.g., `'[256 128]`) to ensure it is treated as static data.
 
 For zero/one initialization, use the builtins `zeros` and `ones` directly (no key needed).
@@ -908,7 +908,6 @@ For zero/one initialization, use the builtins `zeros` and `ones` directly (no ke
 Xavier (Glorot) initialization. Scales weights so variance stays constant across layers. Effective with symmetric activations (`tanh`, `sigmoid`).
 
 ```sheaf
-(use nn)
 (xavier-uniform (random-key 42) '[256 128])  ; U(-limit, limit), limit = sqrt(6/(fan_in+fan_out))
 (xavier-normal  (random-key 42) '[256 128])  ; N(0, sqrt(2/(fan_in+fan_out)))
 ```
@@ -2005,21 +2004,6 @@ A higher-order function that transforms a scalar-valued function `func` into a n
 
 ## Loss & Metrics
 
-### sparse-cross-entropy
-
-**Type:** function
-**Signature:** `(sparse-cross-entropy logits targets :i32)`
-
-Computes the categorical cross-entropy loss between logits (unnormalized predictions) and targets (integer class indices). This function internally applies a softmax to the logits, making it more numerically stable than manual computation.
-
-Note: `targets` must be integers. Specify the `:i32` type to avoid type errors.
-
-```sheaf
-(sparse-cross-entropy [[0.9 0.1] [0.2 0.8]] [0 1] :i32) ; => 0.40429434
-```
-
----
-
 ## Advanced Tensor Ops
 
 ### einsum
@@ -2303,9 +2287,10 @@ Binary lookup across shards is O(log N) — reading a single element from shard 
 
 Loads a library module and imports its public functions into the current global namespace. Use ':registry' to see what functions have been imported.
 
+Note: the standard library modules (`nn`, `optim`, `macros`) are loaded automatically. You do not need to call `(use nn)` or `(use optim)` explicitly.
+
 ```sheaf
-(use nn)              ; Load neural network ops
-(use optim)           ; Load optimizer ops
+(use my-model)        ; Load a user-defined module (my-model.shf)
 ```
 
 ---

@@ -243,14 +243,6 @@ Threading macros help avoid deeply nested function calls. Choose based on your d
     (mean output :axis 0))
   ```
 
-**Module System**
-
-```sheaf
-(use nn)                             ; Import from lib/nn.shf
-(use optim)                          ; Import from lib/optim.shf
-(use macros)                         ; Import standard macros (when, unless, comment)
-```
-
 ---
 
 ## Common Patterns
@@ -419,8 +411,7 @@ Multi-epoch training with progress reporting:
 | -------------------------------------------- | --------------------- | -------------------------- |
 | `(mse-loss pred target)`                     | Regression            | Sensitive to outliers      |
 | `(mae-loss pred target)`                     | Robust regression     | Less sensitive to outliers |
-| `(cross-entropy-loss logits targets)`        | Multi-class (one-hot) | Requires one-hot targets   |
-| `(sparse-cross-entropy logits targets :i32)` | Multi-class (integer) | Requires integer labels    |
+| `(cross-entropy-loss logits targets)`        | Multi-class           | Targets are integer labels |
 
 ### Hyperparameter Recommendations
 
@@ -589,9 +580,8 @@ Key rules:
 ### Unary Negation
 
 ```sheaf
-; WRONG: (- x)          ; Not supported!
-; RIGHT: (* -1.0 x)     ; Use multiplication
-; RIGHT: (- 0 x)        ; Subtract from zero
+(- x)                   ; Negates x (unary minus)
+(- a b)                 ; Subtracts b from a (binary minus)
 ```
 
 ### Equality Operators
@@ -605,8 +595,8 @@ Key rules:
 ### Shape Inference with Static & Reshape
 
 ```sheaf
-(reshape (arange 12) '(3 -1))    ; => shape (3 4) - infers 4
-(reshape (arange 12) '(2 -1 2))  ; => shape (2 3 2) - infers 3
+(reshape (arange 12) '[3 -1])     ; => shape [3, 4] - infers 4
+(reshape (arange 12) '[2 -1 2])  ; => shape [2, 3, 2] - infers 3
 ```
 
 ### Dictionary Access
