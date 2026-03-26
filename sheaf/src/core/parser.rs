@@ -323,11 +323,12 @@ impl Tokenizer {
 struct Parser {
     tokens: Vec<LocatedToken>,
     pos: usize,
+    open_delimiters: Vec<(char, SourceLocation)>,
 }
 
 impl Parser {
     fn new(tokens: Vec<LocatedToken>) -> Self {
-        Self { tokens, pos: 0 }
+        Self { tokens, pos: 0, open_delimiters: Vec::new() }
     }
 
     fn peek(&self) -> Option<&LocatedToken> {
@@ -397,33 +398,55 @@ impl Parser {
             Token::String(s) => Ok(SheafValue::String(s, token.location)),
             Token::Boolean(b) => Ok(SheafValue::Boolean(b, token.location)),
             Token::Nil => Ok(SheafValue::Nil(token.location)),
-            Token::RParen | Token::RBracket | Token::RBrace => Err(SheafError::Parse {
-                message: format!(
-                    "Unexpected closing '{}'",
-                    match token.token {
-                        Token::RParen => ")",
-                        Token::RBracket => "]",
-                        Token::RBrace => "}",
-                        _ => unreachable!(),
+            Token::RParen | Token::RBracket | Token::RBrace => {
+                let closing = match token.token {
+                    Token::RParen => ")",
+                    Token::RBracket => "]",
+                    Token::RBrace => "}",
+                    _ => unreachable!(),
+                };
+                let hint = if let Some((open_ch, open_loc)) = self.open_delimiters.last() {
+                    let expected = match open_ch {
+                        '(' => ")",
+                        '[' => "]",
+                        '{' => "}",
+                        _ => "?",
+                    };
+                    if closing != expected {
+                        format!(
+                            "\n  = hint: Expected '{}' to close '{}' opened at line {}. \
+                             A '{}' is probably missing before this point.",
+                            expected, open_ch, open_loc.line, expected
+                        )
+                    } else {
+                        String::new()
                     }
-                ),
-                location: token.location,
-            }),
+                } else {
+                    String::new()
+                };
+                Err(SheafError::Parse {
+                    message: format!("Unexpected closing '{closing}'{hint}"),
+                    location: token.location,
+                })
+            }
         }
     }
 
     fn parse_list(&mut self, start_loc: SourceLocation) -> ParseResult<SheafValue> {
+        self.open_delimiters.push(('(', start_loc.clone()));
         let mut elements = Vec::new();
         loop {
             match self.peek() {
                 None => {
+                    let hint = self.indentation_hint(&start_loc, &elements);
                     return Err(SheafError::Parse {
-                        message: "Unclosed list".to_string(),
+                        message: format!("Unclosed list{}", hint),
                         location: start_loc,
                     });
                 }
                 Some(token) if matches!(token.token, Token::RParen) => {
                     self.advance();
+                    self.open_delimiters.pop();
                     break;
                 }
                 _ => {
@@ -434,18 +457,36 @@ impl Parser {
         Ok(SheafValue::List(elements, start_loc))
     }
 
+    fn indentation_hint(&self, open_loc: &SourceLocation, elements: &[SheafValue]) -> String {
+        let open_col = open_loc.column;
+        for elem in elements {
+            let loc = elem.location();
+            if loc.line > open_loc.line && loc.column <= open_col {
+                return format!(
+                    "\n  = hint: Expression at line {} (column {}) is indented at the same level \
+                     as the ( at line {}. A ) is probably missing before line {}.",
+                    loc.line, loc.column, open_loc.line, loc.line
+                );
+            }
+        }
+        String::new()
+    }
+
     fn parse_vector(&mut self, start_loc: SourceLocation) -> ParseResult<SheafValue> {
+        self.open_delimiters.push(('[', start_loc.clone()));
         let mut elements = Vec::new();
         loop {
             match self.peek() {
                 None => {
+                    let hint = self.indentation_hint(&start_loc, &elements);
                     return Err(SheafError::Parse {
-                        message: "Unclosed vector".to_string(),
+                        message: format!("Unclosed vector{}", hint),
                         location: start_loc,
                     });
                 }
                 Some(token) if matches!(token.token, Token::RBracket) => {
                     self.advance();
+                    self.open_delimiters.pop();
                     break;
                 }
                 _ => {
@@ -457,6 +498,7 @@ impl Parser {
     }
 
     fn parse_dict(&mut self, start_loc: SourceLocation) -> ParseResult<SheafValue> {
+        self.open_delimiters.push(('{', start_loc.clone()));
         let mut pairs = Vec::new();
         loop {
             match self.peek() {
@@ -468,6 +510,7 @@ impl Parser {
                 }
                 Some(token) if matches!(token.token, Token::RBrace) => {
                     self.advance();
+                    self.open_delimiters.pop();
                     break;
                 }
                 _ => {
@@ -495,7 +538,78 @@ pub fn parse(source: &str, filename: impl Into<String>) -> ParseResult<Vec<Sheaf
     let mut tokenizer = Tokenizer::new(source, filename.clone());
     let tokens = tokenizer.tokenize()?;
     let mut parser = Parser::new(tokens);
-    parser.parse_all()
+    parser.parse_all().map_err(|e| {
+        // Enrich "Unexpected closing" errors with paren balance info
+        if let SheafError::Parse { ref message, ref location } = e {
+            if message.contains("Unexpected closing") && !message.contains("hint:") {
+                let balance = count_paren_balance(source);
+                if balance.extra_close > 0 {
+                    return SheafError::Parse {
+                        message: format!(
+                            "{}\n  = hint: File has {} extra closing delimiter{}. \
+                             Check the line above for a ) that closes an expression too early.",
+                            message,
+                            balance.extra_close,
+                            if balance.extra_close == 1 { "" } else { "s" },
+                        ),
+                        location: location.clone(),
+                    };
+                }
+            }
+        }
+        e
+    })
+}
+
+struct ParenBalance {
+    extra_close: usize,
+}
+
+fn count_paren_balance(source: &str) -> ParenBalance {
+    let mut depth: i64 = 0;
+    let mut extra_close: usize = 0;
+    let mut in_string = false;
+    let mut in_comment = false;
+    let mut prev_char = '\0';
+
+    for ch in source.chars() {
+        if ch == '\n' {
+            in_comment = false;
+            prev_char = ch;
+            continue;
+        }
+        if in_comment {
+            prev_char = ch;
+            continue;
+        }
+        if ch == '"' && prev_char != '\\' {
+            in_string = !in_string;
+            prev_char = ch;
+            continue;
+        }
+        if in_string {
+            prev_char = ch;
+            continue;
+        }
+        if ch == ';' {
+            in_comment = true;
+            prev_char = ch;
+            continue;
+        }
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => {
+                depth -= 1;
+                if depth < 0 {
+                    extra_close += 1;
+                    depth = 0;
+                }
+            }
+            _ => {}
+        }
+        prev_char = ch;
+    }
+    ParenBalance { extra_close }
 }
 
 #[cfg(test)]

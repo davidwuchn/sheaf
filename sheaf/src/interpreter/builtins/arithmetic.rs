@@ -135,7 +135,7 @@ fn builtin_sqrt(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 2 {
-        return Err(runtime_error("@ requires exactly 2 arguments"));
+        return Err(arity_error("@", 2, args.len()));
     }
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;

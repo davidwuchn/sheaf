@@ -15,6 +15,37 @@ pub fn runtime_error(message: impl Into<String>) -> SheafError {
     }
 }
 
+pub fn arity_error(name: &str, expected: usize, got: usize) -> SheafError {
+    let hint = if got > expected {
+        let arg_list: Vec<String> = (1..=expected).map(|i| format!("arg{}", i)).collect();
+        format!(
+            "\n  = hint: Did you mean ({} {})? A closing parenthesis is probably missing before the {} argument.",
+            name, arg_list.join(" "), ordinal(expected + 1)
+        )
+    } else {
+        format!(
+            "\n  = hint: A closing parenthesis may be too early, cutting off arguments.",
+        )
+    };
+    runtime_error(format!(
+        "{} requires {} argument{}, got {}{}",
+        name,
+        expected,
+        if expected == 1 { "" } else { "s" },
+        got,
+        hint,
+    ))
+}
+
+fn ordinal(n: usize) -> String {
+    match n {
+        1 => "1st".to_string(),
+        2 => "2nd".to_string(),
+        3 => "3rd".to_string(),
+        n => format!("{}th", n),
+    }
+}
+
 /// A recorded function call: argument values observed during tracing.
 #[derive(Clone, Debug)]
 pub struct CallRecord {

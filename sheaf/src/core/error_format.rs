@@ -314,8 +314,8 @@ fn get_runtime_hint(message: &str) -> Option<String> {
 fn get_parse_hint(message: &str, filename: &str) -> Option<String> {
     let msg = message.to_lowercase();
 
-    // Extra closing paren
-    if msg.contains("unexpected closing") || msg.contains("unmatched") {
+    // Extra closing paren (skip if parser already provided a hint)
+    if (msg.contains("unexpected closing") || msg.contains("unmatched")) && !msg.contains("hint:") {
         if let Some(source) = get_source(filename) {
             let info = find_unmatched_paren(&source);
             if let Some(line) = info.excess_line {
@@ -346,8 +346,8 @@ fn get_parse_hint(message: &str, filename: &str) -> Option<String> {
         return Some("Check for extra closing parentheses.".to_string());
     }
 
-    // Unclosed paren
-    if msg.contains("unclosed") || msg.contains("unexpected end") {
+    // Unclosed paren (skip if parser already provided a hint)
+    if (msg.contains("unclosed") || msg.contains("unexpected end")) && !msg.contains("hint:") {
         if let Some(source) = get_source(filename) {
             let info = find_unmatched_paren(&source);
             let mut hints = Vec::new();

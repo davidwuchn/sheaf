@@ -187,6 +187,28 @@ impl Value {
         Value::Tensor { data: Arc::new(data), dtype: Dtype::I32 }
     }
 
+    pub fn short_desc(&self) -> String {
+        match self {
+            Value::Int(n) => format!("{}", n),
+            Value::Float(f) => format!("{}", f),
+            Value::Bool(b) => format!("{}", b),
+            Value::Nil => "nil".to_string(),
+            Value::String(s) => format!("\"{}\"", s),
+            Value::Keyword(k) => format!(":{}", k),
+            Value::Tensor { data, .. } => {
+                let shape: Vec<String> = data.shape().iter().map(|d| d.to_string()).collect();
+                format!("f32[{}]", shape.join("x"))
+            }
+            Value::DeviceBuffer(db) => {
+                let shape: Vec<String> = db.shape.iter().map(|d| d.to_string()).collect();
+                format!("f32[{}]", shape.join("x"))
+            }
+            Value::List(items) => format!("list({})", items.len()),
+            Value::Dict(map) => format!("dict({})", map.len()),
+            _ => self.type_name().to_string(),
+        }
+    }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Int(_) => "int",

@@ -16,7 +16,7 @@ mod io;
 mod random;
 mod losses;
 
-use crate::interpreter::env::{runtime_error, Env};
+use crate::interpreter::env::{arity_error, arity_error_with_args, runtime_error, Env};
 use crate::interpreter::value::{Dtype, Value};
 use ndarray::{ArrayD, Dimension, IxDyn};
 use std::collections::BTreeMap;
