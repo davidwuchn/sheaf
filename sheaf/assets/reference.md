@@ -203,12 +203,14 @@ Performs matrix multiplication, dot product, or tensor contraction depending on 
 **Type:** function  
 **Signature:** `(= a b)`
 
-Performs structural equality comparison. Returns a single scalar boolean indicating whether the two inputs have the same shape and identical values across all elements.
+Performs structural equality comparison. Works on tensors, lists, strings, keywords, and booleans. Returns a single scalar boolean.
 
 ```sheaf
 (= 1 1)              ; => true
 (= [1 2] [1 2])      ; => true
 (= [1 2] [1 3])      ; => false
+(= '[1 2 3] '[1 2 3]) ; => true
+(= '[:a :b] '[:a :c]) ; => false
 ```
 
 ---

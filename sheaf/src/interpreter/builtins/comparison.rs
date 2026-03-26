@@ -17,6 +17,23 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("float", builtin_float);
 }
 
+fn values_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Int(a), Value::Int(b)) => a == b,
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Nil, Value::Nil) => true,
+        (Value::String(a), Value::String(b)) => a == b,
+        (Value::Keyword(a), Value::Keyword(b)) => a == b,
+        (Value::List(a), Value::List(b)) => lists_equal(a, b),
+        _ => false,
+    }
+}
+
+fn lists_equal(a: &[Value], b: &[Value]) -> bool {
+    a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
+}
+
 fn builtin_eq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 2 { return Err(runtime_error("= requires 2 arguments")); }
     fn str_val(v: &Value) -> Option<&str> {
@@ -33,6 +50,8 @@ fn builtin_eq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         (Value::Nil, _) | (_, Value::Nil) => return Ok(Value::Bool(false)),
         (a, _) if str_val(a).is_some() => return Ok(Value::Bool(false)),
         (_, b) if str_val(b).is_some() => return Ok(Value::Bool(false)),
+        (Value::List(a), Value::List(b)) => return Ok(Value::Bool(lists_equal(a, b))),
+        (Value::List(_), _) | (_, Value::List(_)) => return Ok(Value::Bool(false)),
         _ => {}
     }
     let (a, _) = to_array(&args[0])?;
