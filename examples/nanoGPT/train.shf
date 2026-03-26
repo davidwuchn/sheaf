@@ -8,9 +8,6 @@
 ;; Expects pre-trained weights in out-shakespeare-char/
 
 (use model)
-(use nn)
-(use optim)
-
 
 ;; --- Data loading ---
 
