@@ -757,7 +757,7 @@ mod tests {
         ]);
 
         let result = ctx.compile(&expr).unwrap();
-        assert!(matches!(result, CompiledExpr::Nil));
+        assert!(matches!(result, CompiledExpr::FunctionRef(_)));
 
         // Check function was registered
         assert!(ctx.registry.contains_key("add"));
