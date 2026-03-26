@@ -32,7 +32,7 @@ impl SpecialForm for DefnForm {
         if compiler.registry.contains_key(name) {
             return Err(SheafError::Compile {
                 message: format!(
-                    "Function '{}' is already defined. Redefinition is not allowed.",
+                    "Function '{}' is already defined. Redefinition is not allowed to prevent shadowing bugs.",
                     name
                 ),
                 location: loc.clone(),
