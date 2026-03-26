@@ -179,6 +179,48 @@ Computes the element-wise non-negative square root of the input. For real-valued
 
 ---
 
+### round
+
+**Type:** function
+**Signature:** `(round x)`
+
+Rounds each element to the nearest integer (half away from zero).
+
+```sheaf
+(round 3.7)           ; => 4.0
+(round [1.4 2.5 3.6]) ; => [1. 3. 4.]
+```
+
+---
+
+### ceil
+
+**Type:** function
+**Signature:** `(ceil x)`
+
+Rounds each element up to the nearest integer.
+
+```sheaf
+(ceil 3.2)            ; => 4.0
+(ceil [-1.7 2.3])     ; => [-1. 3.]
+```
+
+---
+
+### floor
+
+**Type:** function
+**Signature:** `(floor x)`
+
+Rounds each element down to the nearest integer.
+
+```sheaf
+(floor 3.9)           ; => 3.0
+(floor [-1.2 2.8])    ; => [-2. 2.]
+```
+
+---
+
 ### @
 
 **Type:** function  

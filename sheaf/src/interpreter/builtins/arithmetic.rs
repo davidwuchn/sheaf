@@ -15,6 +15,9 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("exp", builtin_exp);
     env.set_builtin("log", builtin_log);
     env.set_builtin("sqrt", builtin_sqrt);
+    env.set_builtin("round", builtin_round);
+    env.set_builtin("ceil", builtin_ceil);
+    env.set_builtin("floor", builtin_floor);
     env.set_builtin("@", builtin_matmul);
     env.set_builtin("@-grad-lhs", builtin_matmul_grad_lhs);
     env.set_builtin("@-grad-rhs", builtin_matmul_grad_rhs);
@@ -133,6 +136,18 @@ fn builtin_log(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_sqrt(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     unary_op(args, f32::sqrt)
+}
+
+fn builtin_round(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    unary_op(args, f32::round)
+}
+
+fn builtin_ceil(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    unary_op(args, f32::ceil)
+}
+
+fn builtin_floor(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    unary_op(args, f32::floor)
 }
 
 fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
