@@ -318,13 +318,16 @@ fn try_einsum_as_matmul(
         }
     }
 
-    let batch_dims: Vec<usize> = batch.iter().map(|c| sizes[c]).collect();
+    let resolve = |chars: &[char]| -> Option<Vec<usize>> {
+        chars.iter().map(|c| sizes.get(c).copied()).collect()
+    };
+    let batch_dims = resolve(&batch)?;
     let batch_size: usize = batch_dims.iter().product::<usize>().max(1);
-    let free_a_dims: Vec<usize> = free_a.iter().map(|c| sizes[c]).collect();
+    let free_a_dims = resolve(&free_a)?;
     let free_a_size: usize = free_a_dims.iter().product::<usize>().max(1);
-    let free_b_dims: Vec<usize> = free_b.iter().map(|c| sizes[c]).collect();
+    let free_b_dims = resolve(&free_b)?;
     let free_b_size: usize = free_b_dims.iter().product::<usize>().max(1);
-    let contract_size: usize = contract.iter().map(|c| sizes[c]).product::<usize>().max(1);
+    let contract_size: usize = resolve(&contract)?.iter().product::<usize>().max(1);
 
     // Permute A to [batch..., free_a..., contract...]
     let a_order: Vec<char> = batch.iter().chain(free_a.iter()).chain(contract.iter()).copied().collect();
@@ -527,8 +530,8 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::String(s) => s.as_str(),
         _ => return Err(runtime_error("einsum: first argument must be a subscript string")),
     };
-    let (a, _) = to_array(&args[1])?;
-    let (b, _) = to_array(&args[2])?;
+    let (mut a, _) = to_array(&args[1])?;
+    let (mut b, _) = to_array(&args[2])?;
     let subscript = subscript.replace(' ', "");
     let subscript = expand_einsum_ellipsis(&subscript, a.shape(), b.shape());
 
@@ -544,12 +547,25 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let idx_b: Vec<char> = parts[1].chars().collect();
     let idx_out: Vec<char> = rhs.chars().collect();
 
+    // Build sizes from non-scalar operand first, then broadcast scalar operands
     let mut sizes: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
+    for (&label, &dim) in idx_b.iter().zip(b.shape().iter()) {
+        sizes.insert(label, dim);
+    }
     for (&label, &dim) in idx_a.iter().zip(a.shape().iter()) {
         sizes.insert(label, dim);
     }
-    for (&label, &dim) in idx_b.iter().zip(b.shape().iter()) {
-        sizes.insert(label, dim);
+
+    // Broadcast scalar operands to expected shape from subscript
+    if a.ndim() == 0 && !idx_a.is_empty() {
+        let scalar = *a.first().unwrap();
+        let shape: Vec<usize> = idx_a.iter().map(|c| sizes.get(c).copied().unwrap_or(1)).collect();
+        a = ArrayD::from_elem(IxDyn(&shape), scalar);
+    }
+    if b.ndim() == 0 && !idx_b.is_empty() {
+        let scalar = *b.first().unwrap();
+        let shape: Vec<usize> = idx_b.iter().map(|c| sizes.get(c).copied().unwrap_or(1)).collect();
+        b = ArrayD::from_elem(IxDyn(&shape), scalar);
     }
 
     // Try BLAS-accelerated path, fall back to naive loops

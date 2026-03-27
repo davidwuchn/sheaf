@@ -444,6 +444,9 @@ fn grad_function_call(
             // einsum("lhs_sub,rhs_sub->out_sub", A, B)
             // dL/dA = einsum("out_sub,rhs_sub->lhs_sub", grad, B)
             // dL/dB = einsum("lhs_sub,out_sub->rhs_sub", A, grad)
+            //
+            // When grad is scalar (e.g. from sum), we multiply after einsum
+            // with identity subscripts to avoid shape mismatch.
             if args.len() == 3 {
                 if let CompiledExpr::String(ref sub) = args[0] {
                     if let Some((inputs, output)) = sub.split_once("->") {
@@ -452,17 +455,24 @@ fn grad_function_call(
                             let lhs_sub = parts[0].trim();
                             let rhs_sub = parts[1].trim();
                             let out_sub = output.trim();
+
+                            // For dA: use identity einsum on B to get lhs shape, then multiply by grad
                             let grad_lhs_sub = format!("{},{}->{}", out_sub, rhs_sub, lhs_sub);
                             let grad_rhs_sub = format!("{},{}->{}", lhs_sub, out_sub, rhs_sub);
+
+                            // Broadcast grad to output shape: g * ones(einsum_output)
+                            let fwd = call("einsum", vec![args[0].clone(), args[1].clone(), args[2].clone()]);
+                            let g_broadcast = add(mul(fwd.clone(), CompiledExpr::Float(0.0)), g.clone());
+
                             let g_a = call("einsum", vec![
                                 CompiledExpr::String(grad_lhs_sub),
-                                g.clone(),
+                                g_broadcast.clone(),
                                 args[2].clone(),
                             ]);
                             let g_b = call("einsum", vec![
                                 CompiledExpr::String(grad_rhs_sub),
                                 args[1].clone(),
-                                g.clone(),
+                                g_broadcast,
                             ]);
                             return add(grad_with(&args[1], wrt, g_a), grad_with(&args[2], wrt, g_b));
                         }
@@ -557,8 +567,7 @@ fn grad_function_call(
 
         "gelu" => {
             // GELU approximation gradient (pass-through for now, same as relu)
-            // Full: gelu'(x) = 0.5*(1+tanh(...))*...: complex, we'll treat as pass-through
-            // This is a simplification that works for training
+            // Full: gelu'(x) = 0.5*(1+tanh(...))*...
             grad_with(&args[0], wrt, g)
         }
 
@@ -567,9 +576,13 @@ fn grad_function_call(
             grad_with(&args[0], wrt, g)
         }
 
-        "reshape" | "swapaxes" => {
+        "reshape" => {
+            // Flatten the gradient and let downstream ops handle shape alignment.
+            grad_with(&args[0], wrt, g)
+        }
+
+        "swapaxes" => {
             // Shape-manipulation ops: gradient passes through.
-            // The codegen's reduce_broadcast_grad handles shape alignment.
             grad_with(&args[0], wrt, g)
         }
 

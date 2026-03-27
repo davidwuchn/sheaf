@@ -582,6 +582,25 @@ impl CodeGenerator {
                 Ok((reg, StableHLOType::Tuple(tys, Some(keys))))
             }
 
+            CompiledExpr::Quoted(val) => {
+                // Quoted values: convert to vector of constants
+                use crate::core::ast::SheafValue;
+                match val.as_ref() {
+                    SheafValue::Vector(elems, _) => {
+                        let converted: Vec<CompiledExpr> = elems.iter().map(|e| match e {
+                            SheafValue::Integer(n, _) => CompiledExpr::Integer(*n),
+                            SheafValue::Float(f, _) => CompiledExpr::Float(*f),
+                            _ => CompiledExpr::Integer(0),
+                        }).collect();
+                        self.generate(&CompiledExpr::Vector(converted))
+                    }
+                    _ => Err(SheafError::Compile {
+                        message: format!("Code generation not yet implemented for: {:?}", expr),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    }),
+                }
+            }
+
             _ => Err(SheafError::Compile {
                 message: format!("Code generation not yet implemented for: {:?}", expr),
                 location: crate::core::error::SourceLocation::unknown(),

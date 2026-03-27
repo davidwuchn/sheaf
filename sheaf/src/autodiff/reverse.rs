@@ -34,6 +34,7 @@ fn is_trivial(expr: &CompiledExpr) -> bool {
             | CompiledExpr::Nil
             | CompiledExpr::String(_)
             | CompiledExpr::Keyword(_)
+            | CompiledExpr::Quoted(_)
             | CompiledExpr::GetTupleElement { .. }
     )
 }
