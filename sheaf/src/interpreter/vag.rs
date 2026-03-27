@@ -46,9 +46,9 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
         match super::iree_dispatch::try_jit_vag(func, params, env) {
             Some(result) => return result,
             None => {
-                if crate::core::config::verbosity() >= 1 {
-                    sheaf_msg!("jit: value-and-grad JIT unavailable, using symbolic autodiff");
-                }
+                // JIT failed: fall through to symbolic autodiff.
+                // This path has incomplete backward rules (softmax, gelu, etc.)
+                // and should only be reached for simple expressions.
             }
         }
     }

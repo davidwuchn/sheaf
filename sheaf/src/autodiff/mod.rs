@@ -489,8 +489,13 @@ fn grad_function_call(
 
         // Activations
         "relu" => {
-            // d/dx relu(f) = df/dx  (simplified; full version multiplies by (f > 0))
-            grad_with(&args[0], wrt, g)
+            // d/dx relu(f) = (f > 0) * df/dx
+            let mask = call("where", vec![
+                call(">", vec![args[0].clone(), float(0.0)]),
+                float(1.0),
+                float(0.0),
+            ]);
+            grad_with(&args[0], wrt, mul(g, mask))
         }
 
         "maximum" => {
@@ -566,14 +571,30 @@ fn grad_function_call(
         }
 
         "gelu" => {
-            // GELU approximation gradient (pass-through for now, same as relu)
-            // Full: gelu'(x) = 0.5*(1+tanh(...))*...
-            grad_with(&args[0], wrt, g)
+            // GELU tanh approximation: gelu(x) = 0.5 * x * (1 + tanh(k))
+            // where k = sqrt(2/pi) * (x + 0.044715 * x^3)
+            // gelu'(x) = 0.5*(1+tanh(k)) + 0.5*x*sech^2(k)*k'
+            // k' = sqrt(2/pi) * (1 + 3*0.044715*x^2)
+            let x = args[0].clone();
+            let x2 = mul(x.clone(), x.clone());
+            let x3 = mul(x2.clone(), x.clone());
+            let k = mul(float(0.7978845608), add(x.clone(), mul(float(0.044715), x3)));
+            let tanh_k = call("tanh", vec![k.clone()]);
+            let sech2_k = sub(float(1.0), mul(tanh_k.clone(), tanh_k.clone()));
+            let dk = mul(float(0.7978845608), add(float(1.0), mul(float(0.134145), x2)));
+            let local_g = add(
+                mul(float(0.5), add(float(1.0), tanh_k)),
+                mul(mul(float(0.5), x), mul(sech2_k, dk)),
+            );
+            grad_with(&args[0], wrt, mul(g, local_g))
         }
 
         "log-softmax" => {
-            // d/dx log_softmax(f): pass through for now (same simplification as softmax)
-            grad_with(&args[0], wrt, g)
+            // d/dx log_softmax(f) = g - softmax(f) * sum(g)
+            let sm = call("softmax", vec![args[0].clone(), CompiledExpr::Keyword("axis".to_string()), CompiledExpr::Integer(-1)]);
+            let sum_g = call("sum", vec![g.clone(), CompiledExpr::Keyword("axis".to_string()), CompiledExpr::Integer(-1), CompiledExpr::Keyword("keepdims".to_string())]);
+            let local_g = sub(g.clone(), mul(sm, sum_g));
+            grad_with(&args[0], wrt, local_g)
         }
 
         "reshape" => {
@@ -617,21 +638,27 @@ fn grad_function_call(
 
         // Reductions
         "mean" => {
-            // d/dx mean(f) = (1/N) * df/dx (broadcast back)
-            // Simplified: pass gradient through (codegen handles broadcast)
-            grad_with(&args[0], wrt, g)
+            // d/dx mean(f) = (1/N) * df/dx
+            // N = total elements in the reduced dimensions
+            // For full mean: N = product of all dims
+            // Approximation: use (/ g (len f)) for 1D, pass through otherwise
+            let scaled_g = call("/", vec![g, call("len", vec![args[0].clone()])]);
+            grad_with(&args[0], wrt, scaled_g)
         }
 
         "sum" => {
-            // d/dx sum(f) = df/dx * ones (broadcast back)
-            // Simplified: pass gradient through
+            // d/dx sum(f) = df/dx (gradient broadcasts back automatically)
             grad_with(&args[0], wrt, g)
         }
 
         "softmax" => {
-            // d/dx softmax(f): complex, approximated as pass-through for now
-            // Full Jacobian: diag(s) - s*s^T where s = softmax(f)
-            grad_with(&args[0], wrt, g)
+            // d/dx softmax(f): g * s - s * sum(g * s)
+            // where s = softmax(f)
+            let sm = call("softmax", vec![args[0].clone(), CompiledExpr::Keyword("axis".to_string()), CompiledExpr::Integer(-1)]);
+            let gs = mul(g, sm.clone());
+            let sum_gs = call("sum", vec![gs.clone(), CompiledExpr::Keyword("axis".to_string()), CompiledExpr::Integer(-1), CompiledExpr::Keyword("keepdims".to_string())]);
+            let local_g = sub(gs, mul(sm, sum_gs));
+            grad_with(&args[0], wrt, local_g)
         }
 
         // Power
