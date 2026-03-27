@@ -386,8 +386,11 @@ impl JitCompiler {
 
         // Register layout for return type (may differ from param type due to
         // scalar promotion, e.g. ScalarI64->scalar_f32 after adam-step)
-        if let StableHLOType::Tuple(ret_elems, _) = &sig.return_type {
-            if !sig.arg_type_layouts.iter().any(|(t, _)| t == &sig.return_type) {
+        if let StableHLOType::Tuple(ret_elems, ret_keys) = &sig.return_type {
+            // Only match return layout to a param layout if the return type already
+            // has dict keys. A plain tuple (ret_keys == None) must NOT inherit
+            // dict keys from a param that happens to have the same element count.
+            if ret_keys.is_some() && !sig.arg_type_layouts.iter().any(|(t, _)| t == &sig.return_type) {
                 for (t, layout) in sig.arg_type_layouts.clone() {
                     if let StableHLOType::Tuple(param_elems, _) = &t {
                         if param_elems.len() == ret_elems.len() {
