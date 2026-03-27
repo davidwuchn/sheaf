@@ -37,7 +37,6 @@ fn builtin_reshape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         raw_shape.iter().map(|&x| x as usize).collect()
     };
     let arr = arr.as_standard_layout().into_owned();
-    let from_shape: Vec<usize> = arr.shape().to_vec();
     let result = arr.into_shape_with_order(IxDyn(&new_shape)).map_err(|_| runtime_error(format!(
         "Cannot reshape: input has {} elements, but target shape {:?} expects {}.",
         total, new_shape, new_shape.iter().product::<usize>()
@@ -234,7 +233,7 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             host_args[0] = args[0].ensure_host()?;
             builtin_get(&host_args, kw)
         }
-        _ => Err(runtime_error(format!("get: expected dict/tensor/list, got {} (key: {})", args[0].type_name(), args.get(1).map(|v| format!("{}", v)).unwrap_or_default()))),
+        _ => Err(runtime_error(format!("get: expected a dict, a tensor, or a list, got {} (key: {})", args[0].type_name(), args.get(1).map(|v| format!("{}", v)).unwrap_or_default()))),
     }
 }
 

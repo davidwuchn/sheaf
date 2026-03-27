@@ -83,7 +83,7 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
                     let call_loc = loc.as_ref().unwrap();
                     SheafError::Runtime {
                         message: format!(
-                            "{}: {}\n  = called from {}:{}",
+                            "{} -> {}\n  = called from {}:{}",
                             name, message, call_loc.filename, call_loc.line
                         ),
                         location: Some(err_loc.clone()),
