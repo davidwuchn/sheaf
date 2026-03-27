@@ -149,10 +149,10 @@ fn parse_shape(val: &Value) -> Result<Vec<usize>, crate::core::error::SheafError
         Value::List(items) => items.iter().map(|v| match v {
             Value::Int(n) => Ok(*n as usize),
             Value::Float(f) => Ok(*f as usize),
-            _ => Err(runtime_error("shape element must be integer")),
+            _ => Err(runtime_error("Invalid shape: expected a list of integers")),
         }).collect(),
         Value::Tensor { data, .. } => data.iter().map(|&x| Ok(x as usize)).collect(),
-        _ => Err(runtime_error("shape must be a list or quoted vector")),
+        _ => Err(runtime_error("Invalid shape: expected a list of integers")),
     }
 }
 

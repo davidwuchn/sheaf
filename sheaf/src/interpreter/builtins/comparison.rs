@@ -35,7 +35,7 @@ fn lists_equal(a: &[Value], b: &[Value]) -> bool {
 }
 
 fn builtin_eq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    if args.len() != 2 { return Err(runtime_error("= requires 2 arguments")); }
+    if args.len() != 2 { return Err(runtime_error(format!("=: expected 2 arguments, got {}", args.len()))); }
     fn str_val(v: &Value) -> Option<&str> {
         match v {
             Value::String(s) | Value::Keyword(s) => Some(s.as_str()),
@@ -79,7 +79,7 @@ fn builtin_elem_eq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_neq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    if args.len() != 2 { return Err(runtime_error("!= requires 2 arguments")); }
+    if args.len() != 2 { return Err(runtime_error(format!("!=: expected 2 arguments, got {}", args.len()))); }
     match (&args[0], &args[1]) {
         (Value::String(a), Value::String(b)) => return Ok(Value::Bool(a != b)),
         (Value::Keyword(a), Value::Keyword(b)) => return Ok(Value::Bool(a != b)),
@@ -120,7 +120,7 @@ fn builtin_ge(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_not(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    if args.len() != 1 { return Err(runtime_error("not requires 1 argument")); }
+    if args.len() != 1 { return Err(runtime_error(format!("not: expected 1 argument, got {}", args.len()))); }
     Ok(Value::Bool(!args[0].is_truthy()))
 }
 
@@ -151,7 +151,7 @@ fn builtin_shape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_ndim(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    if args.len() != 1 { return Err(runtime_error("ndim requires 1 argument")); }
+    if args.len() != 1 { return Err(runtime_error(format!("ndim: expected 1 argument, got {}", args.len()))); }
     match &args[0] {
         Value::Tensor { data, .. } => Ok(Value::Int(data.ndim() as i64)),
         Value::DeviceBuffer(db) => Ok(Value::Int(db.shape.len() as i64)),
@@ -160,7 +160,7 @@ fn builtin_ndim(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_len(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    if args.len() != 1 { return Err(runtime_error("len requires 1 argument")); }
+    if args.len() != 1 { return Err(runtime_error(format!("len: expected 1 argument, got {}", args.len()))); }
     match &args[0] {
         Value::Tensor { data, .. } => Ok(Value::Int(data.shape()[0] as i64)),
         Value::DeviceBuffer(db) => Ok(Value::Int(db.shape.first().copied().unwrap_or(1) as i64)),

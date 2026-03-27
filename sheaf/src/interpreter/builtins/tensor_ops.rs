@@ -25,7 +25,7 @@ fn builtin_reshape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             _ => -999,
         }).collect(),
         Value::Tensor { data, .. } => data.iter().map(|&x| x as i64).collect(),
-        _ => return Err(runtime_error("reshape: shape must be a list, e.g. (reshape x [2 3]) not (reshape x 2 3)")),
+        _ => return Err(runtime_error("reshape: expected a shape list. Usage: (reshape x '[2 3])")),
     };
     let total = arr.len() as i64;
     let neg_idx = raw_shape.iter().position(|&x| x < 0);
@@ -37,7 +37,11 @@ fn builtin_reshape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         raw_shape.iter().map(|&x| x as usize).collect()
     };
     let arr = arr.as_standard_layout().into_owned();
-    let result = arr.into_shape_with_order(IxDyn(&new_shape)).map_err(|e| runtime_error(e.to_string()))?;
+    let from_shape: Vec<usize> = arr.shape().to_vec();
+    let result = arr.into_shape_with_order(IxDyn(&new_shape)).map_err(|_| runtime_error(format!(
+        "Cannot reshape: input has {} elements, but target shape {:?} expects {}.",
+        total, new_shape, new_shape.iter().product::<usize>()
+    )))?;
     Ok(Value::Tensor { data: Arc::new(result), dtype: dt })
 }
 

@@ -63,13 +63,13 @@ fn builtin_one_hot(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             }
             Ok(Value::tensor_f32(ArrayD::from_shape_vec(IxDyn(&[n, num_classes]), result).unwrap()))
         }
-        _ => Err(runtime_error("one-hot: expected int or tensor")),
+        other => Err(runtime_error(format!("one-hot: expected an integer or a tensor, got {}", other.type_name()))),
     }
 }
 
 fn builtin_tril(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (arr, _dt) = to_array(&args[0])?;
-    if arr.ndim() != 2 { return Err(runtime_error("tril: expected 2D tensor")); }
+    if arr.ndim() != 2 { return Err(runtime_error(format!("tril: input must be 2D (matrix), got {}D", arr.ndim()))); }
     let shape = arr.shape();
     let (n, m) = (shape[0], shape[1]);
     let mut result = arr.clone();
@@ -90,11 +90,11 @@ fn builtin_tensor(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 let arr = ArrayD::from_shape_vec(IxDyn(&[data.len()]), data).unwrap();
                 Ok(Value::tensor_f32(arr))
             } else {
-                Err(runtime_error("tensor: expected list of numbers"))
+                Err(runtime_error("tensor: expected a list of numbers, got a list with non-numeric elements"))
             }
         }
         Value::Tensor { .. } => Ok(args[0].clone()),
-        _ => Err(runtime_error("tensor: expected list or tensor")),
+        other => Err(runtime_error(format!("tensor: expected a list or a tensor, got {}", other.type_name()))),
     }
 }
 

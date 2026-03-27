@@ -251,7 +251,7 @@ fn get_runtime_hint(message: &str) -> Option<String> {
     // Broadcasting
     if message.contains("broadcast") || message.contains("Broadcasting") {
         return Some(
-            "Arrays have incompatible shapes. Use (shape x) to inspect dimensions.".to_string(),
+            "Use (shape x) to inspect dimensions. Did you forget to transpose?".to_string(),
         );
     }
 
@@ -285,7 +285,7 @@ fn get_runtime_hint(message: &str) -> Option<String> {
     }
 
     // Not a function
-    if message.contains("Not a function") || message.contains("not callable") {
+    if message.contains("Expected a function, got") || message.contains("not callable") {
         return Some("Check that you're calling a function, not a value.".to_string());
     }
 

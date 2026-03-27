@@ -44,7 +44,7 @@ pub(super) fn eval_map(args: &[Value], env: &mut Env) -> Result<Value, SheafErro
                 Ok(Value::List(results))
             }
         }
-        _ => Err(runtime_error("map: expected list or tensor")),
+        other => Err(runtime_error(format!("map: expected a list or a tensor, got {}", other.type_name()))),
     }
 }
 
@@ -64,7 +64,7 @@ pub(super) fn eval_filter(args: &[Value], env: &mut Env) -> Result<Value, SheafE
             }
             Ok(Value::List(results))
         }
-        _ => Err(runtime_error("filter: expected list")),
+        other => Err(runtime_error(format!("filter: expected a list, got {}", other.type_name()))),
     }
 }
 
@@ -102,7 +102,7 @@ pub(super) fn eval_reduce(args: &[Value], env: &mut Env) -> Result<Value, SheafE
             }
             Ok(acc)
         }
-        _ => Err(runtime_error("reduce: expected list, tensor, or dict of tensors")),
+        other => Err(runtime_error(format!("reduce: expected a list, a tensor, or a dict, got {}", other.type_name()))),
     }
 }
 
@@ -171,7 +171,7 @@ pub(super) fn eval_scan(args: &[Value], env: &mut Env) -> Result<Value, SheafErr
             }
             Ok(Value::Tuple(vec![carry, Value::List(outputs)]))
         }
-        _ => Err(runtime_error("scan: expected list, tensor, or dict of tensors")),
+        other => Err(runtime_error(format!("scan: expected a list, a tensor, or a dict, got {}", other.type_name()))),
     }
 }
 
@@ -222,7 +222,7 @@ pub(super) fn eval_apply(args: &[Value], env: &mut Env) -> Result<Value, SheafEr
             let call_args: Vec<Value> = data.iter().map(|&x| Value::Float(x)).collect();
             call_function(func, &call_args, env)
         }
-        _ => Err(runtime_error("apply: expected list or tensor")),
+        other => Err(runtime_error(format!("apply: expected a list or a tensor, got {}", other.type_name()))),
     }
 }
 
@@ -241,7 +241,7 @@ pub(super) fn eval_find(args: &[Value], env: &mut Env) -> Result<Value, SheafErr
             }
             Ok(Value::Nil)
         }
-        _ => Err(runtime_error("find: expected list")),
+        other => Err(runtime_error(format!("find: expected a list, got {}", other.type_name()))),
     }
 }
 
@@ -403,7 +403,7 @@ pub(super) fn eval_vmap_call(
                 _ => None,
             })
         })
-        .ok_or_else(|| runtime_error("vmap: no mapped tensor argument found"))?;
+        .ok_or_else(|| runtime_error("vmap: at least one argument must be a mapped tensor"))?;
 
     // Slice, apply, collect
     let mut results = Vec::with_capacity(batch_size);

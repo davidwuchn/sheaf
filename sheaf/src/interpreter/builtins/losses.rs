@@ -21,6 +21,6 @@ pub fn tree_zeros(val: &Value) -> Value {
 }
 
 fn builtin_tree_map_zeros(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    if args.is_empty() { return Err(runtime_error("tree-map-zeros requires 1 argument")); }
+    if args.is_empty() { return Err(runtime_error(format!("tree-map-zeros: expected 1 argument, got {}", args.len()))); }
     Ok(tree_zeros(&args[0]))
 }

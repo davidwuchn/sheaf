@@ -59,7 +59,7 @@ pub(self) fn to_array(val: &Value) -> Result<(ArrayD<f32>, Dtype), crate::core::
             let data = db.to_host().map_err(|e| runtime_error(format!("materialize: {}", e)))?;
             Ok((data, db.dtype))
         }
-        _ => Err(runtime_error(format!("Expected numeric value, got {} ({})", val.type_name(), val))),
+        _ => Err(runtime_error(format!("Expected a number, got {}", val.short_desc()))),
     }
 }
 
@@ -92,7 +92,7 @@ pub(self) fn result_dtype(a: Dtype, b: Dtype) -> Dtype {
 
 pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
     if args.len() < 2 {
-        return Err(runtime_error("Binary operation requires at least 2 arguments"));
+        return Err(runtime_error(format!("+: expected at least 2 arguments, got {}", args.len())));
     }
     // Fast path for the common 2-arg case: borrow both operands from Arc, zero clones
     if args.len() == 2 {
@@ -148,7 +148,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
                     acc = ndarray::Zip::from(&a_bc).and(&b_bc).map_collect(|&a, &b| op(a, b));
                 }
             }
-            _ => return Err(runtime_error(format!("Expected numeric value, got {}", arg.type_name()))),
+            _ => return Err(runtime_error(format!("Expected a number, got {}", arg.short_desc()))),
         }
     }
     if acc.ndim() == 0 {
@@ -234,7 +234,7 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
         return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
     }
 
-    Err(runtime_error(format!("Expected numeric values, got {} and {}", a.type_name(), b.type_name())))
+    Err(runtime_error(format!("Expected numbers, got {} and {}", a.short_desc(), b.short_desc())))
 }
 
 fn scalar_of(v: &Value) -> Option<f32> {
@@ -256,7 +256,7 @@ fn dtype_of(v: &Value) -> Dtype {
 
 pub(self) fn unary_op(args: &[Value], op: fn(f32) -> f32) -> R {
     if args.is_empty() {
-        return Err(runtime_error("Unary operation requires at least 1 argument"));
+        return Err(runtime_error("Expected at least 1 argument, got 0"));
     }
     let (arr, _dt) = to_array(&args[0])?;
     let result = arr.mapv(op);
@@ -269,7 +269,7 @@ pub(self) fn unary_op(args: &[Value], op: fn(f32) -> f32) -> R {
 
 pub(self) fn unary_op_f32(args: &[Value], op: fn(f32) -> f32) -> R {
     if args.is_empty() {
-        return Err(runtime_error("Unary operation requires at least 1 argument"));
+        return Err(runtime_error("Expected at least 1 argument, got 0"));
     }
     let (arr, _dt) = to_array(&args[0])?;
     let result = arr.mapv(op);
@@ -412,7 +412,7 @@ pub(self) fn list_to_tensor(v: &Value) -> Option<(ArrayD<f32>, Dtype)> {
 }
 
 pub(self) fn cmp_op(args: &[Value], op: fn(f32, f32) -> f32, _dt: Dtype) -> R {
-    if args.len() != 2 { return Err(runtime_error("Comparison requires 2 arguments")); }
+    if args.len() != 2 { return Err(runtime_error(format!("Comparison: expected 2 arguments, got {}", args.len()))); }
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
     if a.ndim() == 0 && b.ndim() != 0 {

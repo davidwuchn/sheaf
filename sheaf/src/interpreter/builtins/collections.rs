@@ -33,7 +33,7 @@ fn builtin_first(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             let host = args[0].ensure_host()?;
             builtin_first(std::slice::from_ref(&host), kw)
         }
-        _ => Err(runtime_error("first: expected list or tensor")),
+        other => Err(runtime_error(format!("first: expected a list or a tensor, got {}", other.type_name()))),
     }
 }
 
@@ -49,7 +49,7 @@ fn builtin_second(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             let host = args[0].ensure_host()?;
             builtin_second(std::slice::from_ref(&host), kw)
         }
-        _ => Err(runtime_error("second: expected list or tensor")),
+        other => Err(runtime_error(format!("second: expected a list or a tensor, got {}", other.type_name()))),
     }
 }
 
@@ -66,7 +66,7 @@ fn builtin_last(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             let host = args[0].ensure_host()?;
             builtin_last(std::slice::from_ref(&host), kw)
         }
-        _ => Err(runtime_error("last: expected list or tensor")),
+        other => Err(runtime_error(format!("last: expected a list or a tensor, got {}", other.type_name()))),
     }
 }
 
@@ -76,7 +76,7 @@ fn builtin_rest(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             if items.is_empty() { Ok(Value::List(vec![])) }
             else { Ok(Value::List(items[1..].to_vec())) }
         }
-        _ => Err(runtime_error("rest: expected list")),
+        other => Err(runtime_error(format!("rest: expected a list, got {}", other.type_name()))),
     }
 }
 
@@ -97,7 +97,7 @@ fn builtin_nth(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             let host = args[0].ensure_host()?;
             builtin_nth(&[host, args[1].clone()], kw)
         }
-        _ => Err(runtime_error("nth: expected list or tensor")),
+        other => Err(runtime_error(format!("nth: expected a list or a tensor, got {}", other.type_name()))),
     }
 }
 
@@ -109,7 +109,7 @@ fn builtin_cons(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             new.extend_from_slice(items);
             Ok(Value::List(new))
         }
-        _ => Err(runtime_error("cons: second arg must be list")),
+        _ => Err(runtime_error("cons: second argument must be a list")),
     }
 }
 
@@ -120,7 +120,7 @@ fn builtin_append(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             new.push(args[1].clone());
             Ok(Value::List(new))
         }
-        _ => Err(runtime_error("append: first arg must be list")),
+        _ => Err(runtime_error("append: first argument must be a list")),
     }
 }
 
@@ -181,13 +181,13 @@ fn builtin_assoc(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 let key = match &pair[0] {
                     Value::Keyword(k) => k.clone(),
                     Value::String(s) => s.clone(),
-                    _ => return Err(runtime_error("assoc: key must be keyword or string")),
+                    _ => return Err(runtime_error("assoc: expected key to be a keyword or a string")),
                 };
                 new.insert(key, pair[1].clone());
             }
             Ok(Value::Dict(new))
         }
-        _ => Err(runtime_error("assoc: expected dict")),
+        _ => Err(runtime_error("assoc: first argument must be a dict")),
     }
 }
 
@@ -207,7 +207,7 @@ fn builtin_dissoc(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 .collect();
             Ok(Value::Dict(new))
         }
-        _ => Err(runtime_error("dissoc: expected dict")),
+        _ => Err(runtime_error("dissoc: first argument must be a dict")),
     }
 }
 
@@ -219,7 +219,7 @@ fn builtin_merge(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 result.insert(k.clone(), v.clone());
             }
         } else {
-            return Err(runtime_error("merge: expected dicts"));
+            return Err(runtime_error(format!("merge: expected dicts, got {}", arg.type_name())));
         }
     }
     Ok(Value::Dict(result))
@@ -230,7 +230,7 @@ fn builtin_keys(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::Dict(map) => {
             Ok(Value::List(map.keys().map(|k| Value::String(k.clone())).collect()))
         }
-        _ => Err(runtime_error("keys: expected dict")),
+        other => Err(runtime_error(format!("keys: expected a dict, got {}", other.type_name()))),
     }
 }
 
@@ -239,7 +239,7 @@ fn builtin_vals(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::Dict(map) => {
             Ok(Value::List(map.values().cloned().collect()))
         }
-        _ => Err(runtime_error("vals: expected dict")),
+        other => Err(runtime_error(format!("vals: expected a dict, got {}", other.type_name()))),
     }
 }
 
@@ -250,7 +250,7 @@ fn builtin_dict(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         let key = match &args[i] {
             Value::Keyword(k) => k.clone(),
             Value::String(s) => s.clone(),
-            _ => return Err(runtime_error("dict: key must be keyword or string")),
+            _ => return Err(runtime_error("dict: expected key to be a keyword or a string")),
         };
         map.insert(key, args[i + 1].clone());
         i += 2;
@@ -269,7 +269,7 @@ fn builtin_sort(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             });
             Ok(Value::List(sorted))
         }
-        _ => Err(runtime_error("sort: expected a list")),
+        other => Err(runtime_error(format!("sort: expected a list, got {}", other.map(|v| v.type_name()).unwrap_or("nothing")))),
     }
 }
 
@@ -311,6 +311,6 @@ fn builtin_index_of(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             }
             Ok(Value::Int(-1))
         }
-        _ => Err(runtime_error("index-of: expected list")),
+        other => Err(runtime_error(format!("index-of: expected a list, got {}", other.type_name()))),
     }
 }

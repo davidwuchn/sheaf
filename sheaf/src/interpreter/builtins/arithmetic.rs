@@ -98,7 +98,7 @@ fn builtin_abs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_ash(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 2 {
-        return Err(runtime_error("ash requires exactly 2 arguments: (ash value shift)"));
+        return Err(runtime_error(format!("ash: expected 2 arguments, got {}", args.len())));
     }
     let shift = match &args[1] {
         Value::Int(n) => *n,
@@ -150,13 +150,13 @@ fn builtin_floor(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     unary_op(args, f32::floor)
 }
 
-fn check_matmul_shapes(a: &ArrayD<f32>, b: &ArrayD<f32>) -> Result<(), SheafError> {
+fn check_matmul_shapes(a: &ArrayD<f32>, b: &ArrayD<f32>) -> Result<(), crate::core::error::SheafError> {
     let contract_a = a.shape().last().copied().unwrap_or(0);
     let contract_b = if b.ndim() >= 2 { b.shape()[b.ndim() - 2] } else { b.shape().first().copied().unwrap_or(0) };
     if contract_a != contract_b {
         Err(runtime_error(format!(
-            "@ shape mismatch: {:?} and {:?} are not compatible (contracting dims {} vs {})",
-            a.shape(), b.shape(), contract_a, contract_b
+            "shape mismatch: expected shape {:?}, but input has shape {:?}",
+            a.shape(), b.shape()
         )))
     } else {
         Ok(())
@@ -521,7 +521,7 @@ fn builtin_matmul_grad_rhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 3 {
-        return Err(runtime_error("einsum requires exactly 3 arguments: subscript, a, b"));
+        return Err(runtime_error(format!("einsum: expected 3 arguments (subscript, a, b), got {}", args.len())));
     }
     let subscript = match &args[0] {
         Value::String(s) => s.as_str(),
@@ -565,7 +565,7 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_append_and_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 2 {
-        return Err(runtime_error("append-and-roll requires 2 arguments: tensor, new-element"));
+        return Err(runtime_error(format!("append-and-roll: expected 2 arguments, got {}", args.len())));
     }
     let (arr, _) = to_array(&args[0])?;
     if arr.ndim() != 1 {

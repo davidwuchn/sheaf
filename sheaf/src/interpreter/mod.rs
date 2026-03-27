@@ -281,12 +281,12 @@ fn bind_pattern(name: &str, val: Value, env: &mut Env) -> Result<(), SheafError>
                     data.iter().map(|&x| Value::Float(x)).collect()
                 } else {
                     return Err(runtime_error(format!(
-                        "let destructuring: expected list/tuple, got tensor with shape {:?}", data.shape()
+                        "let destructuring: expected a list or tuple, got tensor with shape {:?}", data.shape()
                     )));
                 }
             }
             other => return Err(runtime_error(format!(
-                "let destructuring: expected list or tuple, got {}", other.type_name()
+                "let destructuring: expected a list or tuple, got {}", other.type_name()
             ))),
         };
         let mut items_iter = items.into_iter();
@@ -350,7 +350,7 @@ fn eval_dict(pairs: &[(CompiledExpr, CompiledExpr)], env: &mut Env) -> Result<Va
         let key = match eval(k, env)? {
             Value::Keyword(s) => s,
             Value::String(s) => s,
-            other => return Err(runtime_error(format!("Dict key must be keyword or string, got {}", other.type_name()))),
+            other => return Err(runtime_error(format!("Dict key must be a keyword or a string, got {}", other.type_name()))),
         };
         let val = eval(v, env)?;
         map.insert(key, val);
@@ -377,7 +377,7 @@ fn sheaf_value_to_value(sv: &SheafValue) -> Result<Value, SheafError> {
                 let key = match sheaf_value_to_value(k)? {
                     Value::Keyword(s) => s,
                     Value::String(s) => s,
-                    other => return Err(runtime_error(format!("Dict key must be keyword or string, got {:?}", other))),
+                    other => return Err(runtime_error(format!("Dict key must be a keyword or a string, got {:?}", other))),
                 };
                 map.insert(key, sheaf_value_to_value(v)?);
             }
@@ -686,7 +686,7 @@ pub(crate) fn call_function(func: &Value, args: &[Value], env: &mut Env) -> Resu
             if let Some(ref mut p) = env.profiler { p.exit(); }
             result
         }
-        _ => Err(runtime_error(format!("Not a function: {}", func.type_name()))),
+        _ => Err(runtime_error(format!("Expected a function, got {}", func.short_desc()))),
     }
 }
 
@@ -751,4 +751,3 @@ pub fn eval_exprs(source: &str) -> Result<Value, SheafError> {
 
     Ok(last)
 }
-
