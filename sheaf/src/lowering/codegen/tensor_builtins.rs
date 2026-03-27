@@ -97,10 +97,25 @@ impl CodeGenerator {
         let (indices_reg, indices_ty) = self.generate(&args[0])?;
         let num_classes = match &args[1] {
             CompiledExpr::Integer(v) => *v,
-            _ => return Err(SheafError::Compile {
-                message: "one-hot expects integer num_classes".to_string(),
-                location: crate::core::error::SourceLocation::unknown(),
-            }),
+            CompiledExpr::Float(f) => *f as i64,
+            _ => {
+                // Try resolving via codegen (e.g. shape(x, -1) returns a known scalar)
+                if let Ok((reg, _)) = self.generate(&args[1]) {
+                    if let Some(v) = self.emitter.known_scalar_value(&reg) {
+                        v as i64
+                    } else {
+                        return Err(SheafError::Compile {
+                            message: "one-hot expects a constant integer for num_classes".to_string(),
+                            location: crate::core::error::SourceLocation::unknown(),
+                        });
+                    }
+                } else {
+                    return Err(SheafError::Compile {
+                        message: "one-hot expects a constant integer for num_classes".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    });
+                }
+            }
         };
         let (reg, ty) = self.emitter.emit_one_hot(&indices_reg, &indices_ty, num_classes);
         Ok((reg, ty))

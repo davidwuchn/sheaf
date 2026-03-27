@@ -45,13 +45,27 @@ impl CodeGenerator {
             });
         }
         if args.len() >= 2 {
-            if let CompiledExpr::Integer(ax) = &args[1] {
-                let idx = if *ax < 0 { (dims.len() as i64 + *ax) as usize } else { *ax as usize };
-                let reg = self.emitter.emit_constant_f32(dims[idx] as f64);
+            let ax_val = match &args[1] {
+                CompiledExpr::Integer(n) => Some(*n),
+                CompiledExpr::Float(f) => Some(*f as i64),
+                _ => {
+                    // Try resolving via known scalar constants
+                    if let Ok((reg, _)) = self.generate(&args[1]) {
+                        self.emitter.known_scalar_value(&reg).map(|v| v as i64)
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(ax) = ax_val {
+                let idx = if ax < 0 { (dims.len() as i64 + ax) as usize } else { ax as usize };
+                let dim_val = dims[idx] as f64;
+                let reg = self.emitter.emit_constant_f32(dim_val);
+                self.emitter.set_known_scalar(reg, dim_val);
                 Ok((reg, StableHLOType::ScalarF32))
             } else {
                 Err(SheafError::Compile {
-                    message: "shape: axis must be integer".to_string(),
+                    message: "shape: axis must be a constant integer".to_string(),
                     location: crate::core::error::SourceLocation::unknown(),
                 })
             }

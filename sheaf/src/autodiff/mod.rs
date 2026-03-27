@@ -639,9 +639,6 @@ fn grad_function_call(
         // Reductions
         "mean" => {
             // d/dx mean(f) = (1/N) * df/dx
-            // N = total elements in the reduced dimensions
-            // For full mean: N = product of all dims
-            // Approximation: use (/ g (len f)) for 1D, pass through otherwise
             let scaled_g = call("/", vec![g, call("len", vec![args[0].clone()])]);
             grad_with(&args[0], wrt, scaled_g)
         }
@@ -659,6 +656,19 @@ fn grad_function_call(
             let sum_gs = call("sum", vec![gs.clone(), CompiledExpr::Keyword("axis".to_string()), CompiledExpr::Integer(-1), CompiledExpr::Keyword("keepdims".to_string())]);
             let local_g = sub(gs, mul(sm, sum_gs));
             grad_with(&args[0], wrt, local_g)
+        }
+
+        // Cross-entropy loss
+        "cross-entropy-loss" if args.len() == 2 => {
+            // d/d(logits) cross-entropy-loss(logits, targets) = softmax(logits) - one_hot(targets, V)
+            // Scaled by -1/N from the mean in the loss definition.
+            // Since cross-entropy-loss = -mean(sum(one_hot * log_softmax)),
+            // the gradient w.r.t. logits is: (softmax(logits) - one_hot(targets)) / N
+            let sm = call("softmax", vec![args[0].clone(), CompiledExpr::Keyword("axis".to_string()), CompiledExpr::Integer(-1)]);
+            let n_classes = call("last", vec![call("shape", vec![args[0].clone()])]);
+            let oh = call("one-hot", vec![args[1].clone(), n_classes]);
+            let local_g = sub(sm, oh);
+            grad_with(&args[0], wrt, mul(g, local_g))
         }
 
         // Power

@@ -208,17 +208,20 @@ impl StableHLOEmitter {
 
             self.emit_select(&mask_reg, &ones_reg, &zeros_reg, &mask_ty, &out_ty, &out_ty)
         } else {
-            // Tensor indices [N] -> output [N, C]
-            let n = indices_shape[0];
-            let out_shape = vec![n, num_classes];
+            // Tensor indices [...] -> output [..., C]
+            let mut out_shape: Vec<i64> = indices_shape.to_vec();
+            out_shape.push(num_classes);
             let out_ty = StableHLOType::f32_tensor(out_shape.clone());
 
-            // iota [N, C] along dim 1 -> class indices
-            let (class_iota, iota_ty) = self.emit_iota(&out_shape, 1);
+            // iota [..., C] along last dim -> class indices
+            let last_dim = (out_shape.len() - 1) as i64;
+            let (class_iota, iota_ty) = self.emit_iota(&out_shape, last_dim);
 
-            // Reshape indices [N] -> [N, 1] then broadcast to [N, C]
-            let idx_2d_shape = vec![n, 1];
-            let idx_2d_ty = StableHLOType::f32_tensor(idx_2d_shape);
+            // Reshape indices [...] -> [..., 1] then broadcast to [..., C]
+            let mut idx_expanded_shape: Vec<i64> = indices_shape.to_vec();
+            idx_expanded_shape.push(1);
+            let idx_2d_ty = StableHLOType::f32_tensor(idx_expanded_shape);
+            let n = indices_shape[0]; // keep for backward compat
             let idx_2d = self.fresh_register();
             self.body.push(format!(
                 "    {} = stablehlo.reshape {} : ({}) -> {}",

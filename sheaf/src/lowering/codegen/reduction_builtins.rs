@@ -125,19 +125,34 @@ impl CodeGenerator {
         let mut axis: Option<i64> = None;
         let mut keepdims = false;
         let mut i = 1;
-        while i + 1 < args.len() {
+        while i < args.len() {
             match &args[i] {
                 CompiledExpr::Keyword(k) if k == "axis" => {
-                    if let CompiledExpr::Integer(n) = &args[i + 1] {
-                        axis = Some(*n);
+                    if i + 1 < args.len() {
+                        match &args[i + 1] {
+                            CompiledExpr::Integer(n) => { axis = Some(*n); i += 2; continue; }
+                            CompiledExpr::Float(f) => { axis = Some(*f as i64); i += 2; continue; }
+                            _ => {
+                                if let Ok((reg, _)) = self.generate(&args[i + 1]) {
+                                    if let Some(v) = self.emitter.known_scalar_value(&reg) {
+                                        axis = Some(v as i64); i += 2; continue;
+                                    }
+                                }
+                            }
+                        }
                     }
-                    i += 2;
+                    i += 1;
                 }
                 CompiledExpr::Keyword(k) if k == "keepdims" => {
-                    if let CompiledExpr::Boolean(b) = &args[i + 1] {
-                        keepdims = *b;
+                    if i + 1 < args.len() {
+                        if let CompiledExpr::Boolean(b) = &args[i + 1] {
+                            keepdims = *b;
+                            i += 2;
+                            continue;
+                        }
                     }
-                    i += 2;
+                    keepdims = true;
+                    i += 1;
                 }
                 _ => { i += 1; }
             }
@@ -176,19 +191,34 @@ impl CodeGenerator {
         let mut axis: Option<i64> = None;
         let mut keepdims = false;
         let mut i = 1;
-        while i + 1 < args.len() {
+        while i < args.len() {
             match &args[i] {
                 CompiledExpr::Keyword(k) if k == "axis" => {
-                    if let CompiledExpr::Integer(n) = &args[i + 1] {
-                        axis = Some(*n);
+                    if i + 1 < args.len() {
+                        match &args[i + 1] {
+                            CompiledExpr::Integer(n) => { axis = Some(*n); i += 2; continue; }
+                            CompiledExpr::Float(f) => { axis = Some(*f as i64); i += 2; continue; }
+                            _ => {
+                                if let Ok((reg, _)) = self.generate(&args[i + 1]) {
+                                    if let Some(v) = self.emitter.known_scalar_value(&reg) {
+                                        axis = Some(v as i64); i += 2; continue;
+                                    }
+                                }
+                            }
+                        }
                     }
-                    i += 2;
+                    i += 1;
                 }
                 CompiledExpr::Keyword(k) if k == "keepdims" => {
-                    if let CompiledExpr::Boolean(b) = &args[i + 1] {
-                        keepdims = *b;
+                    if i + 1 < args.len() {
+                        if let CompiledExpr::Boolean(b) = &args[i + 1] {
+                            keepdims = *b;
+                            i += 2;
+                            continue;
+                        }
                     }
-                    i += 2;
+                    keepdims = true;
+                    i += 1;
                 }
                 _ => { i += 1; }
             }

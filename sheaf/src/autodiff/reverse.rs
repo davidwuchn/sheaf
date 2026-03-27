@@ -638,6 +638,30 @@ fn distribute_fn_adjoint_named(
             }
         }
 
+        "max" | "min" => {
+            // d_input = adj * (x == max/min(x, axis, keepdims=true))
+            // Gradient is 1 where x equals the max/min, 0 elsewhere.
+            let axis = parse_keyword_int(args, "axis");
+            let mut fwd_args = vec![args[0].clone()];
+            if let Some(ax) = axis {
+                fwd_args.push(CompiledExpr::Keyword("axis".to_string()));
+                fwd_args.push(CompiledExpr::Integer(ax));
+                fwd_args.push(CompiledExpr::Keyword("keepdims".to_string()));
+                fwd_args.push(CompiledExpr::Boolean(true));
+            }
+            let fwd_val = emit_binding(bindings, call(name, fwd_args));
+            let mask = emit_binding(bindings, call("==", vec![args[0].clone(), sym(&fwd_val)]));
+            if let Some(input_shape) = arg_shape(&args[0], shapes) {
+                let sv = shape_vec(&input_shape);
+                let adj_bc = emit_binding(bindings, call("broadcast", vec![adj.clone(), sv]));
+                let dr = emit_binding(bindings, call("*", vec![sym(&adj_bc), sym(&mask)]));
+                acc_arg(&args[0], sym(&dr), adj_names, bindings);
+            } else {
+                let dr = emit_binding(bindings, call("*", vec![adj.clone(), sym(&mask)]));
+                acc_arg(&args[0], sym(&dr), adj_names, bindings);
+            }
+        }
+
         "sigmoid" => {
             let sig = emit_binding(bindings, call("sigmoid", vec![args[0].clone()]));
             let one_minus_sig = emit_binding(bindings, call("-", vec![float(1.0), sym(&sig)]));
