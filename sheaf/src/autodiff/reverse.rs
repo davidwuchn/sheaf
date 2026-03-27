@@ -437,6 +437,40 @@ fn distribute_fn_adjoint_named(
             }
         }
 
+        "einsum" => {
+            // einsum("lhs_sub,rhs_sub->out_sub", A, B)
+            // dL/dA = einsum("out_sub,rhs_sub->lhs_sub", adj, B)
+            // dL/dB = einsum("lhs_sub,out_sub->rhs_sub", A, adj)
+            if args.len() == 3 {
+                if let CompiledExpr::String(ref sub) = args[0] {
+                    if let Some((inputs, output)) = sub.split_once("->") {
+                        let parts: Vec<&str> = inputs.split(',').collect();
+                        if parts.len() == 2 {
+                            let lhs_sub = parts[0].trim();
+                            let rhs_sub = parts[1].trim();
+                            let out_sub = output.trim();
+
+                            let grad_lhs_sub = format!("{},{}->{}", out_sub, rhs_sub, lhs_sub);
+                            let da = emit_binding(bindings, call("einsum", vec![
+                                CompiledExpr::String(grad_lhs_sub),
+                                adj.clone(),
+                                args[2].clone(),
+                            ]));
+                            acc_arg(&args[1], sym(&da), adj_names, bindings);
+
+                            let grad_rhs_sub = format!("{},{}->{}", lhs_sub, out_sub, rhs_sub);
+                            let db = emit_binding(bindings, call("einsum", vec![
+                                CompiledExpr::String(grad_rhs_sub),
+                                args[1].clone(),
+                                adj.clone(),
+                            ]));
+                            acc_arg(&args[2], sym(&db), adj_names, bindings);
+                        }
+                    }
+                }
+            }
+        }
+
         "transpose" | "tr" => {
             let dt = emit_binding(bindings, call("transpose", vec![adj.clone()]));
             acc_arg(&args[0], sym(&dt), adj_names, bindings);

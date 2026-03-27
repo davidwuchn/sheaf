@@ -440,6 +440,38 @@ fn grad_function_call(
             add(grad_with(a, wrt, g_a), grad_with(b, wrt, g_b))
         }
 
+        "einsum" => {
+            // einsum("lhs_sub,rhs_sub->out_sub", A, B)
+            // dL/dA = einsum("out_sub,rhs_sub->lhs_sub", grad, B)
+            // dL/dB = einsum("lhs_sub,out_sub->rhs_sub", A, grad)
+            if args.len() == 3 {
+                if let CompiledExpr::String(ref sub) = args[0] {
+                    if let Some((inputs, output)) = sub.split_once("->") {
+                        let parts: Vec<&str> = inputs.split(',').collect();
+                        if parts.len() == 2 {
+                            let lhs_sub = parts[0].trim();
+                            let rhs_sub = parts[1].trim();
+                            let out_sub = output.trim();
+                            let grad_lhs_sub = format!("{},{}->{}", out_sub, rhs_sub, lhs_sub);
+                            let grad_rhs_sub = format!("{},{}->{}", lhs_sub, out_sub, rhs_sub);
+                            let g_a = call("einsum", vec![
+                                CompiledExpr::String(grad_lhs_sub),
+                                g.clone(),
+                                args[2].clone(),
+                            ]);
+                            let g_b = call("einsum", vec![
+                                CompiledExpr::String(grad_rhs_sub),
+                                args[1].clone(),
+                                g.clone(),
+                            ]);
+                            return add(grad_with(&args[1], wrt, g_a), grad_with(&args[2], wrt, g_b));
+                        }
+                    }
+                }
+            }
+            CompiledExpr::Float(0.0)
+        }
+
         "transpose" | "tr" => {
             // d/dx transpose(f) = transpose(df/dx)
             grad_with(&args[0], wrt, transpose(g))

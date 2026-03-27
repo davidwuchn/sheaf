@@ -122,7 +122,7 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
                     Err(e) => {
                         env.pop_scope();
                         return Err(runtime_error(format!(
-                            "value-and-grad: {}", e.short_message()
+                            "value-and-grad -> {}", e.short_message()
                         )));
                     }
                 }
