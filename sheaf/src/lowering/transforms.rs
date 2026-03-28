@@ -555,6 +555,21 @@ pub fn try_infer_shape(
 ) -> Option<Vec<i64>> {
     match expr {
         CompiledExpr::Symbol(s) => shapes.get(s).cloned(),
+        // Vector literal: infer shape by counting nested structure
+        // e.g. Vector([Vector([1,2,3])]) -> [1,3]
+        CompiledExpr::Vector(elems) => {
+            if elems.is_empty() {
+                return Some(vec![0]);
+            }
+            // Check if all elements are Vectors (2D+ tensor literal)
+            if let CompiledExpr::Vector(inner) = &elems[0] {
+                // For simplicity, assume rectangular: [outer_len, inner_len]
+                Some(vec![elems.len() as i64, inner.len() as i64])
+            } else {
+                // 1D vector
+                Some(vec![elems.len() as i64])
+            }
+        }
         CompiledExpr::Let { bindings, body } => {
             let mut inner = shapes.clone();
             for (name, rhs) in bindings {

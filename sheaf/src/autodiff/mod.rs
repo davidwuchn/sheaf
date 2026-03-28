@@ -10,7 +10,7 @@ pub mod transforms;
 
 // Re-export public API from submodules.
 pub use analysis::{contains_undiffable_ops, find_undiffable_ops};
-pub use transforms::{cse, inline_function_calls};
+pub use transforms::{cse, fold_dict_gets, inline_function_calls};
 
 // `grad(expr, wrt)` returns a new `CompiledExpr` representing dL/d(wrt),
 // assuming `expr` is the scalar loss (so the incoming gradient is 1.0).

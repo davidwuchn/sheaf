@@ -158,6 +158,86 @@ fn inline_calls_rec(
     }
 }
 
+/// Fold `(get <dict_literal> :key)` into the dict value directly.
+pub fn fold_dict_gets(expr: &CompiledExpr) -> CompiledExpr {
+    fold_dict_gets_rec(expr, &HashMap::new())
+}
+
+fn fold_dict_gets_rec(
+    expr: &CompiledExpr,
+    dict_bindings: &HashMap<String, Vec<(CompiledExpr, CompiledExpr)>>,
+) -> CompiledExpr {
+    match expr {
+        CompiledExpr::Let { bindings, body } => {
+            let mut new_dicts = dict_bindings.clone();
+            let new_bindings: Vec<(String, CompiledExpr)> = bindings
+                .iter()
+                .map(|(k, v)| {
+                    let folded = fold_dict_gets_rec(v, &new_dicts);
+                    if let CompiledExpr::Dict(pairs) = &folded {
+                        new_dicts.insert(k.clone(), pairs.clone());
+                    }
+                    (k.clone(), folded)
+                })
+                .collect();
+            CompiledExpr::Let {
+                bindings: new_bindings,
+                body: Box::new(fold_dict_gets_rec(body, &new_dicts)),
+            }
+        }
+
+        CompiledExpr::FunctionCall { name, args, loc } if name == "get" && args.len() == 2 => {
+            // (get sym :key) where sym is bound to a dict literal
+            if let (CompiledExpr::Symbol(dict_name), CompiledExpr::Keyword(key)) =
+                (&args[0], &args[1])
+            {
+                if let Some(pairs) = dict_bindings.get(dict_name.as_str()) {
+                    for (k, v) in pairs {
+                        if let CompiledExpr::Keyword(kw) = k {
+                            if kw == key {
+                                return fold_dict_gets_rec(v, dict_bindings);
+                            }
+                        }
+                    }
+                }
+            }
+            // Not foldable, recurse into args
+            CompiledExpr::FunctionCall {
+                name: name.clone(),
+                args: args.iter().map(|a| fold_dict_gets_rec(a, dict_bindings)).collect(),
+                loc: loc.clone(),
+            }
+        }
+
+        CompiledExpr::FunctionCall { name, args, loc } => CompiledExpr::FunctionCall {
+            name: name.clone(),
+            args: args.iter().map(|a| fold_dict_gets_rec(a, dict_bindings)).collect(),
+            loc: loc.clone(),
+        },
+
+        CompiledExpr::Do(exprs) => CompiledExpr::Do(
+            exprs.iter().map(|e| fold_dict_gets_rec(e, dict_bindings)).collect(),
+        ),
+
+        CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
+            condition: Box::new(fold_dict_gets_rec(condition, dict_bindings)),
+            then_branch: Box::new(fold_dict_gets_rec(then_branch, dict_bindings)),
+            else_branch: else_branch.as_ref().map(|e| Box::new(fold_dict_gets_rec(e, dict_bindings))),
+        },
+
+        CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
+            params: params.clone(),
+            body: Box::new(fold_dict_gets_rec(body, dict_bindings)),
+        },
+
+        CompiledExpr::Vector(elems) => CompiledExpr::Vector(
+            elems.iter().map(|e| fold_dict_gets_rec(e, dict_bindings)).collect(),
+        ),
+
+        _ => expr.clone(),
+    }
+}
+
 /// Common Subexpression Elimination.
 ///
 /// Traverses the expression tree, finds structurally identical non-trivial

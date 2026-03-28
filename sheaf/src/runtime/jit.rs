@@ -688,6 +688,9 @@ impl JitCompiler {
         // Inline user-defined function calls (including closure-captured lambdas)
         body = crate::autodiff::inline_function_calls(&body, &aug_registry);
 
+        // Fold dict literal gets: (get {:gamma g :beta b} :gamma) -> g
+        body = crate::autodiff::fold_dict_gets(&body);
+
         // Post-inline: re-lower dict access from inlined bodies
         for (param_name, index_map) in &param_index_maps {
             body = lower_get_calls(&body, param_name, index_map);
