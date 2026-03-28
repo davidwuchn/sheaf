@@ -155,7 +155,7 @@ fn check_matmul_shapes(a: &ArrayD<f32>, b: &ArrayD<f32>) -> Result<(), crate::co
     let contract_b = if b.ndim() >= 2 { b.shape()[b.ndim() - 2] } else { b.shape().first().copied().unwrap_or(0) };
     if contract_a != contract_b {
         Err(runtime_error(format!(
-            "shape mismatch: expected shape {:?}, but input has shape {:?}",
+            "shape mismatch: expected {:?}, got {:?}",
             a.shape(), b.shape()
         )))
     } else {
@@ -454,31 +454,35 @@ fn builtin_matmul_grad_lhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let a_ndim = a.ndim();
     let b_ndim = b.ndim();
 
+    let a_sh = a.shape().to_vec();
+    let b_sh = b.shape().to_vec();
+    let adj_sh = adj.shape().to_vec();
+    let shape_err = move |msg: &str| runtime_error(format!(
+        "Matmul gradient shape mismatch ({}):\n  left:  {:?}\n  right: {:?}\n  grad:  {:?}",
+        msg, a_sh, b_sh, adj_sh
+    ));
     let result = match (a_ndim, b_ndim) {
         (1, 1) => {
             (&adj * &b).into_dyn()
         }
         (1, 2) => {
-            // dA for [K] @ [K, N] -> [N], adj=[N]
-            // dA = adj @ B^T: reshape adj to [1, N], matmul with B^T [N, K], squeeze to [K]
             let n = adj.len();
             let k = a.len();
-            let adj2d = adj.to_owned().into_shape_with_order((1, n)).unwrap();
-            let bt = b.t().to_owned().into_dimensionality::<ndarray::Ix2>()
-                .map_err(|e| runtime_error(e.to_string()))?;
+            let adj2d = adj.to_owned().into_shape_with_order((1, n)).map_err(|_| shape_err("adj reshape"))?;
+            let bt = b.t().to_owned().into_dimensionality::<ndarray::Ix2>().map_err(|_| shape_err("B transpose"))?;
             let r = adj2d.dot(&bt);
-            r.into_shape_with_order(ndarray::IxDyn(&[k])).unwrap()
+            r.into_shape_with_order(ndarray::IxDyn(&[k])).map_err(|_| shape_err("result reshape"))?
         }
         (2, 1) => {
             let m = a.shape()[0];
             let k = b.len();
-            let adj_col = adj.to_owned().into_shape_with_order((m, 1)).unwrap();
-            let b_row = b.to_owned().into_shape_with_order((1, k)).unwrap();
+            let adj_col = adj.to_owned().into_shape_with_order((m, 1)).map_err(|_| shape_err("adj reshape"))?;
+            let b_row = b.to_owned().into_shape_with_order((1, k)).map_err(|_| shape_err("B reshape"))?;
             adj_col.dot(&b_row).into_dyn()
         }
         _ => {
-            let bt = b.t().to_owned().into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
-            let adj2 = adj.into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
+            let bt = b.t().to_owned().into_dimensionality::<ndarray::Ix2>().map_err(|_| shape_err("B transpose"))?;
+            let adj2 = adj.into_dimensionality::<ndarray::Ix2>().map_err(|_| shape_err("adj cast to 2D"))?;
             adj2.dot(&bt).into_dyn()
         }
     };
@@ -497,6 +501,13 @@ fn builtin_matmul_grad_rhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let a_ndim = a.ndim();
     let b_ndim = b.ndim();
 
+    let a_sh = a.shape().to_vec();
+    let b_sh = b.shape().to_vec();
+    let adj_sh = adj.shape().to_vec();
+    let shape_err = move |msg: &str| runtime_error(format!(
+        "Matmul gradient shape mismatch ({}):\n  left:  {:?}\n  right: {:?}\n  grad:  {:?}",
+        msg, a_sh, b_sh, adj_sh
+    ));
     let result = match (a_ndim, b_ndim) {
         (1, 1) => {
             (&adj * &a).into_dyn()
@@ -504,18 +515,18 @@ fn builtin_matmul_grad_rhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         (1, 2) => {
             let k = a.len();
             let n = adj.len();
-            let a_col = a.to_owned().into_shape_with_order((k, 1)).unwrap();
-            let adj_row = adj.to_owned().into_shape_with_order((1, n)).unwrap();
+            let a_col = a.to_owned().into_shape_with_order((k, 1)).map_err(|_| shape_err("A reshape"))?;
+            let adj_row = adj.to_owned().into_shape_with_order((1, n)).map_err(|_| shape_err("adj reshape"))?;
             a_col.dot(&adj_row).into_dyn()
         }
         (2, 1) => {
-            let at = a.t().to_owned().into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
-            let adj1 = adj.into_dimensionality::<ndarray::Ix1>().map_err(|e| runtime_error(e.to_string()))?;
+            let at = a.t().to_owned().into_dimensionality::<ndarray::Ix2>().map_err(|_| shape_err("A transpose"))?;
+            let adj1 = adj.into_dimensionality::<ndarray::Ix1>().map_err(|_| shape_err("adj cast to 1D"))?;
             at.dot(&adj1).into_dyn()
         }
         _ => {
-            let at = a.t().to_owned().into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
-            let adj2 = adj.into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
+            let at = a.t().to_owned().into_dimensionality::<ndarray::Ix2>().map_err(|_| shape_err("A transpose"))?;
+            let adj2 = adj.into_dimensionality::<ndarray::Ix2>().map_err(|_| shape_err("adj cast to 2D"))?;
             at.dot(&adj2).into_dyn()
         }
     };
