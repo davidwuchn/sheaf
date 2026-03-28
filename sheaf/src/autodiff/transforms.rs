@@ -17,7 +17,7 @@ pub fn inline_function_calls(
     expr: &CompiledExpr,
     registry: &HashMap<String, FunctionDef>,
 ) -> CompiledExpr {
-    inline_calls_rec(expr, registry, 0)
+    inline_calls_rec(expr, registry, &HashMap::new(), 0)
 }
 
 const MAX_INLINE_DEPTH: usize = 16;
@@ -25,6 +25,7 @@ const MAX_INLINE_DEPTH: usize = 16;
 fn inline_calls_rec(
     expr: &CompiledExpr,
     registry: &HashMap<String, FunctionDef>,
+    local_lambdas: &HashMap<String, CompiledExpr>,
     depth: usize,
 ) -> CompiledExpr {
     if depth > MAX_INLINE_DEPTH {
@@ -36,10 +37,23 @@ fn inline_calls_rec(
             // First, inline in arguments
             let inlined_args: Vec<CompiledExpr> = args
                 .iter()
-                .map(|a| inline_calls_rec(a, registry, depth))
+                .map(|a| inline_calls_rec(a, registry, local_lambdas, depth))
                 .collect();
 
-            // Try to inline this call if it's a user-defined function
+            // Try to inline: check local lambda bindings first, then registry
+            if let Some(CompiledExpr::Lambda { params, body }) = local_lambdas.get(name.as_str()) {
+                let bindings: Vec<(String, CompiledExpr)> = params
+                    .iter()
+                    .zip(inlined_args.iter())
+                    .map(|(p, a)| (p.clone(), a.clone()))
+                    .collect();
+                let inlined = CompiledExpr::Let {
+                    bindings,
+                    body: body.clone(),
+                };
+                return inline_calls_rec(&inlined, registry, local_lambdas, depth + 1);
+            }
+
             if let Some(func_def) = registry.get(name.as_str()) {
                 if let Some(body) = &func_def.body_compiled {
                     let bindings: Vec<(String, CompiledExpr)> = func_def
@@ -52,8 +66,7 @@ fn inline_calls_rec(
                         bindings,
                         body: Box::new(body.clone()),
                     };
-                    // Recurse into the inlined body
-                    return inline_calls_rec(&inlined, registry, depth + 1);
+                    return inline_calls_rec(&inlined, registry, local_lambdas, depth + 1);
                 }
             }
 
@@ -65,20 +78,27 @@ fn inline_calls_rec(
         }
 
         CompiledExpr::Let { bindings, body } => {
+            let mut new_lambdas = local_lambdas.clone();
             let new_bindings: Vec<(String, CompiledExpr)> = bindings
                 .iter()
-                .map(|(k, v)| (k.clone(), inline_calls_rec(v, registry, depth)))
+                .map(|(k, v)| {
+                    let inlined_v = inline_calls_rec(v, registry, &new_lambdas, depth);
+                    if matches!(&inlined_v, CompiledExpr::Lambda { .. }) {
+                        new_lambdas.insert(k.clone(), inlined_v.clone());
+                    }
+                    (k.clone(), inlined_v)
+                })
                 .collect();
             CompiledExpr::Let {
                 bindings: new_bindings,
-                body: Box::new(inline_calls_rec(body, registry, depth)),
+                body: Box::new(inline_calls_rec(body, registry, &new_lambdas, depth)),
             }
         }
 
         CompiledExpr::Do(exprs) => CompiledExpr::Do(
             exprs
                 .iter()
-                .map(|e| inline_calls_rec(e, registry, depth))
+                .map(|e| inline_calls_rec(e, registry, local_lambdas, depth))
                 .collect(),
         ),
 
@@ -87,30 +107,49 @@ fn inline_calls_rec(
             then_branch,
             else_branch,
         } => CompiledExpr::If {
-            condition: Box::new(inline_calls_rec(condition, registry, depth)),
-            then_branch: Box::new(inline_calls_rec(then_branch, registry, depth)),
+            condition: Box::new(inline_calls_rec(condition, registry, local_lambdas, depth)),
+            then_branch: Box::new(inline_calls_rec(then_branch, registry, local_lambdas, depth)),
             else_branch: else_branch
                 .as_ref()
-                .map(|e| Box::new(inline_calls_rec(e, registry, depth))),
+                .map(|e| Box::new(inline_calls_rec(e, registry, local_lambdas, depth))),
         },
 
         CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
             params: params.clone(),
-            body: Box::new(inline_calls_rec(body, registry, depth)),
+            body: Box::new(inline_calls_rec(body, registry, local_lambdas, depth)),
         },
 
-        CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
-            callee: Box::new(inline_calls_rec(callee, registry, depth)),
-            args: args
+        CompiledExpr::LambdaCall { callee, args } => {
+            let inlined_args: Vec<CompiledExpr> = args
                 .iter()
-                .map(|a| inline_calls_rec(a, registry, depth))
-                .collect(),
-        },
+                .map(|a| inline_calls_rec(a, registry, local_lambdas, depth))
+                .collect();
+            let inlined_callee = inline_calls_rec(callee, registry, local_lambdas, depth);
+
+            // If callee is a direct lambda, inline it as a Let binding
+            if let CompiledExpr::Lambda { params, body } = &inlined_callee {
+                let bindings: Vec<(String, CompiledExpr)> = params
+                    .iter()
+                    .zip(inlined_args.iter())
+                    .map(|(p, a)| (p.clone(), a.clone()))
+                    .collect();
+                let inlined = CompiledExpr::Let {
+                    bindings,
+                    body: body.clone(),
+                };
+                return inline_calls_rec(&inlined, registry, local_lambdas, depth + 1);
+            }
+
+            CompiledExpr::LambdaCall {
+                callee: Box::new(inlined_callee),
+                args: inlined_args,
+            }
+        }
 
         CompiledExpr::Vector(elems) => CompiledExpr::Vector(
             elems
                 .iter()
-                .map(|e| inline_calls_rec(e, registry, depth))
+                .map(|e| inline_calls_rec(e, registry, local_lambdas, depth))
                 .collect(),
         ),
 

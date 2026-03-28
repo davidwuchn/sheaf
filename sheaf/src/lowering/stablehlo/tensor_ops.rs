@@ -221,7 +221,6 @@ impl StableHLOEmitter {
             let mut idx_expanded_shape: Vec<i64> = indices_shape.to_vec();
             idx_expanded_shape.push(1);
             let idx_2d_ty = StableHLOType::f32_tensor(idx_expanded_shape);
-            let n = indices_shape[0]; // keep for backward compat
             let idx_2d = self.fresh_register();
             self.body.push(format!(
                 "    {} = stablehlo.reshape {} : ({}) -> {}",

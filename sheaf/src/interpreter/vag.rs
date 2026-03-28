@@ -3,7 +3,6 @@
 
 //! Value-and-grad: automatic differentiation via tracing and finite differences.
 
-use crate::sheaf_msg;
 use crate::core::expr::CompiledExpr;
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
@@ -47,8 +46,7 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
             Some(result) => return result,
             None => {
                 // JIT failed: fall through to symbolic autodiff.
-                // This path has incomplete backward rules (softmax, gelu, etc.)
-                // and should only be reached for simple expressions.
+                // This path should only be reached for simple expressions.
             }
         }
     }
@@ -58,7 +56,30 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
     if let Value::Function { params: fn_params, body, closure, .. } = func {
         if fn_params.len() == 1 {
             let param_name = &fn_params[0];
-            let inlined = inline_function_calls(body, &env.registry);
+
+            // Build an augmented registry that includes closure-captured functions.
+            // This lets inline_function_calls resolve calls to local lambdas
+            // (e.g., `let [f (fn ...)] ((value-and-grad (fn [w] (f ...))) ...)`).
+            let mut aug_registry = env.registry.clone();
+            for (name, val) in closure {
+                if let Value::Function { params: fp, body: fb, .. } = val {
+                    aug_registry.entry(name.clone()).or_insert_with(|| {
+                        crate::core::expr::FunctionDef {
+                            name: name.clone(),
+                            params: fp.clone(),
+                            body: crate::core::ast::SheafValue::Nil(
+                                crate::core::error::SourceLocation::new(0, 0, "".into()),
+                            ),
+                            body_compiled: Some(fb.clone()),
+                            signature: None,
+                            vmfb_session_idx: None,
+                            known_param_types: Vec::new(),
+                            compile_error: None,
+                        }
+                    });
+                }
+            }
+            let inlined = inline_function_calls(body, &aug_registry);
 
             if !contains_undiffable_ops(&inlined) {
                 // Direct symbolic path: no structural ops to trace

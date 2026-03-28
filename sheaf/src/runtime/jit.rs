@@ -543,6 +543,10 @@ impl JitCompiler {
         }
         wrt_indices = (0..fn_params.len()).collect();
 
+        // Build an augmented registry with closure-captured functions.
+        // These will be inlined (not passed as IREE parameters).
+        let mut aug_registry = registry.clone();
+
         // Classify and add captures
         for (cap_name, cap_val) in closure {
             // Skip the __vag_fn__ sentinel
@@ -555,6 +559,23 @@ impl JitCompiler {
                 }
                 Value::Int(n) => {
                     scalar_substitutions.push((cap_name.clone(), *n as f64));
+                }
+                Value::Function { params: fp, body: fb, .. } => {
+                    // Closure-captured function: add to registry for inlining
+                    aug_registry.entry(cap_name.clone()).or_insert_with(|| {
+                        FunctionDef {
+                            name: cap_name.clone(),
+                            params: fp.clone(),
+                            body: crate::core::ast::SheafValue::Nil(
+                                crate::core::error::SourceLocation::new(0, 0, "".into()),
+                            ),
+                            body_compiled: Some(fb.clone()),
+                            signature: None,
+                            vmfb_session_idx: None,
+                            known_param_types: Vec::new(),
+                            compile_error: None,
+                        }
+                    });
                 }
                 _ => {
                     // Tensor, Dict, Tuple etc. -> promote to MLIR parameter
@@ -664,8 +685,8 @@ impl JitCompiler {
             }
         }
 
-        // Inline user-defined function calls
-        body = crate::autodiff::inline_function_calls(&body, registry);
+        // Inline user-defined function calls (including closure-captured lambdas)
+        body = crate::autodiff::inline_function_calls(&body, &aug_registry);
 
         // Post-inline: re-lower dict access from inlined bodies
         for (param_name, index_map) in &param_index_maps {
