@@ -61,7 +61,10 @@ fn builtin_one_hot(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             for (i, &idx) in indices.iter().enumerate() {
                 result[i * num_classes + idx as usize] = 1.0;
             }
-            Ok(Value::tensor_f32(ArrayD::from_shape_vec(IxDyn(&[n, num_classes]), result).unwrap()))
+            // Preserve input shape: [...indices_shape, num_classes]
+            let mut out_shape: Vec<usize> = indices.shape().to_vec();
+            out_shape.push(num_classes);
+            Ok(Value::tensor_f32(ArrayD::from_shape_vec(IxDyn(&out_shape), result).unwrap()))
         }
         other => Err(runtime_error(format!("one-hot: expected an integer or a tensor, got {}", other.type_name()))),
     }
