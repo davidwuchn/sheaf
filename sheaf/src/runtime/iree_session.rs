@@ -300,9 +300,13 @@ impl IreeSession {
             );
             iree_vm_list_release(input_list);
             if !iree_status_is_ok(status) {
-                iree_status_fprint(libc_stderr(), status);
                 iree_vm_list_release(output_list);
-                return Err(iree_err(&format!("IREE call '{}' failed", fn_name)));
+                let clean_name = fn_name.strip_prefix("module.").unwrap_or(fn_name).replace('_', "-");
+                let got = inputs.iter().map(|v| v.short_desc()).collect::<Vec<_>>().join(", ");
+                return Err(iree_err(&format!(
+                    "{}: shape mismatch (compiled signature does not match arguments).\n  Called with: ({})",
+                    clean_name, got
+                )));
             }
 
             let t3 = t0.map(|_| std::time::Instant::now());
@@ -464,9 +468,13 @@ impl IreeSession {
             );
             iree_vm_list_release(input_list);
             if !iree_status_is_ok(status) {
-                iree_status_fprint(libc_stderr(), status);
                 iree_vm_list_release(output_list);
-                return Err(iree_err(&format!("IREE call '{}' failed", fn_name)));
+                let clean_name = fn_name.strip_prefix("module.").unwrap_or(fn_name).replace('_', "-");
+                let got = inputs.iter().map(|v| v.short_desc()).collect::<Vec<_>>().join(", ");
+                return Err(iree_err(&format!(
+                    "{}: shape mismatch (compiled signature does not match arguments).\n  Called with: ({})",
+                    clean_name, got
+                )));
             }
 
             let t3 = t0.map(|_| std::time::Instant::now());

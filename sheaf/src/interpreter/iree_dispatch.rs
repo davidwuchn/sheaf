@@ -40,9 +40,7 @@ pub(super) fn try_iree_dispatch(
     let result = match iree_session.call_typed_device(&full_name, args, &sig.return_type) {
         Ok(v) => v,
         Err(e) => {
-            return Some(Err(runtime_error(format!(
-                "{}: runtime error: {}", func_def.name, e.short_message()
-            ))));
+            return Some(Err(e));
         }
     };
 
@@ -114,9 +112,7 @@ pub(super) fn try_jit_vag(
     let result = match iree_session.call_typed_device("module.value_and_grad", &args, &sig.return_type) {
         Ok(v) => v,
         Err(e) => {
-            return Some(Err(runtime_error(format!(
-                "value-and-grad: runtime error: {}", e.short_message()
-            ))));
+            return Some(Err(e));
         }
     };
 
