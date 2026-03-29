@@ -775,6 +775,22 @@ fn distribute_fn_adjoint_named(
 
         // scan(lambda, init, coll): emit a __scan_vjp__ call that the codegen compiles.
         // The adjoint flows to init and coll via the backward scan.
+        // get(table, indices): embedding lookup / gather on axis 0.
+        // Backward: scatter-add the adjoint into a zeros table.
+        // Implemented as: transpose(one-hot(indices, V)) @ adj
+        // where V = shape(table, 0).
+        "get" if args.len() == 2 => {
+            // V = shape(table)[0]
+            let v = emit_binding(bindings, call("shape", vec![args[0].clone(), CompiledExpr::Integer(0)]));
+            // oh = one-hot(indices, V)  -> [N, V]
+            let oh = emit_binding(bindings, call("one-hot", vec![args[1].clone(), sym(&v)]));
+            // oh_t = transpose(oh)  -> [V, N]
+            let oh_t = emit_binding(bindings, call("tr", vec![sym(&oh)]));
+            // grad_table = oh_t @ adj  -> [V, D]
+            let grad = emit_binding(bindings, call("@", vec![sym(&oh_t), adj.clone()]));
+            acc_arg(&args[0], sym(&grad), adj_names, bindings);
+        }
+
         "scan" if args.len() == 3 => {
             let vjp_result = emit_binding(bindings, call("__scan_vjp__", vec![
                 args[0].clone(),  // lambda
