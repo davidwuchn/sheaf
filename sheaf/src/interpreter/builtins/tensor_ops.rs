@@ -202,8 +202,15 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                 let row_size: usize = row_shape.iter().product::<usize>().max(1);
                 let total = idx_data.len() * row_size;
                 let mut result = Vec::with_capacity(total);
+                let dim = data.shape()[0];
                 for &idx_f in idx_data.iter() {
                     let idx = idx_f as usize;
+                    if idx >= dim {
+                        return Err(runtime_error(format!(
+                            "get: index {} is out of bounds for tensor with {} rows",
+                            idx, dim
+                        )));
+                    }
                     let row = data.index_axis(ndarray::Axis(0), idx);
                     result.extend(row.iter());
                 }

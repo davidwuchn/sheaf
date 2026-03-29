@@ -48,7 +48,18 @@ fn builtin_eye(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_one_hot(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    let num_classes = args[1].to_f64().unwrap() as usize;
+    if args.len() != 2 {
+        return Err(runtime_error(format!(
+            "one-hot expects 2 arguments (one-hot indices num_classes), got {}",
+            args.len()
+        )));
+    }
+    let num_classes = args[1].to_f64().ok_or_else(|| {
+        runtime_error(format!(
+            "one-hot: num_classes must be an integer, got {}. Example: (one-hot [0 1 2] 10)",
+            args[1].type_name()
+        ))
+    })? as usize;
     match &args[0] {
         Value::Int(idx) => {
             let mut data = vec![0.0; num_classes];
