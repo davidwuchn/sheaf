@@ -38,8 +38,12 @@ impl CodeGenerator {
         else if matches!(name, "and" | "or") && args.len() == 2 {
             Some(self.gen_boolean_binop(name, args))
         }
-        // Math unary operations: sqrt, exp, log, abs
-        else if matches!(name, "sqrt" | "exp" | "log" | "abs") && args.len() == 1 {
+        // Unary negation: (- x) -> negate
+        else if name == "-" && args.len() == 1 {
+            Some(self.gen_math_unary("neg", args))
+        }
+        // Math unary operations: sqrt, exp, log, abs, neg
+        else if matches!(name, "sqrt" | "exp" | "log" | "abs" | "neg") && args.len() == 1 {
             Some(self.gen_math_unary(name, args))
         }
         // Boolean not

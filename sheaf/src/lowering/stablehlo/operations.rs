@@ -120,6 +120,14 @@ impl StableHLOEmitter {
                     ty.to_mlir()
                 ));
             }
+            "neg" => {
+                self.body.push(format!(
+                    "    {} = stablehlo.negate {} : {}",
+                    reg.to_mlir(),
+                    operand.to_mlir(),
+                    ty.to_mlir()
+                ));
+            }
             _ => panic!("Unsupported unary op: {}", op),
         }
 

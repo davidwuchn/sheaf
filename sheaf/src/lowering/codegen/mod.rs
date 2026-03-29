@@ -273,6 +273,10 @@ impl CodeGenerator {
                         };
                         Some(if result { 1.0 } else { 0.0 })
                     }
+                    "-" if args.len() == 1 => {
+                        let a = self.try_const_eval(&args[0])?;
+                        Some(-a)
+                    }
                     "+" | "-" | "*" | "/" if args.len() == 2 => {
                         let a = self.try_const_eval(&args[0])?;
                         let b = self.try_const_eval(&args[1])?;
