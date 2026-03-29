@@ -73,6 +73,9 @@ pub struct CompilerContext {
     /// Absolute paths of already-loaded modules (prevents duplicate loading)
     pub loaded_modules: HashSet<PathBuf>,
 
+    /// Bare names of prelude modules (nn, optim, etc.) are immune to shadowing by local files
+    pub prelude_modules: HashSet<String>,
+
     /// Directory of the file currently being compiled (for relative use paths)
     pub current_dir: Option<PathBuf>,
 
@@ -188,6 +191,7 @@ impl CompilerContext {
             param_scope: HashMap::new(),
             load_path: Self::default_load_path(),
             loaded_modules: HashSet::new(),
+            prelude_modules: HashSet::new(),
             current_dir: None,
             vmfb_sessions: Vec::new(),
             disable_vmfb: false,
@@ -214,6 +218,11 @@ impl CompilerContext {
                     let _ = self.compile(expr);
                 }
             }
+            // Mark stdlib modules as loaded so `(use nn)` is a no-op
+            // even if a local nn.shf exists.
+            self.prelude_modules.insert(
+                name.strip_suffix(".shf").unwrap_or(name).to_string()
+            );
         }
     }
 

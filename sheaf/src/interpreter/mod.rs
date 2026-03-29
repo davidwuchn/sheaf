@@ -450,6 +450,16 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
 
     // Try user-defined function from registry
     if let Some(func_def) = env.registry.get(name).cloned() {
+        // Arity check before any JIT or interpreter dispatch
+        if pos_args.len() != func_def.params.len() {
+            let got = pos_args.iter().map(|a| a.short_desc()).collect::<Vec<_>>().join(", ");
+            let params = func_def.params.join(", ");
+            return Err(runtime_error(format!(
+                "{} expects {} arguments ({}), got {}.\n  Called with: ({})",
+                name, func_def.params.len(), params, pos_args.len(), got
+            )));
+        }
+
         // Check evaluation deadline (used by auto-trace to avoid running forever)
         if let Some(deadline) = env.eval_deadline {
             if std::time::Instant::now() > deadline {
@@ -534,19 +544,23 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
                 }
             }
 
-            // Had a compiled version but recompilation failed -> hard error
+            // Had a compiled version but recompilation failed -> internal error
             if was_stale && !recompiled {
                 if let Some(ref mut p) = env.profiler { p.exit(); }
+                let got = pos_args.iter().map(|a| a.short_desc()).collect::<Vec<_>>().join(", ");
                 return Err(runtime_error(format!(
-                    "'{}': argument shapes changed and recompilation failed", func_def.name
+                    "{}: runtime error.\n  Called with: ({})\n  This is a bug in Sheaf. Please report it at https://github.com/sheaf-lang/sheaf/issues",
+                    func_def.name, got
                 )));
             }
 
-            // Recompiled but dispatch still fails -> hard error
+            // Recompiled but dispatch still fails -> internal error
             if recompiled {
                 if let Some(ref mut p) = env.profiler { p.exit(); }
+                let got = pos_args.iter().map(|a| a.short_desc()).collect::<Vec<_>>().join(", ");
                 return Err(runtime_error(format!(
-                    "'{}': compiled but IREE dispatch failed", func_def.name
+                    "{}: runtime error.\n  Called with: ({})\n  This is a bug in Sheaf. Please report it at https://github.com/sheaf-lang/sheaf/issues",
+                    func_def.name, got
                 )));
             }
         }

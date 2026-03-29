@@ -178,6 +178,18 @@ impl SpecialForm for UseForm {
             }
         };
 
+        // Warn the user if a local file with the same name than a prelude module exists.
+        let bare = raw.strip_suffix(".shf").unwrap_or(&raw);
+        if compiler.prelude_modules.contains(bare) {
+            if resolve_module_path(compiler, &raw, loc).is_ok() {
+                crate::sheaf_msg!(
+                    "warning: '{}' is a built-in module (auto-loaded). Local file '{}.shf' is ignored.\n         Rename your file to avoid this conflict.",
+                    bare, bare
+                );
+            }
+            return Ok(CompiledExpr::Nil);
+        }
+
         let resolved = resolve_module_path(compiler, &raw, loc)?;
 
         // Deduplicate: if already loaded, skip silently

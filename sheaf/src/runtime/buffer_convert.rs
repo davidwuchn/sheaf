@@ -102,7 +102,7 @@ pub(super) unsafe fn value_to_buffer_view(
                 Ok(db.buffer_view())
             }
             _ => Err(iree_err(&format!(
-                "cannot convert {} to IREE buffer",
+                "cannot convert {} to tensor buffer",
                 val.type_name()
             ))),
         }
@@ -167,7 +167,7 @@ pub(super) unsafe fn buffer_view_to_value(
             (i32_buf.iter().map(|&x| x as f32).collect::<Vec<f32>>(), Dtype::I32)
         } else {
             return Err(iree_err(&format!(
-                "unsupported IREE element type: 0x{:08x}",
+                "unsupported tensor element type: 0x{:08x}",
                 elem_type
             )));
         };
@@ -215,7 +215,7 @@ fn flatten_value<'a>(val: &'a Value, out: &mut Vec<&'a Value>) -> Result<(), She
             Ok(())
         }
         _ => Err(iree_err(&format!(
-            "cannot flatten {} for IREE call",
+            "cannot flatten {} for function call",
             val.type_name()
         ))),
     }

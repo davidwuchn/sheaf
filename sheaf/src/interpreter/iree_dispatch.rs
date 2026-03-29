@@ -41,7 +41,7 @@ pub(super) fn try_iree_dispatch(
         Ok(v) => v,
         Err(e) => {
             return Some(Err(runtime_error(format!(
-                "'{}': IREE dispatch failed: {}", func_def.name, e
+                "{}: runtime error: {}", func_def.name, e.short_message()
             ))));
         }
     };
@@ -115,7 +115,7 @@ pub(super) fn try_jit_vag(
         Ok(v) => v,
         Err(e) => {
             return Some(Err(runtime_error(format!(
-                "value-and-grad: IREE dispatch failed: {}", e
+                "value-and-grad: runtime error: {}", e.short_message()
             ))));
         }
     };

@@ -106,20 +106,30 @@ fn builtin_range(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 fn builtin_cast(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     use crate::interpreter::value::Dtype;
     if args.len() != 2 {
-        return Err(runtime_error("cast: expected (cast tensor :dtype)"));
+        return Err(runtime_error(format!(
+            "cast expects 2 arguments (cast tensor :dtype), got {}",
+            args.len()
+        )));
     }
     let target = match &args[1] {
         Value::Keyword(k) => Dtype::from_keyword(k).ok_or_else(|| {
-            runtime_error(&format!("cast: unknown dtype :{}", k))
+            runtime_error(format!(
+                "cast: unknown dtype :{k}. Valid dtypes: :f32, :f16, :bf16, :i32"
+            ))
         })?,
-        _ => return Err(runtime_error("cast: second argument must be a keyword (:f32, :bf16)")),
+        other => return Err(runtime_error(format!(
+            "cast expects a dtype keyword as 2nd argument, got {}. Example: (cast x :f32)",
+            other.type_name()
+        ))),
     };
     match &args[0] {
-        Value::Tensor { data, .. } => {
+        Value::Tensor { data, dtype } => {
+            if *dtype == target {
+                return Ok(args[0].clone());
+            }
             Ok(Value::Tensor { data: data.clone(), dtype: target })
         }
         Value::DeviceBuffer(db) => {
-            // For DeviceBuffer, materialize to host, change dtype, then let JIT recompile
             let host_data = db.to_host()?;
             Ok(Value::Tensor { data: std::sync::Arc::new(host_data), dtype: target })
         }
@@ -135,6 +145,9 @@ fn builtin_cast(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 dtype: target,
             })
         }
-        _ => Err(runtime_error("cast: expected tensor, float, or int")),
+        other => Err(runtime_error(format!(
+            "cast expects a tensor, float, or int as 1st argument, got {}",
+            other.type_name()
+        ))),
     }
 }
