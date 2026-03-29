@@ -212,11 +212,33 @@ pub fn apply_guard_check(
     use crate::core::expr::GuardCheck;
     match check {
         GuardCheck::NoNan => {
-            if let Value::Tensor { data, .. } = val {
-                if data.iter().any(|x| !x.is_finite()) {
-                    let stats = format_value_brief(val);
-                    return Err(format!("Tensor contains NaN or Inf values: {}", stats));
+            match val {
+                Value::Tensor { data, .. } => {
+                    if data.iter().any(|x| !x.is_finite()) {
+                        let stats = format_value_brief(val);
+                        return Err(format!("Tensor contains NaN or Inf values: {}", stats));
+                    }
                 }
+                Value::Float(f) => {
+                    if !f.is_finite() {
+                        return Err(format!("Value is {}", f));
+                    }
+                }
+                Value::Dict(map) => {
+                    for (k, v) in map {
+                        if let Err(e) = apply_guard_check(check, v) {
+                            return Err(format!(":{} -> {}", k, e));
+                        }
+                    }
+                }
+                Value::List(items) => {
+                    for (i, v) in items.iter().enumerate() {
+                        if let Err(e) = apply_guard_check(check, v) {
+                            return Err(format!("[{}] -> {}", i, e));
+                        }
+                    }
+                }
+                _ => {}
             }
             Ok(())
         }

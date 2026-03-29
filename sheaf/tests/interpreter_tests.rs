@@ -144,3 +144,48 @@ fn test_all_yaml() {
 
     eprintln!("{} tests passed", cases.len());
 }
+
+#[test]
+fn test_guard_no_nan() {
+    use sheaf_compiler::interpreter::apply_guard_check;
+    use sheaf_compiler::interpreter::value::Value;
+    use sheaf_compiler::core::expr::GuardCheck;
+    use ndarray::{ArrayD, IxDyn};
+    use std::sync::Arc;
+    use std::collections::BTreeMap;
+
+    let check = GuardCheck::NoNan;
+
+    // Clean scalar: should pass
+    assert!(apply_guard_check(&check, &Value::Float(1.0)).is_ok());
+
+    // NaN scalar: should fail
+    assert!(apply_guard_check(&check, &Value::Float(f32::NAN)).is_err());
+
+    // Inf scalar: should fail
+    assert!(apply_guard_check(&check, &Value::Float(f32::INFINITY)).is_err());
+
+    // Clean tensor: should pass
+    let clean = Value::Tensor {
+        data: Arc::new(ArrayD::from_shape_vec(IxDyn(&[3]), vec![1.0, 2.0, 3.0]).unwrap()),
+        dtype: sheaf_compiler::interpreter::value::Dtype::F32,
+    };
+    assert!(apply_guard_check(&check, &clean).is_ok());
+
+    // NaN tensor: should fail
+    let nan_tensor = Value::Tensor {
+        data: Arc::new(ArrayD::from_shape_vec(IxDyn(&[3]), vec![1.0, f32::NAN, 3.0]).unwrap()),
+        dtype: sheaf_compiler::interpreter::value::Dtype::F32,
+    };
+    assert!(apply_guard_check(&check, &nan_tensor).is_err());
+
+    // Dict with NaN nested inside: should fail
+    let mut map = BTreeMap::new();
+    map.insert("clean".to_string(), Value::Float(1.0));
+    map.insert("bad".to_string(), Value::Float(f32::NAN));
+    assert!(apply_guard_check(&check, &Value::Dict(map)).is_err());
+
+    // List with NaN: should fail
+    let list = Value::List(vec![Value::Float(1.0), Value::Float(f32::NAN)]);
+    assert!(apply_guard_check(&check, &list).is_err());
+}
