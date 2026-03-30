@@ -116,10 +116,14 @@ fn compare(actual: &str, expected: &str, name: &str) -> bool {
 
 #[test]
 fn test_all_yaml() {
-    let yaml_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/interpreter_tests.yaml");
-    let cases = parse_test_yaml(&yaml_path);
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
 
-    assert!(!cases.is_empty(), "No test cases loaded from tests.yaml");
+    let mut cases = parse_test_yaml(&base.join("interpreter_tests.yaml"));
+    let vag_cases = parse_test_yaml(&base.join("vag_tests.yaml"));
+    let vag_count = vag_cases.len();
+    cases.extend(vag_cases);
+
+    assert!(!cases.is_empty(), "No test cases loaded");
 
     let mut failures = Vec::new();
 
@@ -142,7 +146,7 @@ fn test_all_yaml() {
         );
     }
 
-    eprintln!("{} tests passed", cases.len());
+    eprintln!("{} tests passed ({} interpreter + {} VAG)", cases.len(), cases.len() - vag_count, vag_count);
 }
 
 #[test]

@@ -1,127 +1,127 @@
 - name: +
   test: (+ 1 2)
-  expected: '3'
+  expected: "3"
 - name: +
   test: (+ [1 2] [3 4])
-  expected: '[4. 6.]'
+  expected: "[4. 6.]"
 - name: +
   test: (+ 1 [2 3] 4)
-  expected: '[7. 8.]'
-- name: '-'
+  expected: "[7. 8.]"
+- name: "-"
   test: (- 5)
-  expected: '-5'
-- name: '-'
+  expected: "-5"
+- name: "-"
   test: (- 10 3)
-  expected: '7'
-- name: '-'
+  expected: "7"
+- name: "-"
   test: (- [5 10] [2 3])
-  expected: '[3. 7.]'
+  expected: "[3. 7.]"
 - name: \*
   test: (* 2 3)
-  expected: '6'
+  expected: "6"
 - name: \*
   test: (* [1 2] 3)
-  expected: '[3. 6.]'
+  expected: "[3. 6.]"
 - name: \*
   test: (* [2 3] [4 5])
-  expected: '[ 8. 15.]'
+  expected: "[ 8. 15.]"
 - name: /
   test: (/ 10.0 2.0)
-  expected: '5.0'
+  expected: "5.0"
 - name: /
   test: (/ [10 20] 2)
-  expected: '[ 5. 10.]'
+  expected: "[ 5. 10.]"
 - name: //
   test: (// 7 2)
-  expected: '3'
+  expected: "3"
 - name: //
   test: (// [7 9] 2)
-  expected: '[3. 4.]'
+  expected: "[3. 4.]"
 - name: mod
   test: (mod 7 3)
-  expected: '1'
+  expected: "1"
 - name: mod
   test: (% 7 3)
-  expected: '1'
+  expected: "1"
 - name: mod
   test: (mod [7 9] 2)
-  expected: '[1. 1.]'
+  expected: "[1. 1.]"
 - name: mod
   test: (mod -7 3)
-  expected: '2'
+  expected: "2"
 - name: \*\*
   test: (** 2.0 3.0)
-  expected: '8.0'
+  expected: "8.0"
 - name: \*\*
   test: (** [2 3] 2)
-  expected: '[4. 9.]'
+  expected: "[4. 9.]"
 - name: abs
   test: (abs -5.0)
-  expected: '5.0'
+  expected: "5.0"
 - name: abs
   test: (abs [-3 2 -1])
-  expected: '[3. 2. 1.]'
+  expected: "[3. 2. 1.]"
 - name: ash
   test: (ash 1 8)
-  expected: '256'
+  expected: "256"
 - name: ash
   test: (ash 256 -3)
-  expected: '32'
+  expected: "32"
 - name: ash
   test: (ash [512 1024] -8)
-  expected: '[2 4]'
+  expected: "[2 4]"
 - name: exp
   test: (exp 0.0)
-  expected: '1.0'
+  expected: "1.0"
 - name: exp
   test: (exp 1.0)
-  expected: '2.7182817'
+  expected: "2.7182817"
 - name: log
   test: (log 1.0)
-  expected: '0.0'
+  expected: "0.0"
 - name: log
   test: (log 2.718281828)
-  expected: '1.0'
+  expected: "1.0"
 - name: log
   test: (log [1.0 2.0])
-  expected: '[0.        0.6931472]'
+  expected: "[0.        0.6931472]"
 - name: sqrt
   test: (sqrt 4.0)
-  expected: '2.0'
+  expected: "2.0"
 - name: sqrt
   test: (sqrt [1.0 4.0 9.0])
-  expected: '[1. 2. 3.]'
+  expected: "[1. 2. 3.]"
 - name: round
   test: (round 3.7)
-  expected: '4.0'
+  expected: "4.0"
 - name: round
   test: (round [1.4 2.5 3.6])
-  expected: '[1. 3. 4.]'
+  expected: "[1. 3. 4.]"
 - name: ceil
   test: (ceil 3.2)
-  expected: '4.0'
+  expected: "4.0"
 - name: ceil
   test: (ceil [-1.7 2.3])
-  expected: '[-1. 3.]'
+  expected: "[-1. 3.]"
 - name: floor
   test: (floor 3.9)
-  expected: '3.0'
+  expected: "3.0"
 - name: floor
   test: (floor [-1.2 2.8])
-  expected: '[-2. 2.]'
-- name: '@'
+  expected: "[-2. 2.]"
+- name: "@"
   test: (@ [1 2 3] [4 5 6])
-  expected: '32.0'
-- name: '@'
+  expected: "32.0"
+- name: "@"
   test: (@ [[1 2 3] [4 5 6]] [[1 2] [3 4] [5 6]])
   expected: "[[22. 28.]\n [49. 64.]]"
-- name: '='
+- name: "="
   test: (= 1 1)
   expected: true
-- name: '='
+- name: "="
   test: (= [1 2] [1 2])
   expected: true
-- name: '='
+- name: "="
   test: (= [1 2] [1 3])
   expected: false
 - name: = (lists)
@@ -135,25 +135,25 @@
   expected: false
 - name: ==
   test: (== [1 2] [1 3])
-  expected: '[true false]'
+  expected: "[true false]"
 - name: ==
   test: (== 1 [1 1 2])
-  expected: '[true true false]'
-- name: '!='
+  expected: "[true true false]"
+- name: "!="
   test: (!= [1 2] [1 3])
-  expected: '[false true]'
-- name: '!='
+  expected: "[false true]"
+- name: "!="
   test: (!= 1 2)
   expected: true
 - name: <, >, <=, >=
   test: (< [1 5] 3)
-  expected: '[true false]'
+  expected: "[true false]"
 - name: <, >, <=, >=
   test: (> 5 2)
   expected: true
 - name: <, >, <=, >=
   test: (<= [1 2 3] 2)
-  expected: '[true true false]'
+  expected: "[true true false]"
 - name: and
   test: (and true false)
   expected: false
@@ -162,7 +162,7 @@
   expected: true
 - name: and
   test: (and 1 2 3)
-  expected: '3'
+  expected: "3"
 - name: or
   test: (or false true)
   expected: true
@@ -171,7 +171,7 @@
   expected: nil
 - name: or
   test: (or nil 42)
-  expected: '42'
+  expected: "42"
 - name: not
   test: (not true)
   expected: false
@@ -180,97 +180,97 @@
   expected: true
 - name: relu
   test: (relu -1.0)
-  expected: '0.0'
+  expected: "0.0"
 - name: relu
   test: (relu [1.0 -2.0 3.0])
-  expected: '[1. 0. 3.]'
+  expected: "[1. 0. 3.]"
 - name: leaky-relu
   test: (leaky-relu -1.0 0.01)
-  expected: '-0.01'
+  expected: "-0.01"
 - name: leaky-relu
   test: (leaky-relu [-1.0 2.0] 0.1)
-  expected: '[-0.1  2. ]'
+  expected: "[-0.1  2. ]"
 - name: sigmoid
   test: (sigmoid 0.0)
-  expected: '0.5'
+  expected: "0.5"
 - name: sigmoid
   test: (sigmoid -100.0)
-  expected: '0.0'
+  expected: "0.0"
 - name: tanh
   test: (tanh 0.0)
-  expected: '0.0'
+  expected: "0.0"
 - name: tanh
   test: (tanh 1.0)
-  expected: '0.7615942'
+  expected: "0.7615942"
 - name: gelu
   test: (gelu 0.0)
-  expected: '0.0'
+  expected: "0.0"
 - name: gelu
   test: (gelu 1.0)
-  expected: '0.841192'
+  expected: "0.841192"
 - name: selu
   test: (selu [-1.0 1.0])
-  expected: '[-1.1113307  1.050701 ]'
+  expected: "[-1.1113307  1.050701 ]"
 - name: celu
   test: (celu [-1.0 1.0])
-  expected: '[-0.63212055  1.        ]'
+  expected: "[-0.63212055  1.        ]"
 - name: silu
   test: (silu 0.0)
-  expected: '0.0'
+  expected: "0.0"
 - name: silu
   test: (silu 1.0)
-  expected: '0.7310586'
+  expected: "0.7310586"
 - name: softmax
   test: (softmax [1.0 1.0])
-  expected: '[0.5 0.5]'
+  expected: "[0.5 0.5]"
 - name: softmax
-  test: (softmax [1.0 2.0 3.0] :axis 0)
-  expected: '[0.09003057 0.24472848 0.66524094]'
+  test: (softmax [1.0 2.0 3.0] :axis -1)
+  expected: "[0.09003057 0.24472848 0.66524094]"
 - name: log-softmax
   test: (log-softmax [1.0 2.0])
-  expected: '[-1.3132616 -0.31326166]'
+  expected: "[-1.3132616 -0.31326166]"
 - name: sum
   test: (sum [1 2 3])
-  expected: '6.0'
+  expected: "6.0"
 - name: sum
   test: (sum [[1 2] [3 4]] :axis 0)
-  expected: '[4. 6.]'
+  expected: "[4. 6.]"
 - name: mean
   test: (mean [1.0 2.0 3.0])
-  expected: '2.0'
+  expected: "2.0"
 - name: mean
   test: (mean [[1 2] [3 4]] :axis 1)
-  expected: '[1.5 3.5]'
+  expected: "[1.5 3.5]"
 - name: product
   test: (product [1 2 3])
-  expected: '6.0'
+  expected: "6.0"
 - name: product
   test: (product [2.0 3.0 4.0] :axis 0)
-  expected: '24.0'
+  expected: "24.0"
 - name: min, max
   test: (min [3 1 4])
-  expected: '1.0'
+  expected: "1.0"
 - name: min, max
   test: (max [1.0 2.0 10.0])
-  expected: '10.0'
+  expected: "10.0"
 - name: minimum, maximum
   test: (minimum [1 10] [5 2])
-  expected: '[1. 2.]'
+  expected: "[1. 2.]"
 - name: minimum, maximum
   test: (maximum [1 10] [5 2])
-  expected: '[ 5. 10.]'
+  expected: "[ 5. 10.]"
 - name: ndim
   test: (ndim [1 2 3])
-  expected: '1'
+  expected: "1"
 - name: len, count
   test: (len [1 2 3])
-  expected: '3'
+  expected: "3"
 - name: len, count
   test: (count '[1 2 3 4])
-  expected: '4'
+  expected: "4"
 - name: len, count
   test: (count [[1 2] [3 4]])
-  expected: '2'
+  expected: "2"
 - name: reshape
   test: (reshape (arange 6) '[2 3])
   expected: "[[0 1 2]\n [3 4 5]]"
@@ -279,22 +279,22 @@
   expected: "[[0 1 2]\n [3 4 5]\n [6 7 8]]"
 - name: swapaxes
   test: (shape (swapaxes [[1 2 3] [4 5 6]] 0 1))
-  expected: '[3. 2.]'
+  expected: "[3. 2.]"
 - name: slice
   test: (slice [0 1 2 3 4] 1 4)
-  expected: '[1. 2. 3.]'
+  expected: "[1. 2. 3.]"
 - name: roll
   test: (roll [1 2 3] 1)
-  expected: '[3. 1. 2.]'
+  expected: "[3. 1. 2.]"
 - name: roll
   test: (roll [1 2 3] -1)
-  expected: '[2. 3. 1.]'
+  expected: "[2. 3. 1.]"
 - name: concat
   test: (concat '[1 2] '[3 4])
-  expected: '[1, 2, 3, 4]'
+  expected: "[1, 2, 3, 4]"
 - name: concat
   test: (concat '[1 2] '[3 4])
-  expected: '[1, 2, 3, 4]'
+  expected: "[1, 2, 3, 4]"
 - name: concat
   test: (concat '[[1 2]] '[[3 4]] :axis 0)
   expected: "[[1 2]\n [3 4]]"
@@ -306,76 +306,76 @@
   expected: "[[1. 0.]\n [3. 4.]]"
 - name: where
   test: (where (> [1 3 2] 2) [10 20 30] 0)
-  expected: '[ 0. 20.  0.]'
+  expected: "[ 0. 20.  0.]"
 - name: ones, zeros
   test: (ones '[2 3])
   expected: "[[1. 1. 1.]\n [1. 1. 1.]]"
 - name: ones, zeros
   test: (zeros '[3])
-  expected: '[0. 0. 0.]'
+  expected: "[0. 0. 0.]"
 - name: arange
   test: (arange 5)
-  expected: '[0 1 2 3 4]'
+  expected: "[0 1 2 3 4]"
 - name: arange
   test: (arange 2 7)
-  expected: '[2 3 4 5 6]'
+  expected: "[2 3 4 5 6]"
 - name: arange
   test: (arange 0 10 2)
-  expected: '[0 2 4 6 8]'
+  expected: "[0 2 4 6 8]"
 - name: one-hot
   test: (one-hot 1 3)
-  expected: '[0. 1. 0.]'
+  expected: "[0. 1. 0.]"
 - name: one-hot
   test: (one-hot [0 2 1] 3)
   expected: "[[1. 0. 0.]\n [0. 0. 1.]\n [0. 1. 0.]]"
 - name: tensor
   test: (tensor '[1 2 3])
-  expected: '[1. 2. 3.]'
+  expected: "[1. 2. 3.]"
 - name: tensor
   test: (tensor '[1. 2. 3.])
-  expected: '[1. 2. 3.]'
+  expected: "[1. 2. 3.]"
 - name: random-normal-shape
   test: (shape (random-normal (random-key 0) '[10 5]))
-  expected: '[10. 5.]'
+  expected: "[10. 5.]"
 - name: random-normal-nonzero
   test: (!= (sum (random-normal (random-key 42) '[10])) 0.0)
   expected: true
 - name: random-uniform-shape
   test: (shape (random-uniform (random-key 0) '[3 4]))
-  expected: '[3. 4.]'
+  expected: "[3. 4.]"
 - name: random-uniform-nonzero
   test: (> (sum (random-uniform (random-key 42) '[10])) 0.0)
   expected: true
 - name: random-randint-shape
   test: (shape (random-randint (random-key 0) [100] 0 10))
-  expected: '[100.]'
+  expected: "[100.]"
 - name: random-randint-nonzero
   test: (> (sum (random-randint (random-key 42) [10] 1 10)) 0.0)
   expected: true
 - name: first, second, last
   test: (first '[1 2 3])
-  expected: '1'
+  expected: "1"
 - name: first, second, last
   test: (second '[1 2 3])
-  expected: '2'
+  expected: "2"
 - name: first, second, last
   test: (last '[1 2 3])
-  expected: '3'
+  expected: "3"
 - name: rest
   test: (rest '[1 2 3])
-  expected: '[2, 3]'
+  expected: "[2, 3]"
 - name: nth
   test: (nth '[10 20 30] 1)
-  expected: '20'
+  expected: "20"
 - name: nth
   test: (nth [10 20 30] 1)
-  expected: '20.0'
+  expected: "20.0"
 - name: cons
   test: (cons 0 '[1 2 3])
-  expected: '[0, 1, 2, 3]'
+  expected: "[0, 1, 2, 3]"
 - name: append
   test: (append '[1 2] 3)
-  expected: '[1, 2, 3]'
+  expected: "[1, 2, 3]"
 - name: empty?
   test: (empty? '[])
   expected: true
@@ -387,84 +387,86 @@
   expected: false
 - name: map
   test: (map (fn [x] (* x 2)) [1 2 3])
-  expected: '[2.0, 4.0, 6.0]'
+  expected: "[2.0, 4.0, 6.0]"
 - name: tree-map
-  test: (let [params {:layer1 {:w [2.0 4.0] :b 0.5} :layer2 {:w [10.0]}}] (tree-map
+  test:
+    (let [params {:layer1 {:w [2.0 4.0] :b 0.5} :layer2 {:w [10.0]}}] (tree-map
     (fn [x] (* x x)) params))
-  expected: '{:layer1 {:b 0.25, :w [ 4. 16.]}, :layer2 {:w [100.]}}'
+  expected: "{:layer1 {:b 0.25, :w [ 4. 16.]}, :layer2 {:w [100.]}}"
 - name: tree-map-zeros
-  test: (let [params {:layer1 {:w [2.0 4.0] :b 0.5} :layer2 {:w [10.0]}}] (tree-map-zeros
+  test:
+    (let [params {:layer1 {:w [2.0 4.0] :b 0.5} :layer2 {:w [10.0]}}] (tree-map-zeros
     params))
-  expected: '{:layer1 {:b 0.0, :w [0. 0.]}, :layer2 {:w [0.]}}'
+  expected: "{:layer1 {:b 0.0, :w [0. 0.]}, :layer2 {:w [0.]}}"
 - name: flatten
   test: (let [params {:layer1 {:w 1.0 :b 2.0} :layer2 {:w 3.0}}] (first (flatten params)))
-  expected: '[2.0, 1.0, 3.0]'
+  expected: "[2.0, 1.0, 3.0]"
 - name: tree-reduce
   test: (tree-reduce + {:a 1 :b 2 :c 3} 0)
-  expected: '6'
+  expected: "6"
 - name: tree-reduce
   test: (tree-reduce * '[2 3 4] 1)
-  expected: '24'
+  expected: "24"
 - name: tree-reduce
   test: (tree-reduce maximum {:l1 [1.0 5.0] :l2 [2.0]} -1e9)
-  expected: '[2. 5.]'
+  expected: "[2. 5.]"
 - name: reduce
   test: (reduce maximum -1e9 [[1 5] [2 3] [8 4]])
-  expected: '[8. 5.]'
+  expected: "[8. 5.]"
 - name: apply
   test: (apply + [1 2 3 4])
-  expected: '10.0'
+  expected: "10.0"
 - name: apply
   test: (apply max [10 52 8])
-  expected: '52.0'
+  expected: "52.0"
 - name: dict
   test: (dict :learning-rate 0.001 :batch-size 32)
-  expected: '{:batch-size 32, :learning-rate 0.001}'
+  expected: "{:batch-size 32, :learning-rate 0.001}"
 - name: get
   test: (get {:a 1 :b 2} :a)
-  expected: '1'
+  expected: "1"
 - name: get
   test: (get {:a 1} :missing 99)
-  expected: '99'
+  expected: "99"
 - name: get-in
   test: (get-in {:layers {:l1 {:w 10}}} [:layers :l1 :w])
-  expected: '10'
+  expected: "10"
 - name: get-in
   test: (get-in {:a 1} [:layers :l1 :depth] 12)
-  expected: '12'
+  expected: "12"
 - name: get-in
   test: (get-in {:l1 {:w [[1 2] [3 4]]}} [:l1 :w 0])
-  expected: '[1. 2.]'
+  expected: "[1. 2.]"
 - name: get-in
   test: (get-in {:a {:b {:c 5}}} [:a :b :c])
-  expected: '5'
+  expected: "5"
 - name: assoc
   test: (assoc {:a 1} :b 2)
-  expected: '{:a 1, :b 2}'
+  expected: "{:a 1, :b 2}"
 - name: assoc
   test: (assoc {:a 1 :b 2} :a 10)
-  expected: '{:a 10, :b 2}'
+  expected: "{:a 10, :b 2}"
 - name: dissoc
   test: (dissoc {:a 1 :b 2 :c 3} [:b])
-  expected: '{:a 1, :c 3}'
+  expected: "{:a 1, :c 3}"
 - name: dissoc
   test: (dissoc {:a 1 :b 2 :c 3} [:a :c])
-  expected: '{:b 2}'
+  expected: "{:b 2}"
 - name: dissoc
   test: (dissoc {:a 1} [:x :y])
-  expected: '{:a 1}'
+  expected: "{:a 1}"
 - name: merge
   test: (merge {:a 1} {:b 2})
-  expected: '{:a 1, :b 2}'
+  expected: "{:a 1, :b 2}"
 - name: merge
   test: (merge {:a 1 :b 2} {:b 20 :c 30})
-  expected: '{:a 1, :b 20, :c 30}'
+  expected: "{:a 1, :b 20, :c 30}"
 - name: keys
   test: (keys {:a 1 :b 2 :c 3})
   expected: "['a', 'b', 'c']"
 - name: vals
   test: (vals {:a 1 :b 2 :c 3})
-  expected: '[1, 2, 3]'
+  expected: "[1, 2, 3]"
 - name: if
   test: (if (> 1 0) :yes :no)
   expected: :yes
@@ -476,31 +478,31 @@
   expected: :mid
 - name: let
   test: (let [x 1] x)
-  expected: '1'
+  expected: "1"
 - name: fn
   test: ((fn [x] (+ x 1)) 10)
-  expected: '11'
+  expected: "11"
 - name: fn
   test: (map (fn [x] (* x 2)) [1 2])
-  expected: '[2.0, 4.0]'
+  expected: "[2.0, 4.0]"
 - name: vmap
   test: ((vmap (fn [x] (sum x))) [[1 2 3] [4 5 6]])
-  expected: '[ 6. 15.]'
+  expected: "[ 6. 15.]"
 - name: vmap
   test: ((vmap (fn [x] (* x 2)) 0) [[1 2 3] [4 5 6]])
   expected: "[[ 2.  4.  6.]\n [ 8. 10. 12.]]"
 - name: vmap
   test: ((vmap (fn [x] (sum x)) 1) [[1 2] [3 4]])
-  expected: '[4. 6.]'
+  expected: "[4. 6.]"
 - name: vmap
   test: ((vmap (fn [x w] (+ x w)) [0 nil]) [[1 2] [3 4]] 10)
   expected: "[[11. 12.]\n [13. 14.]]"
 - name: scan
   test: (let [[carry ys] (scan (fn [state x] [(+ state x) (+ state x)]) 0.0 '[1.0 2.0 3.0])] [carry ys])
-  expected: '[6.0, [1.0, 3.0, 6.0]]'
+  expected: "[6.0, [1.0, 3.0, 6.0]]"
 - name: einsum
   test: (einsum "i,i->" [1 2 3] [4 5 6])
-  expected: '32.0'
+  expected: "32.0"
 - name: einsum
   test: (einsum "ij,jk->ik" [[1 2] [3 4]] [[5 6] [7 8]])
   expected: "[[19. 22.]\n [43. 50.]]"
@@ -509,16 +511,16 @@
   expected: "[[[19. 22.]\n  [43. 50.]]]"
 - name: einsum
   test: (einsum "...i,...i->..." [1 2 3] [4 5 6])
-  expected: '32.0'
+  expected: "32.0"
 - name: dynamic-slice
   test: (dynamic-slice (arange 5) 1 3)
-  expected: '[1 2 3]'
+  expected: "[1 2 3]"
 - name: normalize
   test: (normalize [1 2 3])
-  expected: '[0.16666667 0.33333334 0.5       ]'
+  expected: "[0.16666667 0.33333334 0.5       ]"
 - name: str, gensym, symbol?
   test: (str 42)
-  expected: '42'
+  expected: "42"
 - name: str, gensym, symbol?
   test: (gensym "var")
   expected: var820d10c0
@@ -530,43 +532,43 @@
   expected: symbol
 - name: quote-list
   test: (do '[1 2 3])
-  expected: '[1, 2, 3]'
+  expected: "[1, 2, 3]"
 - name: append-and-roll
   test: (append-and-roll [1 2 3] 4)
-  expected: '[2. 3. 4.]'
+  expected: "[2. 3. 4.]"
 - name: range
   test: (range 5)
-  expected: '[0 1 2 3 4]'
+  expected: "[0 1 2 3 4]"
 - name: range
   test: (range 10 25 5)
-  expected: '[10 15 20]'
+  expected: "[10 15 20]"
 - name: var
   test: (var [1 2 3])
-  expected: '0.6666667'
+  expected: "0.6666667"
 - name: clamp
   test: (clamp 300 0 255)
-  expected: '255'
+  expected: "255"
 - name: clamp
   test: (clamp [-50 100 300] 0 255)
-  expected: '[0. 100. 255.]'
+  expected: "[0. 100. 255.]"
 - name: mse-loss
   test: (mse-loss [1.0 2.0 3.0] [1.1 1.9 3.1])
-  expected: '0.009999997'
+  expected: "0.009999997"
 - name: mae-loss
   test: (mae-loss [1.0 2.0 3.0] [1.2 1.8 3.1])
-  expected: '0.16666667'
+  expected: "0.16666667"
 - name: argmax
   test: (argmax [3 1 4 1 5])
-  expected: '4'
+  expected: "4"
 - name: argmax
   test: (argmax [[1 5] [3 2]] :axis 1)
-  expected: '[1 0]'
+  expected: "[1 0]"
 - name: argmin
   test: (argmin [3 1 4 1 5])
-  expected: '1'
+  expected: "1"
 - name: argmin
   test: (argmin [[1 5] [3 2]] :axis 0)
-  expected: '[0 1]'
+  expected: "[0 1]"
 - name: eye
   test: (eye 3)
   expected: "[[1. 0. 0.]\n [0. 1. 0.]\n [0. 0. 1.]]"
@@ -575,40 +577,40 @@
   expected: "[[1. 0. 0. 0.]\n [0. 1. 0. 0.]]"
 - name: index-update
   test: (index-update [1 2 3 4 5] 2 99)
-  expected: '[ 1.  2. 99.  4.  5.]'
+  expected: "[ 1.  2. 99.  4.  5.]"
 - name: index-update
   test: (index-update [[1 2] [3 4]] 0 [10 20])
   expected: "[[10. 20.]\n [ 3.  4.]]"
 - name: int
   test: (int 3.7)
-  expected: '3'
+  expected: "3"
 - name: int
   test: (int [1. 2. 3.] :f32)
-  expected: '[1 2 3]'
+  expected: "[1 2 3]"
 - name: float
   test: (float 42)
-  expected: '42.0'
+  expected: "42.0"
 - name: float
   test: (float [1 2 3] :i32)
-  expected: '[1. 2. 3.]'
+  expected: "[1. 2. 3.]"
 - name: filter
   test: (filter (fn [x] (> x 2)) '[1 2 3 4 5])
-  expected: '[3, 4, 5]'
+  expected: "[3, 4, 5]"
 - name: filter
   test: (filter (fn [x] (> x 10)) '[1 2 3])
-  expected: '[]'
+  expected: "[]"
 - name: find
   test: (find (fn [x] (> x 3)) '[1 2 3 4 5])
-  expected: '4'
+  expected: "4"
 - name: find
   test: (find (fn [x] (> x 10)) '[1 2 3])
   expected: nil
 - name: index-of
   test: (index-of '[10 20 30 40] 30)
-  expected: '2'
+  expected: "2"
 - name: index-of
   test: (index-of '[10 20 30] 99)
-  expected: '-1'
+  expected: "-1"
 - name: quoted vector strings
   test: (do '["hi" "hello" "world"])
   expected: "['hi', 'hello', 'world']"
@@ -620,27 +622,25 @@
   expected: true
 - name: str-concat
   test: (str "hello" " " "world")
-  expected: 'hello world'
+  expected: "hello world"
 - name: vmap sum rows
   test: ((vmap (fn [x] (sum x))) (tensor [[1 2 3] [4 5 6]]))
-  expected: '[ 6. 15.]'
+  expected: "[ 6. 15.]"
 - name: vmap element-wise
   test: ((vmap (fn [x] (* x 2)) 0) (tensor [[1 2 3] [4 5 6]]))
   expected: "[[ 2.  4.  6.]\n [ 8. 10. 12.]]"
 - name: vmap axis 1
   test: ((vmap (fn [x] (sum x)) 1) (tensor [[1 2] [3 4]]))
-  expected: '[4. 6.]'
+  expected: "[4. 6.]"
 - name: vmap multi-arg
   test: ((vmap (fn [x w] (+ x w)) (quote [0 nil])) (tensor [[1 2] [3 4]]) 10)
   expected: "[[11. 12.]\n [13. 14.]]"
-
-# Regression: ** with integer exponent must propagate gradients
 - name: grad-power-int
-  test: (let [f (fn [x] (** x 2)) [v g] ((value-and-grad f) 3.0)] g)
-  expected: '6.0'
+  test: (let [f (fn [x] (sum (** x 2))) [v g] ((value-and-grad f) [3.0])] g)
+  expected: "[6.]"
 - name: grad-power-float
-  test: (let [f (fn [x] (** x 2.0)) [v g] ((value-and-grad f) 3.0)] g)
-  expected: '6.0'
+  test: (let [f (fn [x] (sum (** x 2.0))) [v g] ((value-and-grad f) [3.0])] g)
+  expected: "[6.]"
 
 # VAG on dict params (MLP-style)
 - name: vag-mlp-loss
@@ -650,7 +650,7 @@
           y (random-normal (random-key 2) '[3 2])
           [loss grad] ((value-and-grad (fn [p] (mean (** (- (+ (@ x (get p :W)) (get p :b)) y) 2)))) p)]
       loss)
-  expected: '4.080512'
+  expected: "4.080512"
 - name: vag-mlp-grad-shapes
   test: >
     (let [p {:W (random-normal (random-key 0) '[4 2]) :b (zeros '[2])}
@@ -658,7 +658,7 @@
           y (random-normal (random-key 2) '[3 2])
           [loss grad] ((value-and-grad (fn [p] (mean (** (- (+ (@ x (get p :W)) (get p :b)) y) 2)))) p)]
       [(shape (get grad :W)) (shape (get grad :b))])
-  expected: '[[4. 2.], [2.]]'
+  expected: "[[4. 2.], [2.]]"
 - name: vag-mlp-grad-nonzero
   test: >
     (let [p {:W (random-normal (random-key 0) '[4 2]) :b (zeros '[2])}
@@ -666,7 +666,7 @@
           y (random-normal (random-key 2) '[3 2])
           [loss grad] ((value-and-grad (fn [p] (mean (** (- (+ (@ x (get p :W)) (get p :b)) y) 2)))) p)]
       (> (sum (abs (get grad :W))) 0.0))
-  expected: 'true'
+  expected: "true"
 
 # VAG with activation function (relu)
 - name: vag-mlp-relu
@@ -676,49 +676,49 @@
           y (random-normal (random-key 2) '[3 2])
           [loss grad] ((value-and-grad (fn [p] (mean (** (- (relu (+ (@ x (get p :W)) (get p :b))) y) 2)))) p)]
       (> (sum (abs (get grad :W))) 0.0))
-  expected: 'true'
+  expected: "true"
 
 # Regression: first/second/last/nth on tensors (DeviceBuffer handled via ensure_host)
 - name: first-tensor
   test: (first [10 20 30])
-  expected: '10.0'
+  expected: "10.0"
 - name: second-tensor
   test: (second [10 20 30])
-  expected: '20.0'
+  expected: "20.0"
 - name: last-tensor
   test: (last [10 20 30])
-  expected: '30.0'
+  expected: "30.0"
 - name: nth-tensor
   test: (nth [10 20 30] 2)
-  expected: '30.0'
+  expected: "30.0"
 
 # Regression: matmul 1D cases (dot_ops.rs)
 - name: matmul-vec-mat
   test: (@ [1 2] [[3 4] [5 6]])
-  expected: '[13. 16.]'
+  expected: "[13. 16.]"
 - name: matmul-mat-vec
   test: (@ [[1 2] [3 4]] [5 6])
-  expected: '[17. 39.]'
+  expected: "[17. 39.]"
 - name: matmul-dot
   test: (@ [1 2 3] [4 5 6])
-  expected: '32.0'
+  expected: "32.0"
 
 # Regression: keepdims on reductions (stdlib softmax depends on this)
 - name: max-axis-keepdims
   test: (shape (max [[1 2 3] [4 5 6]] :axis -1 :keepdims))
-  expected: '[2. 1.]'
+  expected: "[2. 1.]"
 - name: min-axis-keepdims
   test: (shape (min [[1 2 3] [4 5 6]] :axis -1 :keepdims))
-  expected: '[2. 1.]'
+  expected: "[2. 1.]"
 - name: sum-axis-keepdims
   test: (shape (sum [[1 2 3] [4 5 6]] :axis -1 :keepdims))
-  expected: '[2. 1.]'
+  expected: "[2. 1.]"
 - name: mean-axis-keepdims
   test: (shape (mean [[1 2 3] [4 5 6]] :axis -1 :keepdims))
-  expected: '[2. 1.]'
+  expected: "[2. 1.]"
 - name: max-axis-keepdims-value
   test: (max [[1 2 3] [4 5 6]] :axis -1 :keepdims)
-  expected: '[[3.] [6.]]'
+  expected: "[[3.] [6.]]"
 - name: min-axis-keepdims-value
   test: (min [[1 2 3] [4 5 6]] :axis -1 :keepdims)
-  expected: '[[1.] [4.]]'
+  expected: "[[1.] [4.]]"

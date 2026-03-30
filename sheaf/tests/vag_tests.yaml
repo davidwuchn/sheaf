@@ -1,0 +1,129 @@
+# Autodiff (value-and-grad) regression tests.
+# Expected values computed by finite differences
+
+# Arithmetic
+- name: vag-add
+  test: ((value-and-grad (fn [x] (sum (+ x [10.0 20.0])))) [1.0 2.0])
+  expected: "[33.0, [1. 1.]]"
+- name: vag-sub
+  test: ((value-and-grad (fn [x] (sum (- x [10.0 20.0])))) [1.0 2.0])
+  expected: "[-27.0, [1. 1.]]"
+- name: vag-neg
+  test: ((value-and-grad (fn [x] (sum (- x)))) [1.0 2.0])
+  expected: "[-3.0, [-1. -1.]]"
+- name: vag-mul
+  test: ((value-and-grad (fn [x] (sum (* x [3.0 4.0])))) [1.0 2.0])
+  expected: "[11.0, [3. 4.]]"
+- name: vag-div
+  test: ((value-and-grad (fn [x] (sum (/ x [2.0 4.0])))) [1.0 2.0])
+  expected: "[1.0, [0.5 0.25]]"
+- name: vag-pow
+  test: ((value-and-grad (fn [x] (sum (** x 3.0)))) [1.0 2.0])
+  expected: "[9.0, [3. 12.]]"
+
+# Math
+- name: vag-exp
+  test: ((value-and-grad (fn [x] (sum (exp x)))) [0.0 1.0])
+  expected: "[3.7182817, [1. 2.7182817]]"
+- name: vag-log
+  test: ((value-and-grad (fn [x] (sum (log x)))) [1.0 2.0])
+  expected: "[0.6931472, [1. 0.5]]"
+- name: vag-sqrt
+  test: ((value-and-grad (fn [x] (sum (sqrt x)))) [4.0 9.0])
+  expected: "[5.0, [0.25 0.16666667]]"
+- name: vag-abs
+  test: ((value-and-grad (fn [x] (sum (abs x)))) [-3.0 2.0])
+  expected: "[5.0, [-1. 1.]]"
+- name: vag-tanh
+  test: ((value-and-grad (fn [x] (sum (tanh x)))) [0.0 1.0])
+  expected: "[0.7615942, [1. 0.4199743]]"
+
+# Activations
+- name: vag-relu
+  test: ((value-and-grad (fn [x] (sum (relu x)))) [-1.0 2.0])
+  expected: "[2.0, [0. 1.]]"
+- name: vag-sigmoid
+  test: ((value-and-grad (fn [x] (sum (sigmoid x)))) [0.0])
+  expected: "[0.5, [0.25]]"
+- name: vag-gelu
+  test: ((value-and-grad (fn [x] (sum (gelu x)))) [0.0 1.0])
+  expected: "[0.841192, [0.5 1.0829641]]"
+- name: vag-softmax
+  test: ((value-and-grad (fn [x] (sum (* (softmax x :axis -1) [1.0 0.0 0.0])))) [1.0 2.0 3.0])
+  expected: "[0.09003057, [0.08192507 -0.022033045 -0.05989203]]"
+- name: vag-log-softmax
+  test: ((value-and-grad (fn [x] (sum (log-softmax x :axis -1)))) [1.0 2.0 3.0])
+  expected: "[-4.222818, [0.7299083 0.2658146 -0.9957229]]"
+
+# Reductions
+- name: vag-sum
+  test: ((value-and-grad (fn [x] (sum x))) [1.0 2.0 3.0])
+  expected: "[6.0, [1. 1. 1.]]"
+- name: vag-mean
+  test: ((value-and-grad (fn [x] (mean x))) [1.0 2.0 3.0])
+  expected: "[2.0, [0.33333334 0.33333334 0.33333334]]"
+- name: vag-maximum
+  test: ((value-and-grad (fn [x] (sum (maximum x 0.0)))) [-1.0 2.0 -3.0])
+  expected: "[2.0, [0. 1. 0.]]"
+
+# Tensor ops
+- name: vag-matmul
+  test: ((value-and-grad (fn [w] (sum (@ [[1.0 2.0]] w)))) [[1.0 0.0] [0.0 1.0]])
+  expected: "[3.0, [[1. 1.] [2. 2.]]]"
+- name: vag-einsum
+  test: >
+    ((value-and-grad (fn [w] (sum (einsum "ij,jk->ik" [[1.0 2.0]] w))))
+     [[1.0 0.0] [0.0 1.0]])
+  expected: "[3.0, [[1. 1.] [2. 2.]]]"
+- name: vag-slice
+  test: ((value-and-grad (fn [x] (sum (slice x 0 2)))) [1.0 2.0 3.0 4.0])
+  expected: "[3.0, [1. 1. 0. 0.]]"
+
+# Embedding lookup (gather)
+- name: vag-get-embedding
+  test: ((value-and-grad (fn [emb] (sum (get emb [0 1])))) [[1.0 2.0] [3.0 4.0] [5.0 6.0]])
+  expected: "[10.0, [[1. 1.] [1. 1.] [0. 0.]]]"
+- name: vag-get-embedding-repeated
+  test: ((value-and-grad (fn [emb] (sum (get emb [0 0 1])))) [[1.0 2.0] [3.0 4.0] [5.0 6.0]])
+  expected: "[13.0, [[2. 2.] [1. 1.] [0. 0.]]]"
+
+# Control flow
+- name: vag-where
+  test: ((value-and-grad (fn [x] (sum (where (> x 0.0) x (* x 0.1))))) [-2.0 3.0])
+  expected: "[2.8, [0.1 1.]]"
+
+# Composed (stdlib)
+- name: vag-cross-entropy-loss
+  test: >
+    ((value-and-grad (fn [w] (cross-entropy-loss (@ [[1.0 2.0 3.0]] w) [2])))
+     [[1.0 0.0 0.0] [0.0 1.0 0.0] [0.0 0.0 1.0]])
+  expected: "[0.40760595, [[0.09003057 0.24472848 -0.33475906] [0.18006115 0.48945695 -0.6695181] [0.2700917 0.73418546 -1.0042772]]]"
+- name: vag-let-lambda
+  test: >
+    (let [f (fn [x w] (sum (@ x w)))]
+      ((value-and-grad (fn [w] (f [[1.0 2.0]] w))) [[1.0 0.0] [0.0 1.0]]))
+  expected: "[3.0, [[1. 1.] [2. 2.]]]"
+
+- name: vag-layer-norm
+  test: >
+    ((value-and-grad (fn [x] (sum (* (layer-norm x {:gamma [2.0 1.0] :beta [0.0 0.0]} -1)
+                                     (layer-norm x {:gamma [2.0 1.0] :beta [0.0 0.0]} -1)))))
+     [3.0 5.0])
+  expected: "[4.99995, [-0.000049591064 0.000049591064]]"
+
+- name: vag-dict-capture
+  test: >
+    (let [cfg {:scale 0.5}]
+      ((value-and-grad (fn [w] (* (get cfg :scale) (sum (@ [[1.0 2.0]] w)))))
+       [[1.0 0.0] [0.0 1.0]]))
+  expected: "[1.5, [[0.5 0.5] [1. 1.]]]"
+
+- name: vag-defn-calling-defn
+  test: >
+    (defn inner [x w] (sum (@ x w)))
+    ((value-and-grad (fn [w] (inner [[1.0 2.0]] w))) [[1.0 0.0] [0.0 1.0]])
+  expected: "[3.0, [[1. 1.] [2. 2.]]]"
+
+- name: one-hot-2d-shape
+  test: (shape (one-hot [[0 1] [2 0]] 3))
+  expected: "[2. 2. 3.]"
