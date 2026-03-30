@@ -258,25 +258,45 @@ Threading macros help avoid deeply nested function calls. Choose based on your d
       (sigmoid (+ (@ h W) b)))))
 ```
 
-### Pattern 2: Transformer Block
+### Pattern 2: Token & Position Embeddings
+
+```sheaf
+;; Embedding = table lookup via (get table indices)
+;; No nn.Embedding class needed: a tensor IS the embedding table.
+;; No .long() needed: [0 1 2] works directly as indices.
+
+(let [;; Params: token table [V, D], position table [B, D]
+      tok-table (get params :token)   ;; [vocab_size, d_model]
+      pos-table (get params :pos)     ;; [block_size, d_model]
+      T (get (shape inputs) -1)
+
+      ;; Lookup: (get table indices) gathers rows by index
+      tok-emb (get tok-table inputs)                      ;; [Batch, T] -> [Batch, T, D]
+      pos-emb (reshape (get pos-table (range T)) [1 T D]) ;; [T, D] -> [1, T, D]
+
+      X (+ tok-emb pos-emb)]
+  X)
+```
+
+### Pattern 3: Transformer Block
 
 ```sheaf
 (defn transformer-block [x layer-p config]
   (as-> x h
-    ;; 1. Self-Attention
+    ;; 1. Self-Attention (layer-norm is built-in: (layer-norm x params axis))
     (-> h
-        (layer-norm (get layer-p :ln1) 2)
+        (layer-norm (get layer-p :ln1) -1)
         (multi-head-attention layer-p config)
         (first)
         (+ h))  ;; Residual 1
     ;; 2. MLP
     (-> h
-        (layer-norm (get layer-p :ln2) 2)
+        (layer-norm (get layer-p :ln2) -1)
         (mlp (get layer-p :mlp))
         (+ h)))) ;; Residual 2
 ```
 
-### Pattern 3: Training Loop with Adam
+### Pattern 4: Training Loop with Adam
 
 ```sheaf
 (defn train-step [params m v t inputs targets config]
@@ -287,7 +307,7 @@ Threading macros help avoid deeply nested function calls. Choose based on your d
     {:loss loss :params new-params :m new-m :v new-v :t new-t}))
 ```
 
-### Pattern 4: Einsum for Multi-Head Attention
+### Pattern 5: Einsum for Multi-Head Attention
 
 ```sheaf
 ;; Q, K, V projections [Batch, Heads, Time, Head_dim]
@@ -297,7 +317,7 @@ Threading macros help avoid deeply nested function calls. Choose based on your d
   ...)
 ```
 
-### Pattern 5: Batching with vmap
+### Pattern 6: Batching with vmap
 
 ```sheaf
 ;; Define single-sample forward pass
@@ -311,167 +331,46 @@ Threading macros help avoid deeply nested function calls. Choose based on your d
   batch-results)
 ```
 
+### Complete Working Examples
+
+These are tested, runnable examples from the Sheaf repository:
+
+- **MLP**: [model](https://raw.githubusercontent.com/sheaf-lang/sheaf/main/examples/mlp/mlp.shf) / [training](https://raw.githubusercontent.com/sheaf-lang/sheaf/main/examples/mlp/run.shf)
+- **NanoGPT** (small Transformer): [model](https://raw.githubusercontent.com/sheaf-lang/sheaf/main/examples/nanoGPT/model.shf) / [inference](https://raw.githubusercontent.com/sheaf-lang/sheaf/main/examples/nanoGPT/sample.shf) / [training](https://raw.githubusercontent.com/sheaf-lang/sheaf/main/examples/nanoGPT/train.shf)
+
 ---
 
 ## Practical Training Guide
 
 This section provides complete, production-ready patterns for training neural networks in Sheaf.
 
-### Complete End-to-End Training Example
+### Training Checklist
+
+The essential training pattern in Sheaf:
 
 ```sheaf
-;; Define the model
-(defn forward [x params]
-  (as-> x h
-    (with-params [params :l1]
-      (relu (+ (@ h W) b)))
-    (with-params [params :l2]
-      (sigmoid (+ (@ h W) b)))))
-
-;; Training step with proper gradient computation
 (defn train-step [params m v t x y lr]
   (let [loss-fn (fn [p] (mse-loss (forward x p) y))
         [loss grads] ((value-and-grad loss-fn) params)
         [new-p new-m new-v new-t] (adam-step params grads m v t lr 0.9 0.999 1e-8)]
     {:params new-p :m new-m :v new-v :t new-t :loss loss}))
-
-;; Evaluation (no gradient computation)
-(defn evaluate [params x y]
-  (let [predictions (forward x params)
-        loss (mse-loss predictions y)]
-    loss))
 ```
 
-**Building blocks in pure Sheaf:**
+**Hyperparameters:** Start with `lr=0.01`, Adam betas `0.9/0.999`. If loss is NaN, reduce lr to `0.001` and check weight initialization.
 
-Initialization with Xavier scaling:
+**If training doesn't converge:**
 
-```sheaf
-(defn init-layer [key input-size output-size]
-  (let [scale (sqrt (/ 2.0 (+ input-size output-size)))
-        W (random-normal key '[input-size output-size])]
-    {:W (* W scale)
-     :b (zeros '[output-size])}))
-```
+- Loss is NaN → use proper initialization (`xavier-normal` for tanh/sigmoid, `kaiming-normal` for relu/gelu), reduce learning rate
+- Loss is constant → run with `--guard no-nan` to catch NaN/Inf in any function return value:
+  ```bash
+  sheaf train.shf --guard no-nan              # check all functions
+  sheaf train.shf --guard forward:no-nan      # check specific function
+  sheaf train.shf --guard loss:range:0:20     # check value stays in range
+  ```
+- Use `--trace` to inspect shapes and values at each function call
+- Last resort: `(clip-by-global-norm grads 1.0)` to cap gradient magnitude
 
-Training step with gradient computation:
-
-```sheaf
-(defn train-step [params loss-fn x y lr]
-  (let [[loss grads] ((value-and-grad loss-fn) params)]
-    {:p (sgd-step params grads lr)
-     :loss loss}))
-```
-
-Loop pattern for n training steps:
-
-```sheaf
-(defn train-epoch [params loss-fn xs ys lr n-steps]
-  (reduce (fn [state _]
-            (let [result (train-step (get state :p) loss-fn xs ys lr)]
-              {:p (get result :p)
-               :loss (get result :loss)}))
-          {:p params :loss 0.0}
-          (range n-steps)))
-```
-
-Multi-epoch training with progress reporting:
-
-```sheaf
-(defn train-model [params loss-fn xs ys lr n-epochs steps-per-epoch]
-  (reduce (fn [state epoch]
-            (let [epoch-result (train-epoch (get state :p) loss-fn xs ys lr steps-per-epoch)
-                  loss-val (get epoch-result :loss)]
-              (print "epoch {} loss: {:.6f}" epoch loss-val)
-              {:p (get epoch-result :p)
-               :loss loss-val
-               :epoch epoch}))
-          {:p params :loss 0.0 :epoch 0}
-          (range n-epochs)))
-```
-
-### Weight Initialization Strategies
-
-**Why it matters:** Poor initialization causes slow convergence or NaN losses.
-
-| Strategy            | Best For              | Function               |
-| ------------------- | --------------------- | ---------------------- |
-| **Xavier Normal**   | `tanh`, `sigmoid`     | `init-xavier-normal`   |
-| **Xavier Uniform**  | `tanh`, `sigmoid`     | `init-xavier-uniform`  |
-| **Kaiming Normal**  | `relu`, `elu`, `gelu` | `init-kaiming-normal`  |
-| **Kaiming Uniform** | `relu`, `elu`, `gelu` | `init-kaiming-uniform` |
-| **LeCun Normal**    | `selu` activation     | `init-lecun-normal`    |
-| **LeCun Uniform**   | `selu` activation     | `init-lecun-uniform`   |
-| **Orthogonal**      | RNNs, Transformers    | `init-orthogonal`      |
-| **Zero**            | Biases                | `(zeros shape)`        |
-
-### Loss Functions: When to Use Which
-
-| Loss Function                                | Use Case              | Notes                      |
-| -------------------------------------------- | --------------------- | -------------------------- |
-| `(mse-loss pred target)`                     | Regression            | Sensitive to outliers      |
-| `(mae-loss pred target)`                     | Robust regression     | Less sensitive to outliers |
-| `(cross-entropy-loss logits targets)`        | Multi-class           | Targets are integer labels |
-
-### Hyperparameter Recommendations
-
-**Learning Rate (most critical):**
-
-- Start with `0.01` for most problems
-- If loss is NaN or exploding: decrease to `0.001`
-- If convergence is very slow: try `0.1` (but monitor for instability)
-
-**Adam Optimizer (default choice):**
-
-```sheaf
-;; Standard configuration
-(adam-step params grads m v t lr 0.9 0.999 1e-8)
-;;                             beta1  beta2   eps
-```
-
-### Debugging Training: Common Problems and Solutions
-
-#### Problem 1: Loss is NaN
-
-**Common causes:** Learning rate too high, numerical instability, large weight init.
-
-```sheaf
-;; Reduce learning rate
-(adam-step params grads m v t 0.001 ...)
-
-;; Add gradient clipping
-(let [clipped-grads (clip-by-global-norm grads 1.0)]
-  (adam-step params clipped-grads m v t lr 0.9 0.999 1e-8))
-```
-
-#### Problem 2: Loss is Constant (Not Decreasing)
-
-**Common causes:** Gradients are zero, learning rate too small, broken computation graph.
-
-```sheaf
-;; Check that gradients are non-zero
-(let [loss-fn (fn [p] (mse-loss (forward x p) y))
-      [loss grads] ((value-and-grad loss-fn) params)
-      _ (guard :no-nan grads)]
-  ...)
-```
-
-#### Problem 3: Vanishing/Exploding Gradients
-
-```sheaf
-;; Clip gradients for stability
-(let [clipped (clip-by-global-norm grads 1.0)]
-  (adam-step params clipped m v t lr 0.9 0.999 1e-8))
-```
-
-### Architecture Guidelines for Different Problem Types
-
-| Problem        | Hidden Size | Activation | Layers   |
-| -------------- | ----------- | ---------- | -------- |
-| XOR (2→1)      | 4-8         | ReLU       | 1 hidden |
-| MNIST (28²→10) | 128-256     | ReLU       | 2-3      |
-| Regression     | 2x input    | ReLU       | 1-2      |
-| Sequences      | 64-256      | GELU       | 2-4      |
+See the Reference section below for detailed signatures of `adam-step`, `sgd-step`, `cross-entropy-loss`, `mse-loss`, initializers (`xavier-normal`, `kaiming-normal`, etc.), and other training utilities.
 
 ---
 
@@ -619,6 +518,50 @@ Key rules:
 
 ## Common Implementation Mistakes
 
+### Using `def` Instead of `defn`
+
+Sheaf has no `def` (unlike Clojure). Use `defn` for functions, `let` for local bindings.
+
+```sheaf
+;; WRONG:
+(def lr 0.001)          ; ERROR: no `def` in Sheaf
+(def model (fn ...))    ; ERROR: no `def` in Sheaf
+
+;; RIGHT:
+(defn model [x params] ...)   ; Named function
+(let [lr 0.001] ...)          ; Local binding
+```
+
+### Using `list` Instead of `[]`
+
+Sheaf uses `[]` for vectors/tensors, not `list`.
+
+```sheaf
+;; WRONG:
+(list 1 2 3)             ; ERROR: no `list` function
+
+;; RIGHT:
+[1 2 3]                  ; Vector literal
+'[3 4]                   ; Quoted shape (for reshape)
+{:a 1 :b 2}              ; Dict literal
+```
+
+### Unnecessary `cast` for Typed Vectors
+
+Sheaf vectors support inline dtype annotation. No `cast` needed at declaration.
+
+```sheaf
+;; WRONG (PyTorch habit):
+(cast [0 1 2] :i32)          ; Unnecessary function call
+
+;; RIGHT:
+[0 1 2] :i32                 ; Dtype annotation follows the vector
+[1.0 2.0] :bf16              ; BFloat16
+[1 2 3]                      ; Default: f32
+```
+
+`cast` is only needed to convert an _existing_ tensor to a different dtype: `(cast existing-tensor :f32)`.
+
 ### Missing Parentheses Around `defn`
 
 **Wrong:**
@@ -762,7 +705,9 @@ Features:
 - Command history saved to `~/.sheaf_history`
 - Ctrl-D or `:quit` to exit
 
-### Enable Tracing
+### Enable Tracing (Debug Mode)
+
+`--trace` logs every function call with argument shapes and return values. This is the primary debugging tool when training doesn't converge.
 
 ```bash
 # Trace all functions
@@ -771,6 +716,8 @@ sheaf run.shf --trace
 # Trace specific functions only
 sheaf run.shf --trace forward,train-step
 ```
+
+Output shows call tree with shapes, making it easy to spot shape mismatches or unexpected values without adding `print` statements.
 
 ### Use Guards for Runtime Validation
 
@@ -842,47 +789,17 @@ Sheaf uses quoted forms for shapes because they must be compile-time constants:
 
 **Key insight:** Variables inside quotes are never evaluated. If you need dynamic shapes, extract them from existing tensors using `(shape tensor)`.
 
-### Understanding `scan`: State Threading & Temporal Loops
+### Understanding `scan`: State Threading
 
-`scan` is how you write loops with memory (state) that flows through time.
-
-**Basic pattern - accumulator:**
+`scan` threads state through a sequence. The callback returns `[new_state, output]`:
 
 ```sheaf
-(scan (fn [state x]
-        [(+ state x)          ; new state
-         (+ state x)])        ; output
-      0.0                     ; initial state
-      [1.0 2.0 3.0])         ; input sequence
-; => [6.0 [1.0 3.0 6.0]]
+(scan (fn [state x] [(+ state x) (+ state x)])
+      0.0 [1.0 2.0 3.0])
+; => [6.0, [1.0 3.0 6.0]]
 ```
 
-**RNN pattern - state threading:**
-
-```sheaf
-(fn [h_prev x_t]
-  (let [h_next (tanh (+ (@ W_hh h_prev)
-                        (@ W_xh x_t)
-                        b_h))]
-    [h_next h_next]))  ; [new_state, output]
-```
-
-**Critical: Structure matters**
-
-- **First return element** becomes next iteration's state
-- **Second element** is what `scan` accumulates
-- They can be the same or different
-
-```sheaf
-;; Output all hidden states
-[h_next h_next]
-
-;; Output only predictions
-[h_next (@ W_out h_next)]
-
-;; Multiple state components (like LSTM)
-[{:h h_next :c c_next} h_next]
-```
+First return element becomes next iteration's state, second is accumulated. See the Reference section below for detailed examples including RNN patterns and multi-component state.
 
 ### with-params: Accessing Nested Parameters
 
