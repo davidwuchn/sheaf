@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 pub(super) fn register(env: &mut Env) {
     env.set_builtin("print", builtin_print);
+    env.set_builtin("println", builtin_print);
     env.set_builtin("str", builtin_str);
     env.set_builtin("str-call", builtin_str_call);
     env.set_builtin("io", builtin_io);

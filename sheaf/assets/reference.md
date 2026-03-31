@@ -2190,6 +2190,7 @@ Calls a string method on `target`. This is the primary way to manipulate strings
 
 **Type:** function
 **Signature:** `(print arg ...)`, `(print fmt arg1 arg2 ...)`
+**Alias:** `println`
 
 Prints values to stdout. With multiple arguments, values are space-separated. If the first argument is a format string (contains `{}` or `{:`), uses format-string interpolation instead.
 
