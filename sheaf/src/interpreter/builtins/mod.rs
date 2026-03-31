@@ -373,7 +373,14 @@ pub(self) fn shape_from_value(val: &Value) -> Result<Vec<usize>, crate::core::er
             items.iter().map(|v| match v {
                 Value::Int(n) => Ok(*n as usize),
                 Value::Float(f) => Ok(*f as usize),
-                _ => Err(runtime_error("shape must contain integers")),
+                Value::BuiltinFn { name, .. } => Err(runtime_error(format!(
+                    "shape must contain integers, got function '{}'.\n  = hint: Arithmetic inside vectors needs parentheses: e.g, [(* 2 n)], not [* 2 n]",
+                    name
+                ))),
+                _ => Err(runtime_error(format!(
+                    "shape must contain integers, got {}",
+                    v.type_name()
+                ))),
             }).collect()
         }
         Value::Tensor { data, .. } => {

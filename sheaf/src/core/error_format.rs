@@ -167,7 +167,7 @@ fn known_mistake_hint(symbol: &str) -> Option<&'static str> {
             Some("Sheaf is expression-based. The last expression in a body is the return value.")
         }
         "import" | "require" => Some("Sheaf uses 'use' to load modules: (use nn)"),
-        "println" | "print!" => Some("Sheaf uses 'print' (newline is automatic): (print value)"),
+        "print!" => Some("Sheaf uses 'print' (newline is automatic): (print value)"),
         "var" | "const" => Some("Sheaf uses 'let' for local bindings: (let [x 1] body)"),
         "nil?" => Some("Use (= x nil) to check for nil."),
         "list" => Some("Use a quoted vector '[1 2 3] or (cons head tail)."),
@@ -180,6 +180,15 @@ fn known_mistake_hint(symbol: &str) -> Option<&'static str> {
         "defvar" | "defparameter" => {
             Some("Sheaf uses 'defn' for top-level definitions: (defn name [] value)")
         }
+        "loop" | "recur" => Some("Use 'repeat' for counted loops or 'reduce' for accumulation."),
+        "inc" => Some("Use (+ x 1) for incrementation."),
+        "dec" => Some("Use (- x 1) for decrementation."),
+        "format" => Some("Use print with format strings: (print \"x={:.4f}\" x)"),
+        "for" | "foreach" | "for-each" => Some("Use 'map', 'reduce', or 'repeat' for iteration."),
+        "while!" | "loop!" => Some("Use 'while' for conditional loops: (while [state init] cond body)"),
+        "type" | "typeof" | "type-of" => Some("Use (shape x) for tensor shape, (ndim x) for rank."),
+        "append!" | "push" | "push!" => Some("Use 'append' (functional): (append lst item)"),
+        "reverse" | "flip" => Some("Use (get tensor [N-1 ... 1 0]) to reverse. A built-in 'reverse' is planned."),
         _ => None,
     }
 }

@@ -193,7 +193,10 @@ fn builtin_int(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 Ok(Value::tensor_i32(data.mapv(|x| x.floor())))
             }
         }
-        _ => Err(runtime_error(format!("int: cannot convert {}", args[0].type_name()))),
+        _ => Err(runtime_error(format!(
+            "int expects a scalar or tensor, got {}",
+            args[0].type_name()
+        ))),
     }
 }
 
@@ -206,6 +209,9 @@ fn builtin_float(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::Tensor { data, .. } => {
             Ok(Value::Tensor { data: data.clone(), dtype: Dtype::F32 })
         }
-        _ => Err(runtime_error(format!("float: cannot convert {}", args[0].type_name()))),
+        _ => Err(runtime_error(format!(
+            "float expects a scalar or tensor, got {}. Use (sum x) to reduce a tensor to a scalar.",
+            args[0].type_name()
+        ))),
     }
 }
