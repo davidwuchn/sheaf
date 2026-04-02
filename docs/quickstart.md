@@ -52,10 +52,10 @@ sheaf run.shf
 
 Available examples:
 
-- **CLEVR**: A neuro-symbolic model for visual question answering
-- **Hydra**: A self-modifying model that grows during training
-- **MLP**: "Hello World" example of a small multi-layer network to solve XOR
-- **NanoGPT**: A port of Karpathy's nanoGPT in Sheaf
+- **[CLEVR](https://github.com/sheaf-lang/sheaf/tree/main/examples/clevr)**: A neuro-symbolic model for visual question answering
+- **[Hydra](https://github.com/sheaf-lang/sheaf/tree/main/examples/hydra)**: A self-modifying model that grows during training
+- **[MLP](https://github.com/sheaf-lang/sheaf/tree/main/examples/mlp)**: "Hello World" example of a small multi-layer network to solve XOR
+- **[NanoGPT](https://github.com/sheaf-lang/sheaf/tree/main/examples/nanoGPT)**: A port of Karpathy's nanoGPT in Sheaf
 
 ## AI assistant bootstrap
 

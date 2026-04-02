@@ -2,14 +2,13 @@
 
 v2.0.0 — 2026-03-18
 
-Complete rewrite in Rust. The language semantics remain unchanged. All V1 code runs in V2.
+Complete rewrite in Rust, with no Python in the execution path. The language semantics remain unchanged: all V1 code runs in V2.
 
-- Compiler rewritten in Rust: Sheaf source compiles directly to StableHLO MLIR, with no Python in the execution path
-- IREE runtime statically linked
-- Transparent JIT compilation: pure functions compile automatically on first call, with content-hash caching in `__sheaf__/`
-- Symbolic reverse-mode autodiff: differentiation operates on the AST before codegen
+- New architecture: Sheaf source compiles directly to StableHLO MLIR, IREE runtime statically linked and called through FFI.
+- Transparent JIT compilation: pure functions compile automatically on first call, with content-hash caching in **sheaf**/
+- Automatic differentiation via `value-and-grad`
 - DeviceBuffer: compiled functions pass tensors between IREE calls without host round-trips
-- Multiple dtype support: f32 (default), bf16, i32 via `cast` or literal annotation
+- Multiple dtype support: f32 (default), bf16, i32 via cast or literal annotation
 
 v1.2.0 — 2026-02-06
 
