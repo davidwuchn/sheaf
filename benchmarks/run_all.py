@@ -170,7 +170,10 @@ def main():
     parser.add_argument("--runs", type=int, default=RUNS)
     args = parser.parse_args()
 
-    print(f"Sheaf benchmarks: device={args.device}, {args.runs} runs (median)\n")
+    iree_compile = os.environ.get("IREE_COMPILE", "default toolchain")
+    print(f"Sheaf benchmarks: device={args.device}, {args.runs} runs (median)")
+    print(f"  binary: {SHEAF}")
+    print(f"  iree-compile: {iree_compile}\n")
 
     results = {}
 
