@@ -777,18 +777,41 @@ fn distribute_fn_adjoint_named(
         // The adjoint flows to init and coll via the backward scan.
         // get(table, indices): embedding lookup / gather on axis 0.
         // Backward: scatter-add the adjoint into a zeros table.
-        // Implemented as: transpose(one-hot(indices, V)) @ adj
-        // where V = shape(table, 0).
+        // For tensor indices: transpose(one-hot(indices, V)) @ adj
+        // For scalar index:  reshape(one-hot(idx, V), [V,1]) @ reshape(adj, [1,D])
         "get" if args.len() == 2 => {
+            let is_scalar_index = matches!(&args[1],
+                CompiledExpr::Integer(_) | CompiledExpr::Float(_)
+            ) || matches!(&args[1], CompiledExpr::Symbol(s) if {
+                // Check if the symbol's shape in the shape map is scalar
+                shapes.get(s.as_str()).map_or(false, |sh| sh.is_empty() || sh == &[1])
+            });
+
             // V = shape(table)[0]
             let v = emit_binding(bindings, call("shape", vec![args[0].clone(), CompiledExpr::Integer(0)]));
-            // oh = one-hot(indices, V)  -> [N, V]
+            // oh = one-hot(idx, V)  -> [V] for scalar, [N, V] for tensor
             let oh = emit_binding(bindings, call("one-hot", vec![args[1].clone(), sym(&v)]));
-            // oh_t = transpose(oh)  -> [V, N]
-            let oh_t = emit_binding(bindings, call("tr", vec![sym(&oh)]));
-            // grad_table = oh_t @ adj  -> [V, D]
-            let grad = emit_binding(bindings, call("@", vec![sym(&oh_t), adj.clone()]));
-            acc_arg(&args[0], sym(&grad), adj_names, bindings);
+
+            if is_scalar_index {
+                // Scalar index: oh is [V], adj is [D]
+                // grad = reshape(oh, [V, 1]) @ reshape(adj, [1, D])
+                let oh_col = emit_binding(bindings, call("reshape", vec![
+                    sym(&oh),
+                    CompiledExpr::Vector(vec![sym(&v), CompiledExpr::Integer(1)]),
+                ]));
+                let adj_row = emit_binding(bindings, call("reshape", vec![
+                    adj.clone(),
+                    CompiledExpr::Vector(vec![CompiledExpr::Integer(1), CompiledExpr::Integer(-1)]),
+                ]));
+                let grad = emit_binding(bindings, call("@", vec![sym(&oh_col), sym(&adj_row)]));
+                acc_arg(&args[0], sym(&grad), adj_names, bindings);
+            } else {
+                // Tensor indices: oh is [N, V], adj is [N, D]
+                // grad = transpose(oh) @ adj  -> [V, D]
+                let oh_t = emit_binding(bindings, call("tr", vec![sym(&oh)]));
+                let grad = emit_binding(bindings, call("@", vec![sym(&oh_t), adj.clone()]));
+                acc_arg(&args[0], sym(&grad), adj_names, bindings);
+            }
         }
 
         "scan" if args.len() == 3 => {
