@@ -78,6 +78,14 @@
 - name: vag-slice
   test: ((value-and-grad (fn [x] (sum (slice x 0 2)))) [1.0 2.0 3.0 4.0])
   expected: "[3.0, [1. 1. 0. 0.]]"
+- name: vag-slice-axis
+  test: ((value-and-grad (fn [x] (sum (slice x 0 2 :axis -1)))) [[1.0 2.0 3.0] [4.0 5.0 6.0]])
+  expected: "[12.0, [[1. 1. 0.] [1. 1. 0.]]]"
+- name: vag-ce-slice
+  test: >
+    ((value-and-grad (fn [w] (cross-entropy-loss (slice (@ [[1.0 2.0 3.0 4.0]] w) 0 3 :axis -1) [2])))
+     [[1.0 0.0 0.0 0.0] [0.0 1.0 0.0 0.0] [0.0 0.0 1.0 0.0] [0.0 0.0 0.0 1.0]])
+  expected: "[0.40760595, [[0.09003057 0.24472848 -0.33475906 0.] [0.18006115 0.48945695 -0.6695181 0.] [0.2700917 0.73418546 -1.0042772 0.] [0.3601223 0.9789139 -1.3390362 0.]]]"
 
 # Embedding lookup (gather)
 - name: vag-get-embedding

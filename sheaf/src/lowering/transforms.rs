@@ -661,13 +661,27 @@ pub fn try_infer_shape(
                 }
             }
             // slice: (slice tensor start end), axis 0
-            "slice" if args.len() == 3 => {
+            "slice" if args.len() >= 3 => {
                 let tensor_shape = try_infer_shape(&args[0], shapes)?;
                 if tensor_shape.is_empty() { return None; }
+                // Parse optional :axis keyword
+                let mut axis_raw: i64 = 0;
+                for (i, a) in args.iter().enumerate() {
+                    if let CompiledExpr::Keyword(k) = a {
+                        if k == "axis" {
+                            if let Some(CompiledExpr::Integer(n)) = args.get(i + 1) {
+                                axis_raw = *n;
+                            }
+                        }
+                    }
+                }
+                let ndim = tensor_shape.len() as i64;
+                let axis = if axis_raw < 0 { (ndim + axis_raw) as usize } else { axis_raw as usize };
+                if axis >= tensor_shape.len() { return None; }
                 if let (CompiledExpr::Integer(start), CompiledExpr::Integer(end)) = (&args[1], &args[2]) {
-                    let dim0 = end - start;
-                    let mut out = vec![dim0];
-                    out.extend_from_slice(&tensor_shape[1..]);
+                    let sliced_dim = end - start;
+                    let mut out = tensor_shape.clone();
+                    out[axis] = sliced_dim;
                     Some(out)
                 } else {
                     None
