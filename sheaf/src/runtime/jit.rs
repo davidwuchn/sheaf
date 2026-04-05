@@ -535,7 +535,23 @@ impl JitCompiler {
         let wrt_type_str = value_to_stablehlo_type(wrt_arg)
             .map(|t| t.to_mlir())
             .unwrap_or_default();
-        let vag_key = format!("__vag_{:?}_{}", body, wrt_type_str);
+        // Same AST + different scalar values produces a different VMFB.
+        let mut scalar_captures_key: Vec<(String, String)> = closure
+            .iter()
+            .filter(|(name, _)| !name.starts_with("__"))
+            .filter_map(|(name, val)| match val {
+                Value::Float(f) => Some((name.clone(), format!("f{}", f))),
+                Value::Int(n) => Some((name.clone(), format!("i{}", n))),
+                _ => None,
+            })
+            .collect();
+        scalar_captures_key.sort();
+        let scalars_suffix: String = scalar_captures_key
+            .iter()
+            .map(|(n, v)| format!("{}={}", n, v))
+            .collect::<Vec<_>>()
+            .join(",");
+        let vag_key = format!("__vag_{:?}_{}_{}", body, wrt_type_str, scalars_suffix);
         if self.failed_fns.contains(&vag_key) {
             return None;
         }
