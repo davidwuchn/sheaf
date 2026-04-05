@@ -62,15 +62,29 @@ fn builtin_one_hot(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     })? as usize;
     match &args[0] {
         Value::Int(idx) => {
+            let idx_u = *idx as usize;
+            if idx_u >= num_classes {
+                return Err(runtime_error(format!(
+                    "one-hot: index {} is out of bounds for {} classes",
+                    idx_u, num_classes
+                )));
+            }
             let mut data = vec![0.0; num_classes];
-            data[*idx as usize] = 1.0;
+            data[idx_u] = 1.0;
             Ok(Value::tensor_f32(ArrayD::from_shape_vec(IxDyn(&[num_classes]), data).unwrap()))
         }
         Value::Tensor { data: indices, .. } => {
             let n = indices.len();
             let mut result = vec![0.0; n * num_classes];
             for (i, &idx) in indices.iter().enumerate() {
-                result[i * num_classes + idx as usize] = 1.0;
+                let idx_u = idx as usize;
+                if idx_u >= num_classes {
+                    return Err(runtime_error(format!(
+                        "one-hot: index {} is out of bounds for {} classes",
+                        idx_u, num_classes
+                    )));
+                }
+                result[i * num_classes + idx_u] = 1.0;
             }
             // Preserve input shape: [...indices_shape, num_classes]
             let mut out_shape: Vec<usize> = indices.shape().to_vec();
