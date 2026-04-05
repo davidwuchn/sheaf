@@ -55,6 +55,30 @@ use crate::lowering::transforms::{
     resolve_static_constants, unroll_reduces,
 };
 use crate::core::expr::{CompiledExpr, FunctionDef, VmfbSession};
+
+/// Count AST nodes in an expression tree. Used to bail out of JIT
+/// when inlining or unrolling produces a graph that is too large.
+fn expr_node_count(expr: &CompiledExpr) -> usize {
+    match expr {
+        CompiledExpr::FunctionCall { args, .. } => 1 + args.iter().map(expr_node_count).sum::<usize>(),
+        CompiledExpr::Let { bindings, body } => {
+            1 + bindings.iter().map(|(_, v)| expr_node_count(v)).sum::<usize>() + expr_node_count(body)
+        }
+        CompiledExpr::Do(exprs) => 1 + exprs.iter().map(expr_node_count).sum::<usize>(),
+        CompiledExpr::If { condition, then_branch, else_branch } => {
+            1 + expr_node_count(condition) + expr_node_count(then_branch)
+                + else_branch.as_ref().map_or(0, |e| expr_node_count(e))
+        }
+        CompiledExpr::Lambda { body, .. } => 1 + expr_node_count(body),
+        CompiledExpr::LambdaCall { callee, args } => {
+            1 + expr_node_count(callee) + args.iter().map(expr_node_count).sum::<usize>()
+        }
+        CompiledExpr::Vector(elems) => 1 + elems.iter().map(expr_node_count).sum::<usize>(),
+        _ => 1,
+    }
+}
+
+const MAX_VAG_GRAPH_NODES: usize = 10_000;
 use crate::core::inference::{infer_function_signature_with_known, FunctionSignature};
 use crate::core::trace::{value_to_param_layout, value_to_stablehlo_type};
 use crate::interpreter::value::Value;
@@ -688,6 +712,13 @@ impl JitCompiler {
         // Inline user-defined function calls (including closure-captured lambdas)
         body = crate::autodiff::inline_function_calls(&body, &aug_registry);
 
+        // Bail out if inlining produced a graph that is too large
+        let node_count = expr_node_count(&body);
+        if node_count > MAX_VAG_GRAPH_NODES {
+            self.jit_fail(&vag_key, &format!("graph too large after inlining ({} nodes, limit {})", node_count, MAX_VAG_GRAPH_NODES));
+            return None;
+        }
+
         // Fold dict literal gets: (get {:gamma g :beta b} :gamma) -> g
         body = crate::autodiff::fold_dict_gets(&body);
 
@@ -713,6 +744,13 @@ impl JitCompiler {
         body = unroll_reduces(&body, &known_types_vec);
         if crate::core::config::verbosity() >= 2 {
             log_remaining_reduces(&body, "after unroll");
+        }
+
+        // Bail out if unrolling produced a graph that is too large
+        let node_count = expr_node_count(&body);
+        if node_count > MAX_VAG_GRAPH_NODES {
+            self.jit_fail(&vag_key, &format!("graph too large after unrolling ({} nodes, limit {})", node_count, MAX_VAG_GRAPH_NODES));
+            return None;
         }
 
         // Re-lower dict access introduced by unrolling (get on GetTupleElement elements)
