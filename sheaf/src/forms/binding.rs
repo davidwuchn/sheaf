@@ -267,6 +267,47 @@ impl SpecialForm for DefnForm {
     }
 }
 
+/// def - Global constant: (def name value)
+pub struct DefForm;
+
+impl SpecialForm for DefForm {
+    fn name(&self) -> &'static str {
+        "def"
+    }
+
+    fn compile(
+        &self,
+        compiler: &mut CompilerContext,
+        args: &[SheafValue],
+        loc: &SourceLocation,
+    ) -> SheafResult<CompiledExpr> {
+        check_min_arity("def", args, 2, loc)?;
+
+        let name = expect_symbol(&args[0], "def name", loc)?;
+
+        if compiler.registry.contains_key(name) || compiler.local_vars.contains_key(name) {
+            return Err(SheafError::Compile {
+                message: format!(
+                    "'{}' is already defined. Redefinition is not allowed.",
+                    name
+                ),
+                location: loc.clone(),
+            });
+        }
+
+        let value = compiler.compile(&args[1])?;
+
+        // Store the original AST value so the compiler can inline it at reference sites.
+        // This allows def constants to work inside JIT-traced functions.
+        compiler.local_vars.insert(name.to_string(), args[1].clone());
+
+        Ok(CompiledExpr::Def {
+            name: name.to_string(),
+            value: Box::new(value),
+        })
+    }
+}
+
 /// let - Local bindings: (let [var1 val1 var2 val2] body)
 pub struct LetForm;
 

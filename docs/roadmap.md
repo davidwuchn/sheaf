@@ -9,8 +9,6 @@ These are the planned features for the next releases of Sheaf.
 
 ### Language
 
-- **`def` for global constants**: Immutable top-level bindings, as in Clojure. While not required per-se, it eliminates the need to pass configuration dictionaries everywhere.
-
 - **`loop` / `recur`**: Explicit tail-recursive loops. Sheaf uses `repeat`, but `loop` and `recur` are more natural for someone coming from Clojure.
 
 - **`reverse` / `flip`**: Reverse a tensor along an axis. Currently requires manual index construction.

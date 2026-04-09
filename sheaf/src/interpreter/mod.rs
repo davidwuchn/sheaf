@@ -93,6 +93,12 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
             })
         }
 
+        CompiledExpr::Def { name, value } => {
+            let val = eval(value, env)?;
+            env.set_global(name, val.clone());
+            Ok(val)
+        }
+
         CompiledExpr::Let { bindings, body } => {
             env.push_scope();
             for (name, expr) in bindings {

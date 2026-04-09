@@ -387,11 +387,19 @@ impl CompilerContext {
 
         // Check local variables
         if let Some(val) = self.local_vars.get(name).cloned() {
-            // If the value is a fn form, recompile it to get a Lambda.
-            if let SheafValue::List(ref elems, _) = val {
-                if elems.first().and_then(|e| e.as_symbol()) == Some("fn") {
+            // Compile-time constants (from def): inline the value directly.
+            // This allows def values to work inside JIT-traced functions.
+            match &val {
+                SheafValue::Integer(_, _)
+                | SheafValue::Float(_, _)
+                | SheafValue::String(_, _)
+                | SheafValue::Vector(_, _) => return self.compile(&val),
+                SheafValue::List(elems, _)
+                    if elems.first().and_then(|e| e.as_symbol()) == Some("fn") =>
+                {
                     return self.compile(&val);
                 }
+                _ => {}
             }
             return Ok(CompiledExpr::Symbol(name.to_string()));
         }
@@ -437,6 +445,7 @@ impl CompilerContext {
         use crate::forms::*;
 
         let result = match op {
+            "def" => DefForm.compile(self, args, loc),
             "defn" => DefnForm.compile(self, args, loc),
             "defmacro" => binding::DefmacroForm.compile(self, args, loc),
             "let" => LetForm.compile(self, args, loc),
@@ -594,6 +603,12 @@ pub enum CompiledExpr {
         check: GuardCheck,
         expr: Box<CompiledExpr>,
     },
+    /// Global constant binding: (def name value)
+    /// Evaluates value once and binds the result to name in the global environment.
+    Def {
+        name: String,
+        value: Box<CompiledExpr>,
+    },
 }
 
 /// Manual Debug impl: omits `loc` from FunctionCall to keep cache keys stable.
@@ -664,6 +679,9 @@ impl std::fmt::Debug for CompiledExpr {
             }
             Self::Guard { check, expr } => {
                 f.debug_struct("Guard").field("check", check).field("expr", expr).finish()
+            }
+            Self::Def { name, value } => {
+                f.debug_struct("Def").field("name", name).field("value", value).finish()
             }
         }
     }

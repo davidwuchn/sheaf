@@ -228,8 +228,13 @@ impl SpecialForm for UseForm {
         let pre_fns: std::collections::HashSet<String> =
             compiler.registry.keys().cloned().collect();
 
+        // Collect def expressions so they get evaluated at runtime (binds globals).
+        let mut defs = Vec::new();
         for expr in &exprs {
-            compiler.compile(expr)?;
+            let compiled = compiler.compile(expr)?;
+            if matches!(&compiled, CompiledExpr::Def { .. }) {
+                defs.push(compiled);
+            }
         }
 
         // Try to load companion VMFB for the imported module
@@ -247,7 +252,11 @@ impl SpecialForm for UseForm {
         // Restore previous current_dir
         compiler.current_dir = prev_dir;
 
-        Ok(CompiledExpr::Nil)
+        if defs.is_empty() {
+            Ok(CompiledExpr::Nil)
+        } else {
+            Ok(CompiledExpr::Do(defs))
+        }
     }
 }
 

@@ -1756,7 +1756,28 @@ Evaluates expressions in a local scope where each variable name is bound to its 
 
 ---
 
-## Function Definition
+## Definitions
+
+### def
+
+**Type:** special-form
+**Signature:** `(def name value)`
+
+Binds a global name to an immutable value. The value is evaluated once at definition time. Redefinition is not allowed. Use `def` for constants, configuration, and shared data that does not change.
+
+```sheaf
+(def scale 2.0)
+(defn double [x] (* x scale))
+(double 21.0)            ; => 42.0
+
+(def colors ["red" "green" "blue"])
+(first colors)            ; => "red"
+
+(def mask [1 0 1 0])
+(sum mask)                ; => 2.0
+```
+
+---
 
 ### defn
 

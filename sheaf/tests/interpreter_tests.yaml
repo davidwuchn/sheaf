@@ -722,3 +722,31 @@
 - name: min-axis-keepdims-value
   test: (min [[1 2 3] [4 5 6]] :axis -1 :keepdims)
   expected: "[[1.] [4.]]"
+
+# def (global constants)
+- name: def-scalar
+  test: >
+    (def x 42)
+    x
+  expected: "42"
+- name: def-tensor
+  test: >
+    (def mask [1 0 1 0])
+    (sum mask)
+  expected: "2.0"
+- name: def-string
+  test: >
+    (def greeting "hello")
+    greeting
+  expected: "hello"
+- name: def-used-in-defn
+  test: >
+    (def scale 2.0)
+    (defn double [x] (* x scale))
+    (double 21.0)
+  expected: "42.0"
+- name: def-list
+  test: >
+    (def colors ["red" "green" "blue"])
+    (first colors)
+  expected: "red"

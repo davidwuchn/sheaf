@@ -22,7 +22,7 @@ pub mod utils;
 use std::collections::HashMap;
 
 pub use base::SpecialForm;
-pub use binding::{DefmacroForm, DefnForm, FnForm, LetForm};
+pub use binding::{DefForm, DefmacroForm, DefnForm, FnForm, LetForm};
 pub use control::{CaseForm, DoForm, GuardForm, IfForm, RepeatForm, WhileForm};
 pub use flow::{ThreadAsForm, ThreadFirstForm};
 pub use ml::WithParamsForm;
@@ -44,6 +44,7 @@ pub fn special_forms_registry() -> HashMap<&'static str, Box<dyn SpecialForm>> {
     let mut forms: HashMap<&'static str, Box<dyn SpecialForm>> = HashMap::new();
 
     // Binding forms
+    forms.insert("def", Box::new(DefForm));
     forms.insert("defn", Box::new(DefnForm));
     forms.insert("let", Box::new(LetForm));
     forms.insert("fn", Box::new(FnForm));

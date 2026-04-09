@@ -128,6 +128,12 @@ impl Env {
         }
     }
 
+    pub fn set_global(&mut self, name: &str, val: Value) {
+        if let Some(scope) = self.scopes.first_mut() {
+            scope.insert(name.to_string(), val);
+        }
+    }
+
     pub fn set_builtin(&mut self, name: &str, func: BuiltinFnPtr) {
         self.set(name, Value::BuiltinFn {
             name: name.to_string(),

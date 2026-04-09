@@ -170,6 +170,7 @@ nil              ; None
 **Binding & Scope**
 
 ```sheaf
+(def name value)                     ; Global immutable constant
 (let [x val y val2] body)            ; Sequential local bindings
 (with-params params body)            ; Auto-destructure dict (:W, :b, etc.)
 ```
@@ -518,18 +519,17 @@ Key rules:
 
 ## Common Implementation Mistakes
 
-### Using `def` Instead of `defn`
+### Choosing Between `def`, `defn`, and `let`
 
-Sheaf has no `def` (unlike Clojure). Use `defn` for functions, `let` for local bindings.
+Use `def` for global constants, `defn` for functions, `let` for local bindings.
 
 ```sheaf
-;; WRONG:
-(def lr 0.001)          ; ERROR: no `def` in Sheaf
-(def model (fn ...))    ; ERROR: no `def` in Sheaf
+(def lr 0.001)                ; Global constant
+(def colors ["red" "green"])  ; Global list
 
-;; RIGHT:
 (defn model [x params] ...)   ; Named function
-(let [lr 0.001] ...)          ; Local binding
+
+(let [tmp (* x 2)] ...)       ; Local binding (scoped)
 ```
 
 ### Using `list` Instead of `[]`

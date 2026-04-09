@@ -158,7 +158,7 @@ fn token_length_at(line: &str, col: usize) -> usize {
 
 fn known_mistake_hint(symbol: &str) -> Option<&'static str> {
     match symbol {
-        "def" | "define" => Some("Sheaf uses 'defn' for definitions: (defn name [args] body)"),
+        "define" => Some("Sheaf uses 'def' for constants and 'defn' for functions."),
         "lambda" => Some("Sheaf uses 'fn' for anonymous functions: (fn [args] body)"),
         "set!" => {
             Some("Sheaf is purely functional. Use 'let' for bindings or 'assoc' for dicts.")
@@ -178,7 +178,7 @@ fn known_mistake_hint(symbol: &str) -> Option<&'static str> {
         "begin" | "progn" => Some("Sheaf uses 'do' for sequencing: (do expr1 expr2 ...)"),
         "car" | "cdr" => Some("Use 'first' and 'rest': (first xs), (rest xs)"),
         "defvar" | "defparameter" => {
-            Some("Sheaf uses 'defn' for top-level definitions: (defn name [] value)")
+            Some("Sheaf uses 'def' for constants: (def name value)")
         }
         "loop" | "recur" => Some("Use 'repeat' for counted loops or 'reduce' for accumulation."),
         "inc" => Some("Use (+ x 1) for incrementation."),
