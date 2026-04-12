@@ -116,8 +116,14 @@ fn builtin_slice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         return Ok(Value::String(s[start..end.min(s.len())].to_string()));
     }
     let (arr, _dt) = to_array(&args[0])?;
+    if arr.ndim() == 0 {
+        return Err(runtime_error("slice: cannot slice a 0-dimensional tensor"));
+    }
     let axis_raw = kw.get("axis").and_then(|v| v.to_f64()).map(|v| v as i64).unwrap_or(0);
     let axis = if axis_raw < 0 { (arr.ndim() as i64 + axis_raw) as usize } else { axis_raw as usize };
+    if axis >= arr.ndim() {
+        return Err(runtime_error(format!("slice: axis {} out of bounds for tensor with {} dimensions", axis_raw, arr.ndim())));
+    }
     let start = args[1].to_f64().unwrap() as usize;
     let end = if args.len() > 2 { args[2].to_f64().unwrap() as usize } else { arr.shape()[axis] };
     let sliced = arr.slice_axis(ndarray::Axis(axis), ndarray::Slice::from(start..end));
@@ -218,17 +224,25 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                     .map_err(|e| runtime_error(format!("get: gather reshape: {}", e)))?;
                 return Ok(Value::tensor_f32(arr));
             }
-            return Err(runtime_error(format!("get: cannot index tensor with {}", args[1])));
+            // Check if it's a quoted list of numbers
+            if let Value::List(items) = &args[1] {
+                if items.iter().all(|v| matches!(v, Value::Int(_) | Value::Float(_))) {
+                    return Err(runtime_error(format!(
+                        "get: expected tensor index, got quoted list.\n  = hint: use [...] (tensor) instead of '[...] (quoted list)."
+                    )));
+                }
+            }
+            return Err(runtime_error(format!("get: expected integer or tensor index, got {}", args[1].type_name())));
         }
         Value::List(items) => {
             let f = args[1].to_f64()
-                .ok_or_else(|| runtime_error(format!("get: cannot index list with {}", args[1])))?;
+                .ok_or_else(|| runtime_error(format!("get: expected integer index, got {}", args[1].type_name())))?;
             let idx = resolve_idx(f, items.len());
             items.get(idx).cloned().ok_or_else(|| runtime_error("get: index out of bounds"))
         }
         Value::String(s) => {
             let f = args[1].to_f64()
-                .ok_or_else(|| runtime_error(format!("get: cannot index string '{}' with {}", s, args[1])))?;
+                .ok_or_else(|| runtime_error(format!("get: expected integer index, got {}", args[1].type_name())))?;
             let idx = resolve_idx(f, s.chars().count());
             s.chars().nth(idx)
                 .map(|c| Value::String(c.to_string()))
