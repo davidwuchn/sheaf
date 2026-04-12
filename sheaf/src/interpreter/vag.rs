@@ -130,7 +130,7 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
                                 &traced, params, &leaf_map.leaves, env,
                             ).map_err(|e| {
                                 env.pop_scope();
-                                runtime_error(format!("value-and-grad -> {}", e.short_message()))
+                                runtime_error(format!("value-and-grad: {}", e.short_message()))
                             })?;
                             env.pop_scope();
                             return Ok(Value::List(vec![Value::Float(loss), grad_tree]));

@@ -377,6 +377,10 @@ pub(self) fn shape_from_value(val: &Value) -> Result<Vec<usize>, crate::core::er
                     "shape must contain integers, got function '{}'.\n  = hint: Arithmetic inside vectors needs parentheses: e.g, [(* 2 n)], not [* 2 n]",
                     name
                 ))),
+                Value::String(s) if s.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) => Err(runtime_error(format!(
+                    "shape must contain integers, got symbol '{}'.\n  = hint: Variables inside quotes are never evaluated. Use [{}] (unquoted) or extract from tensor with (shape t).",
+                    s, s
+                ))),
                 _ => Err(runtime_error(format!(
                     "shape must contain integers, got {}",
                     v.type_name()

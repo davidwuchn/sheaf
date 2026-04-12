@@ -167,10 +167,10 @@ fn known_mistake_hint(symbol: &str) -> Option<&'static str> {
             Some("Sheaf is expression-based. The last expression in a body is the return value.")
         }
         "import" | "require" => Some("Sheaf uses 'use' to load modules: (use nn)"),
-        "print!" => Some("Sheaf uses 'print' (newline is automatic): (print value)"),
+        "print!" => Some("Sheaf uses 'print': (print value)."),
         "var" | "const" => Some("Sheaf uses 'let' for local bindings: (let [x 1] body)"),
         "nil?" => Some("Use (= x nil) to check for nil."),
-        "list" => Some("Use a quoted vector '[1 2 3] or (cons head tail)."),
+        "list" => Some("Use a quoted vector: '[1 2 3]."),
         "cond" => {
             Some("Use 'case' for multi-branch: (case pred1 val1 pred2 val2 default)")
         }

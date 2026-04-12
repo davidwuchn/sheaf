@@ -149,10 +149,14 @@ fn parse_shape(val: &Value) -> Result<Vec<usize>, crate::core::error::SheafError
         Value::List(items) => items.iter().map(|v| match v {
             Value::Int(n) => Ok(*n as usize),
             Value::Float(f) => Ok(*f as usize),
-            _ => Err(runtime_error("Invalid shape: expected a list of integers")),
+            Value::String(s) if s.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) => Err(runtime_error(format!(
+                "Invalid shape: expected integer, got symbol '{}'.\n  = hint: Variables inside quotes are never evaluated. Use [{}] (unquoted) or extract from tensor with (shape t).",
+                s, s
+            ))),
+            v => Err(runtime_error(format!("Invalid shape: expected integer, got {}", v.type_name()))),
         }).collect(),
         Value::Tensor { data, .. } => data.iter().map(|&x| Ok(x as usize)).collect(),
-        _ => Err(runtime_error("Invalid shape: expected a list of integers")),
+        v => Err(runtime_error(format!("Invalid shape: expected list or tensor, got {}", v.type_name()))),
     }
 }
 

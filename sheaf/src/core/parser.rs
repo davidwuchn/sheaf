@@ -439,8 +439,9 @@ impl Parser {
             match self.peek() {
                 None => {
                     let hint = self.indentation_hint(&start_loc, &elements);
+                    let head = elements.first().and_then(|e| e.as_symbol()).unwrap_or("...");
                     return Err(SheafError::Parse {
-                        message: format!("Unclosed list{}", hint),
+                        message: format!("Unclosed ({} ...), missing ')'{}", head, hint),
                         location: start_loc,
                     });
                 }
@@ -480,7 +481,7 @@ impl Parser {
                 None => {
                     let hint = self.indentation_hint(&start_loc, &elements);
                     return Err(SheafError::Parse {
-                        message: format!("Unclosed vector{}", hint),
+                        message: format!("Unclosed [...], missing ']'{}", hint),
                         location: start_loc,
                     });
                 }
@@ -504,7 +505,7 @@ impl Parser {
             match self.peek() {
                 None => {
                     return Err(SheafError::Parse {
-                        message: "Unclosed dict".to_string(),
+                        message: "Unclosed {...}, missing '}'".to_string(),
                         location: start_loc,
                     });
                 }
@@ -539,14 +540,14 @@ pub fn parse(source: &str, filename: impl Into<String>) -> ParseResult<Vec<Sheaf
     let tokens = tokenizer.tokenize()?;
     let mut parser = Parser::new(tokens);
     parser.parse_all().map_err(|e| {
-        // Enrich "Unexpected closing" errors with paren balance info
         if let SheafError::Parse { ref message, ref location } = e {
+            let balance = count_paren_balance(source);
+            // Enrich "Unexpected closing" errors with paren balance info
             if message.contains("Unexpected closing") && !message.contains("hint:") {
-                let balance = count_paren_balance(source);
                 if balance.extra_close > 0 {
                     return SheafError::Parse {
                         message: format!(
-                            "{}\n  = hint: File has {} extra closing delimiter{}. \
+                            "{}\n  = hint: Found {} extra closing delimiter{}. \
                              Check the line above for a ) that closes an expression too early.",
                             message,
                             balance.extra_close,
@@ -556,6 +557,24 @@ pub fn parse(source: &str, filename: impl Into<String>) -> ParseResult<Vec<Sheaf
                     };
                 }
             }
+            // Enrich "Unclosed" errors with count of missing delimiters
+            if message.starts_with("Unclosed") && balance.unclosed > 0 {
+                let hint = if balance.unclosed == 1 {
+                    "Add 1 closing delimiter at the end.".to_string()
+                } else {
+                    format!("Add {} closing delimiters at the end.", balance.unclosed)
+                };
+                let new_message = if message.contains("\n  = hint:") {
+                    // Already has a hint, append our count
+                    format!("{}\n  = hint: {}", message, hint)
+                } else {
+                    format!("{}\n  = hint: {}", message, hint)
+                };
+                return SheafError::Parse {
+                    message: new_message,
+                    location: location.clone(),
+                };
+            }
         }
         e
     })
@@ -563,6 +582,7 @@ pub fn parse(source: &str, filename: impl Into<String>) -> ParseResult<Vec<Sheaf
 
 struct ParenBalance {
     extra_close: usize,
+    unclosed: usize,
 }
 
 fn count_paren_balance(source: &str) -> ParenBalance {
@@ -609,7 +629,7 @@ fn count_paren_balance(source: &str) -> ParenBalance {
         }
         prev_char = ch;
     }
-    ParenBalance { extra_close }
+    ParenBalance { extra_close, unclosed: depth.max(0) as usize }
 }
 
 #[cfg(test)]

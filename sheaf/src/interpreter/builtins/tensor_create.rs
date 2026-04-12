@@ -117,8 +117,19 @@ fn builtin_tensor(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 let data: Vec<f32> = items.iter().map(|v| v.to_f64().unwrap() as f32).collect();
                 let arr = ArrayD::from_shape_vec(IxDyn(&[data.len()]), data).unwrap();
                 Ok(Value::tensor_f32(arr))
+            } else if items.is_empty() {
+                Err(runtime_error("tensor: cannot create tensor from empty list"))
             } else {
-                Err(runtime_error("tensor: expected a list of numbers, got a list with non-numeric elements"))
+                let first_bad = items.iter().find(|v| !matches!(v, Value::Int(_) | Value::Float(_))).unwrap();
+                let hint = if matches!(first_bad, Value::Tensor { .. }) {
+                    "\n  = hint: To combine a list of tensors, use (apply concat list-of-tensors)."
+                } else {
+                    ""
+                };
+                Err(runtime_error(format!(
+                    "tensor: expected a list of numbers, got a list containing {}.{}",
+                    first_bad.type_name(), hint
+                )))
             }
         }
         Value::Tensor { .. } => Ok(args[0].clone()),
