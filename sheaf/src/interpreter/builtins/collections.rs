@@ -258,18 +258,39 @@ fn builtin_dict(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     Ok(Value::Dict(map))
 }
 
-fn builtin_sort(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+fn builtin_sort(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
+    let reverse = matches!(kw.get("reverse"), Some(Value::Bool(true)));
+
     match args.first() {
         Some(Value::List(items)) => {
             let mut sorted = items.clone();
             sorted.sort_by(|a, b| {
                 let ka = sort_key(a);
                 let kb = sort_key(b);
-                ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+                let ord = ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal);
+                if reverse { ord.reverse() } else { ord }
             });
             Ok(Value::List(sorted))
         }
-        other => Err(runtime_error(format!("sort: expected a list, got {}", other.map(|v| v.type_name()).unwrap_or("nothing")))),
+        Some(Value::Tensor { data, dtype }) => {
+            let axis = super::get_axis(kw).unwrap_or(-1);
+            let ax = if axis < 0 { (data.ndim() as i64 + axis) as usize } else { axis as usize };
+
+            let mut result = (**data).clone();
+            for mut lane in result.lanes_mut(ndarray::Axis(ax)) {
+                let mut v: Vec<f32> = lane.iter().copied().collect();
+                if reverse {
+                    v.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+                } else {
+                    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                }
+                for (dst, src) in lane.iter_mut().zip(v.iter()) {
+                    *dst = *src;
+                }
+            }
+            Ok(Value::Tensor { data: std::sync::Arc::new(result), dtype: *dtype })
+        }
+        other => Err(runtime_error(format!("sort: expected a list or tensor, got {}", other.map(|v| v.type_name()).unwrap_or("nothing")))),
     }
 }
 
