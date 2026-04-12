@@ -773,6 +773,10 @@ fn distribute_fn_adjoint_named(
             acc_arg(&args[0], adj.clone(), adj_names, bindings);
         }
 
+        "second" if args.len() == 1 => {
+            acc_arg(&args[0], adj.clone(), adj_names, bindings);
+        }
+
         // scan(lambda, init, coll): emit a __scan_vjp__ call that the codegen compiles.
         // The adjoint flows to init and coll via the backward scan.
         // get(table, indices): embedding lookup / gather on axis 0.
@@ -820,6 +824,20 @@ fn distribute_fn_adjoint_named(
                 args[1].clone(),  // init
                 args[2].clone(),  // coll
                 adj.clone(),      // adj of scan result (carry adjoint)
+            ]));
+            // __scan_vjp__ returns [adj_init, adj_coll]: extract with first/second
+            let adj_init = emit_binding(bindings, call("first", vec![sym(&vjp_result)]));
+            let adj_coll = emit_binding(bindings, call("second", vec![sym(&vjp_result)]));
+            acc_arg(&args[1], sym(&adj_init), adj_names, bindings);
+            acc_arg(&args[2], sym(&adj_coll), adj_names, bindings);
+        }
+
+        "reduce" if args.len() == 3 => {
+            let vjp_result = emit_binding(bindings, call("__scan_vjp__", vec![
+                args[0].clone(),  // lambda
+                args[1].clone(),  // init
+                args[2].clone(),  // coll
+                adj.clone(),      // adj of reduce result (final carry adjoint)
             ]));
             // __scan_vjp__ returns [adj_init, adj_coll]: extract with first/second
             let adj_init = emit_binding(bindings, call("first", vec![sym(&vjp_result)]));
