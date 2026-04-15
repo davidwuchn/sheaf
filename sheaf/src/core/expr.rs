@@ -441,7 +441,7 @@ impl CompilerContext {
         loc: &crate::core::error::SourceLocation,
     ) -> Option<SheafResult<CompiledExpr>> {
         // Static dispatch to special forms
-        use crate::forms::ml::{GradForm, ValueAndGradForm, WithParamsForm};
+        use crate::forms::ml::{ValueAndGradForm, WithParamsForm};
         use crate::forms::*;
 
         let result = match op {
@@ -466,7 +466,6 @@ impl CompilerContext {
             "last" => LastForm.compile(self, args, loc),
             "use" => UseForm.compile(self, args, loc),
             "with-params" => WithParamsForm.compile(self, args, loc),
-            "grad" => GradForm.compile(self, args, loc),
             "value-and-grad" => ValueAndGradForm.compile(self, args, loc),
             _ => return None, // Not a special form
         };
@@ -947,43 +946,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_grad_form_wrt_b() {
-        // (grad (+ (@ x W) b) :wrt b) = 1.0  (b enters via Add, so grad is 1)
-        let mut ctx = CompilerContext::new();
-        ctx.local_vars.insert(
-            "x".to_string(),
-            SheafValue::Symbol("x".to_string(), SourceLocation::unknown()),
-        );
-        ctx.local_vars.insert(
-            "W".to_string(),
-            SheafValue::Symbol("W".to_string(), SourceLocation::unknown()),
-        );
-        ctx.local_vars.insert(
-            "b".to_string(),
-            SheafValue::Symbol("b".to_string(), SourceLocation::unknown()),
-        );
-
-        let expr = make_list(vec![
-            make_symbol("grad"),
-            make_list(vec![
-                make_symbol("+"),
-                make_list(vec![make_symbol("@"), make_symbol("x"), make_symbol("W")]),
-                make_symbol("b"),
-            ]),
-            SheafValue::Keyword("wrt".to_string(), SourceLocation::unknown()),
-            make_symbol("b"),
-        ]);
-
-        let result = ctx.compile(&expr).unwrap();
-        println!("grad(linear, b) = {:?}", result);
-
-        // After simplify: grad of (x @ W) wrt b = 0.0, grad of b wrt b = 1.0
-        // Add(0.0, 1.0) -> 1.0
-        assert!(
-            matches!(result, CompiledExpr::Float(f) if f == 1.0),
-            "Expected Float(1.0), got: {:?}",
-            result
-        );
-    }
 }

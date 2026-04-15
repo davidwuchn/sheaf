@@ -209,6 +209,15 @@ impl Value {
         }
     }
 
+    pub fn contains_tensors(&self) -> bool {
+        match self {
+            Value::Tensor { .. } | Value::DeviceBuffer(_) => true,
+            Value::List(items) | Value::Tuple(items) => items.iter().any(|v| v.contains_tensors()),
+            Value::Dict(map) => map.values().any(|v| v.contains_tensors()),
+            _ => false,
+        }
+    }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Int(_) => "int",

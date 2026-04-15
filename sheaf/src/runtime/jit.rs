@@ -744,7 +744,7 @@ impl JitCompiler {
         }
         body = lower_inlined_gets(&body, &param_index_maps);
 
-        // Unroll reduces so grad_simplified can differentiate through them
+        // Unroll reduces so reverse_grad can differentiate through them
         let known_types_vec: Vec<(String, StableHLOType)> = sig
             .param_types
             .iter()

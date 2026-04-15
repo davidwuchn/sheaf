@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! Value-and-grad: automatic differentiation via tracing and finite differences.
+//! Value-and-grad: automatic differentiation.
 
 use crate::core::expr::CompiledExpr;
 use crate::core::error::SheafError;
@@ -14,18 +14,12 @@ use std::sync::Arc;
 use super::{eval, call_function};
 
 /// (value-and-grad f) -> returns a function that, given params, returns [loss, grad_params].
-///
-/// Gradient computed by central finite differences: grad[i] ≈ (f(p+h) - f(p-h)) / 2h
-/// Applied element-wise to every leaf tensor in the params pytree.
 pub(super) fn eval_value_and_grad_hof(args: &[Value], _env: &mut Env) -> Result<Value, SheafError> {
     if args.len() != 1 {
         return Err(runtime_error("value-and-grad: expected exactly 1 argument (the function)"));
     }
     let func = args[0].clone();
 
-    // Return a Value::Function closure that captures `func`.
-    // When called with params, call_function detects __vag_fn__ and dispatches
-    // to eval_value_and_grad_call which computes (loss, grad) via finite differences.
     Ok(Value::Function {
         name: None,
         params: vec!["__vag_params__".to_string()],
@@ -36,17 +30,20 @@ pub(super) fn eval_value_and_grad_hof(args: &[Value], _env: &mut Env) -> Result<
 
 /// Evaluate a value-and-grad HOF call.
 ///
-/// Tries JIT compilation first, then symbolic autodiff with tracing.
-/// Raises a fatal error if differentiation fails.
+/// Tries JIT first. Falls back to tracing (resolves non-tensor ops, then
+/// symbolic AD) for functions the JIT cannot compile (e.g. string captures).
 pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Result<Value, SheafError> {
-    // Skip when tracing -- interpreter must run to expose the autodiff call tree
     #[cfg(iree_runtime)]
     if env.tracer.is_none() {
         match super::iree_dispatch::try_jit_vag(func, params, env) {
             Some(result) => return result,
             None => {
-                // JIT failed: fall through to symbolic autodiff.
-                // This path should only be reached for simple expressions.
+                if params.contains_tensors() {
+                    return Err(runtime_error(
+                        "value-and-grad: JIT compilation failed for tensor parameters \
+                         (see -vv output for details). This is an issue with Sheaf."
+                    ));
+                }
             }
         }
     }
@@ -57,9 +54,6 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
         if fn_params.len() == 1 {
             let param_name = &fn_params[0];
 
-            // Build an augmented registry that includes closure-captured functions.
-            // This lets inline_function_calls resolve calls to local lambdas
-            // (e.g., `let [f (fn ...)] ((value-and-grad (fn [w] (f ...))) ...)`).
             let mut aug_registry = env.registry.clone();
             for (name, val) in closure {
                 if let Value::Function { params: fp, body: fb, .. } = val {
@@ -81,8 +75,8 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
             }
             let inlined = inline_function_calls(body, &aug_registry);
 
+            // Direct symbolic path for pure-tensor expressions
             if !contains_undiffable_ops(&inlined) {
-                // Direct symbolic path: no structural ops to trace
                 env.push_scope();
                 for (name, val) in closure {
                     env.set(name, val.clone());
@@ -98,8 +92,8 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
                 return Ok(Value::List(vec![Value::Float(loss), grad_val]));
             }
 
-            // Evaluate structural ops (get, reduce) with concrete values,
-            // keep tensor ops symbolic, then differentiate.
+            // Tracing path: evaluate non-tensor ops (string gets, comparisons)
+            // with the interpreter, keep tensor ops symbolic, then differentiate.
             {
                 use crate::autodiff::trace::{trace_expr, LeafMap};
 
@@ -136,9 +130,6 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
                             return Ok(Value::List(vec![Value::Float(loss), grad_tree]));
                         }
                         env.pop_scope();
-                        return Err(runtime_error(
-                            "value-and-grad: tracing produced undifferentiable ops (this is a bug in the autodiff engine)"
-                        ));
                     }
                     Err(e) => {
                         env.pop_scope();
@@ -165,10 +156,6 @@ fn scalar_from_value(val: &Value) -> Result<f32, SheafError> {
     }
 }
 
-/// Build a gradient pytree from traced symbolic autodiff.
-///
-/// For each leaf tensor in the params tree, find the corresponding leaf symbol
-/// in the leaf_map, compute its symbolic gradient, and evaluate it.
 fn build_grad_from_leaves(
     traced_expr: &CompiledExpr,
     params: &Value,
@@ -178,7 +165,6 @@ fn build_grad_from_leaves(
     use crate::autodiff::grad_simplified;
     use std::collections::HashMap;
 
-    // Pre-compute all leaf gradients (one grad_simplified per leaf).
     let mut leaf_grads: HashMap<String, Value> = HashMap::new();
     for (sym, _val) in leaves {
         let grad_expr = grad_simplified(traced_expr, sym);
@@ -186,13 +172,10 @@ fn build_grad_from_leaves(
         leaf_grads.insert(sym.clone(), grad_val);
     }
 
-    // Reconstruct the gradient pytree by matching param leaves to leaf_map entries
-    // by data equality. Tracer order may differ from the params tree traversal order.
     build_grad_tree_by_value(params, leaves, &leaf_grads)
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
-    // Materialize DeviceBuffers for comparison
     let a_host = a.ensure_host().ok();
     let b_host = b.ensure_host().ok();
     let a = a_host.as_ref().unwrap_or(a);
@@ -214,9 +197,7 @@ fn build_grad_tree_by_value(
 ) -> Result<Value, SheafError> {
     match params {
         Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::DeviceBuffer(_) => {
-            // Materialize DeviceBuffer for comparison
             let params_host = params.ensure_host().unwrap_or_else(|_| params.clone());
-            // Find the leaf that matches this param value
             for (sym, leaf_val) in leaves {
                 if values_equal(&params_host, leaf_val) {
                     if let Some(grad_val) = leaf_grads.get(sym) {
@@ -224,8 +205,6 @@ fn build_grad_tree_by_value(
                     }
                 }
             }
-            // No matching leaf found == this param wasn't used in the expression.
-            // Return zeros with the same shape.
             Ok(zeros_like(&params_host))
         }
         Value::Dict(map) => {
@@ -262,10 +241,6 @@ fn zeros_like(val: &Value) -> Value {
     }
 }
 
-/// Reduce a gradient tensor to match the parameter's shape.
-/// When an op broadcasts a param (e.g., bias [1] -> [4,1]),
-/// the symbolic gradient has the broadcasted shape. Sum over
-/// the extra leading dimensions to get back to param shape.
 fn reduce_grad_to_param_shape(grad: &Value, param: &Value) -> Result<Value, SheafError> {
     match (grad, param) {
         (Value::Tensor { data: g_data, dtype }, Value::Tensor { data: p_data, .. }) => {
@@ -274,9 +249,6 @@ fn reduce_grad_to_param_shape(grad: &Value, param: &Value) -> Result<Value, Shea
             if g_shape == p_shape {
                 return Ok(grad.clone());
             }
-            // Sum over leading batch dimensions
-            // e.g., grad [4,1] + param [1] -> sum axis 0 -> [1]
-            // e.g., grad [4,2,1] + param [2,1] -> sum axis 0 -> [2,1]
             let g_ndim = g_shape.len();
             let p_ndim = p_shape.len();
             if g_ndim > p_ndim {
@@ -285,7 +257,6 @@ fn reduce_grad_to_param_shape(grad: &Value, param: &Value) -> Result<Value, Shea
                 for _ in 0..extra {
                     reduced = reduced.sum_axis(ndarray::Axis(0));
                 }
-                // Also handle broadcast in trailing dims: if param dim is 1 but grad > 1, sum
                 let r_shape = reduced.shape().to_vec();
                 for (i, (&rd, &pd)) in r_shape.iter().zip(p_shape.iter()).enumerate() {
                     if pd == 1 && rd > 1 {
@@ -295,7 +266,6 @@ fn reduce_grad_to_param_shape(grad: &Value, param: &Value) -> Result<Value, Shea
                 }
                 Ok(Value::Tensor { data: Arc::new(reduced), dtype: *dtype })
             } else if g_ndim == p_ndim {
-                // Same rank but different sizes (broadcast case)
                 let mut reduced = (**g_data).clone();
                 for (i, (&gd, &pd)) in g_shape.iter().zip(p_shape.iter()).enumerate() {
                     if pd == 1 && gd > 1 {
@@ -305,13 +275,11 @@ fn reduce_grad_to_param_shape(grad: &Value, param: &Value) -> Result<Value, Shea
                 }
                 Ok(Value::Tensor { data: Arc::new(reduced), dtype: *dtype })
             } else {
-                // Grad has fewer dims than param, shouldn't happen, return as-is
                 Ok(grad.clone())
             }
         }
         (Value::Float(_), Value::Float(_)) => Ok(grad.clone()),
         (Value::Tensor { data, dtype: _ }, Value::Float(_)) => {
-            // Reduce tensor gradient to scalar for a Float param
             let sum: f32 = data.iter().sum();
             Ok(Value::Float(sum))
         }
