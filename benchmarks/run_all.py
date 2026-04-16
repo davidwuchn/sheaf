@@ -81,8 +81,9 @@ def build_expr(setup: str, body: str | None, repeat: int) -> str:
     return setup.replace("{repeat}", f"(do {calls})")
 
 
-def run_blame(cmd: list[str]) -> str:
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+def run_blame(cmd: list[str], discard_stdout: bool = False) -> str:
+    stdout = subprocess.DEVNULL if discard_stdout else subprocess.PIPE
+    r = subprocess.run(cmd, stdout=stdout, stderr=subprocess.PIPE, text=True, timeout=600)
     if r.returncode != 0:
         print(f"FAIL: {r.stderr[:200]}", file=sys.stderr)
         sys.exit(1)
@@ -126,8 +127,8 @@ def bench_macro_one(name: str, script: str, device: str, runs: int) -> float:
     if not script_path.exists():
         return None
     cmd = [SHEAF, str(script_path), "--device", device, "--blame"]
-    run_blame(cmd)  # warmup
-    times = [parse_wall(run_blame(cmd)) for _ in range(runs)]
+    run_blame(cmd, discard_stdout=True)  # warmup
+    times = [parse_wall(run_blame(cmd, discard_stdout=True)) for _ in range(runs)]
     return statistics.median(times)
 
 
