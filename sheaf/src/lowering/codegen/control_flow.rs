@@ -3,13 +3,46 @@
 
 //! Control flow codegen: lambda inlining, reduce/scan unrolling, tree-map, scan VJP.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use crate::autodiff::reverse::{to_anf, reverse_grad};
 use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::lowering::transforms::try_infer_shape;
 use crate::core::expr::CompiledExpr;
 use crate::core::error::{SheafError, SheafResult};
 use super::CodeGenerator;
+
+/// Build a deep index_map from `tuple_key_layouts` for a given root layout key.
+/// Descends recursively into nested layouts to produce entries like
+/// `["attn", "c_attn", "weight"] -> [0, 0, 0]`.
+fn build_deep_index_map(
+    root_key: &str,
+    tuple_key_layouts: &HashMap<String, BTreeMap<String, usize>>,
+) -> BTreeMap<Vec<String>, Vec<usize>> {
+    let mut map = BTreeMap::new();
+    build_deep_index_map_rec(root_key, &[], &[], tuple_key_layouts, &mut map);
+    map
+}
+
+fn build_deep_index_map_rec(
+    key: &str,
+    path: &[String],
+    indices: &[usize],
+    layouts: &HashMap<String, BTreeMap<String, usize>>,
+    map: &mut BTreeMap<Vec<String>, Vec<usize>>,
+) {
+    if !path.is_empty() {
+        map.insert(path.to_vec(), indices.to_vec());
+    }
+    if let Some(child_layout) = layouts.get(key) {
+        for (field_name, &field_idx) in child_layout {
+            let mut child_path = path.to_vec();
+            child_path.push(field_name.clone());
+            let mut child_indices = indices.to_vec();
+            child_indices.push(field_idx);
+            build_deep_index_map_rec(field_name, &child_path, &child_indices, layouts, map);
+        }
+    }
+}
 
 /// Collection element extraction strategy for reduce/scan.
 enum ElemKind {
@@ -620,6 +653,10 @@ impl CodeGenerator {
             let mut index_map = std::collections::BTreeMap::new();
             for (key, &idx) in layout.iter() {
                 index_map.insert(vec![key.clone()], vec![idx]);
+            }
+            for (key, _) in layout {
+                let deep = build_deep_index_map(key, &self.tuple_key_layouts);
+                index_map.extend(deep);
             }
             crate::lowering::config::lower_get_calls(&body, &elem_param, &index_map)
         } else {
