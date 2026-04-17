@@ -8,8 +8,7 @@ pub mod env;
 pub mod eval;
 #[cfg(iree_runtime)]
 mod iree_dispatch;
-mod hof;
-pub(crate) use hof::{dict_scan_length, slice_dict};
+pub(crate) mod hof;
 pub mod profiler;
 mod vag;
 pub mod tracer;

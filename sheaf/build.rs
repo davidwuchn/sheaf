@@ -1,5 +1,5 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() {
     // Search order for IREE runtime libraries:
@@ -127,7 +127,7 @@ fn try_conventional_dir() -> bool {
 /// We use +whole-archive to ensure all driver modules (Metal, CUDA, etc.)
 /// are included even when not directly referenced — IREE discovers them
 /// at runtime via its driver registry.
-fn link_from_dir(lib_dir: &PathBuf) -> bool {
+fn link_from_dir(lib_dir: &Path) -> bool {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static:+whole-archive=iree_runtime_unified");
 

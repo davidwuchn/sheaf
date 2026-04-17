@@ -135,3 +135,9 @@
 - name: one-hot-2d-shape
   test: (shape (one-hot [[0 1] [2 0]] 3))
   expected: "[2. 2. 3.]"
+
+- name: vag-matmul-batched-transpose
+  test: >
+    (let [h [[[1.0 1.0] [1.0 1.0]] [[1.0 1.0] [1.0 1.0]]]]
+      ((value-and-grad (fn [w] (sum (@ (@ h w) (transpose (@ h w) '[0 2 1])))) [[1.0 1.0] [1.0 1.0]])))
+  expected: "[64.0, [[32. 32.] [32. 32.]]]"

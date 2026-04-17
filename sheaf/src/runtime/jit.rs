@@ -10,6 +10,7 @@
 //! On failure, the function is added to a blocklist and the interpreter
 //! handles it normally.
 
+use crate::SheafError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -635,7 +636,8 @@ impl JitCompiler {
                             vmfb_session_idx: None,
                             known_param_types: Vec::new(),
                             compile_error: None,
-                        });
+                        }
+                    });
                 }
                 _ => {
                     // Tensor, Dict, Tuple etc. -> promote to MLIR parameter

@@ -425,11 +425,113 @@ fn matmul_result_shape(a: &ArrayD<f32>, b: &ArrayD<f32>) -> Vec<usize> {
         (1, _) => b.shape()[1..].to_vec(),
         (_, 1) => a.shape()[..a.ndim()-1].to_vec(),
         _ => {
-            let mut s = a.shape()[..a.ndim()-1].to_vec();
-            s.push(b.shape()[b.ndim()-1]);
+            let a_batch = &a.shape()[..a.ndim().saturating_sub(2)];
+            let b_batch = &b.shape()[..b.ndim().saturating_sub(2)];
+            let batch = if a_batch.len() >= b_batch.len() {
+                a_batch.to_vec()
+            } else {
+                b_batch.to_vec()
+            };
+            let mut s = batch;
+            s.push(a.shape()[a.ndim() - 2]);
+            s.push(b.shape()[b.ndim() - 1]);
             s
         }
     }
+}
+
+fn compute_broadcast_shape(shapes: &[&[usize]]) -> Result<Vec<usize>, crate::core::error::SheafError> {
+    let mut result = Vec::new();
+    let mut max_len = 0;
+    for s in shapes {
+        max_len = max_len.max(s.len());
+    }
+
+    for i in 1..=max_len {
+        let mut dim = 1;
+        for s in shapes {
+            if i <= s.len() {
+                let s_dim = s[s.len() - i];
+                if s_dim != 1 {
+                    if dim != 1 && s_dim != dim {
+                        return Err(runtime_error("broadcast mismatch"));
+                    }
+                    dim = s_dim;
+                }
+            }
+        }
+        result.push(dim);
+    }
+    result.reverse();
+    Ok(result)
+}
+
+
+fn transpose_last_two(arr: &ArrayD<f32>) -> ArrayD<f32> {
+    let ndim = arr.ndim();
+    if ndim < 2 {
+        return arr.clone();
+    }
+    let mut axes: Vec<usize> = (0..ndim).collect();
+    axes.swap(ndim - 1, ndim - 2);
+    arr.view().permuted_axes(IxDyn(&axes)).as_standard_layout().into_owned()
+}
+fn batched_matmul_core(op1: &ArrayD<f32>, op2: &ArrayD<f32>, batch_shape: &[usize]) -> Result<ArrayD<f32>, crate::core::error::SheafError> {
+    let op1_ndim = op1.ndim();
+    let op2_ndim = op2.ndim();
+    if op1_ndim < 2 || op2_ndim < 2 {
+        return Err(runtime_error("batched_matmul_core: operands must be at least 2D"));
+    }
+    let m = op1.shape()[op1_ndim - 2];
+    let k = op1.shape()[op1_ndim - 1];
+    let n = op2.shape()[op2_ndim - 1];
+    if op2.shape()[op2_ndim - 2] != k {
+        return Err(runtime_error(format!(
+            "batched_matmul_core: shape mismatch: op1 last dim {} != op2 penultimate dim {}",
+            k, op2.shape()[op2_ndim - 2]
+        )));
+    }
+    let batch_size: usize = batch_shape.iter().product::<usize>().max(1);
+
+    let op1_2d = if op1.ndim() == 2 {
+        Some(op1.view().into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?)
+    } else { None };
+    let op2_2d = if op2.ndim() == 2 {
+        Some(op2.view().into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?)
+    } else { None };
+
+    let op1_c = if op1.ndim() > 2 { op1.as_standard_layout().into_owned() } else { op1.to_owned() };
+    let op2_c = if op2.ndim() > 2 { op2.as_standard_layout().into_owned() } else { op2.to_owned() };
+
+    let op1_flat = if op1_c.ndim() > 2 {
+        Some(op1_c.into_shape_with_order((batch_size, m, k))
+            .map_err(|e| runtime_error(format!("batched_matmul_core: reshape op1: {}", e)))?)
+    } else { None };
+    let op2_flat = if op2_c.ndim() > 2 {
+        Some(op2_c.into_shape_with_order((batch_size, k, n))
+            .map_err(|e| runtime_error(format!("batched_matmul_core: reshape op2: {}", e)))?)
+    } else { None };
+
+    let mut result = Vec::with_capacity(batch_size * m * n);
+    for i in 0..batch_size {
+        let a = match (&op1_2d, &op1_flat) {
+            (Some(a2), _) => a2.view(),
+            (_, Some(af)) => af.index_axis(ndarray::Axis(0), i).into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?,
+            _ => unreachable!(),
+        };
+        let b = match (&op2_2d, &op2_flat) {
+            (Some(b2), _) => b2.view(),
+            (_, Some(bf)) => bf.index_axis(ndarray::Axis(0), i).into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?,
+            _ => unreachable!(),
+        };
+        result.extend(a.dot(&b).iter());
+    }
+
+    let mut out_shape = batch_shape.to_vec();
+    out_shape.push(m);
+    out_shape.push(n);
+    ArrayD::from_shape_vec(IxDyn(&out_shape), result)
+        .map_err(|e| runtime_error(format!("batched_matmul_core: output reshape: {}", e)))
 }
 
 fn broadcast_adj(adj: ArrayD<f32>, target_shape: &[usize]) -> ArrayD<f32> {
@@ -481,9 +583,28 @@ fn builtin_matmul_grad_lhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             adj_col.dot(&b_row).into_dyn()
         }
         _ => {
-            let bt = b.t().to_owned().into_dimensionality::<ndarray::Ix2>().map_err(|_| shape_err("B transpose"))?;
-            let adj2 = adj.into_dimensionality::<ndarray::Ix2>().map_err(|_| shape_err("adj cast to 2D"))?;
-            adj2.dot(&bt).into_dyn()
+            let a_sh = a.shape();
+            let adj_sh = adj.shape();
+            let m = a_sh[a_sh.len() - 2];
+            let k = a_sh[a_sh.len() - 1];
+            let adj_batch = &adj_sh[..adj_sh.len().saturating_sub(2)];
+            let b_batch = &b.shape()[..b.shape().len().saturating_sub(2)];
+            let batch_shape = compute_broadcast_shape(&[adj_batch, b_batch])?;
+            let b_t = transpose_last_two(&b);
+            let result = batched_matmul_core(&adj, &b_t, &batch_shape)?;
+
+            if a.ndim() == 2 {
+                let mut sum_res = ArrayD::zeros(IxDyn(&[m, k]));
+                let batch_size: usize = batch_shape.iter().product::<usize>().max(1);
+                let res_flat = result.into_shape_with_order((batch_size, m, k))
+                    .map_err(|e| runtime_error(format!("@-grad-lhs: sum reshape: {}", e)))?;
+                for i in 0..batch_size {
+                    sum_res += &res_flat.index_axis(ndarray::Axis(0), i).into_dyn();
+                }
+                sum_res
+            } else {
+                result
+            }
         }
     };
     Ok(Value::tensor_f32(result))
@@ -525,9 +646,28 @@ fn builtin_matmul_grad_rhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             at.dot(&adj1).into_dyn()
         }
         _ => {
-            let at = a.t().to_owned().into_dimensionality::<ndarray::Ix2>().map_err(|_| shape_err("A transpose"))?;
-            let adj2 = adj.into_dimensionality::<ndarray::Ix2>().map_err(|_| shape_err("adj cast to 2D"))?;
-            at.dot(&adj2).into_dyn()
+            let a_sh = a.shape();
+            let adj_sh = adj.shape();
+            let k = a_sh[a_sh.len() - 1];
+            let n = b.shape()[b.shape().len() - 1];
+            let a_batch = &a_sh[..a_sh.len().saturating_sub(2)];
+            let adj_batch = &adj_sh[..adj_sh.len().saturating_sub(2)];
+            let batch_shape = compute_broadcast_shape(&[a_batch, adj_batch])?;
+            let a_t = transpose_last_two(&a);
+            let result = batched_matmul_core(&a_t, &adj, &batch_shape)?;
+
+            if b.ndim() == 2 {
+                let mut sum_res = ArrayD::zeros(IxDyn(&[k, n]));
+                let batch_size: usize = batch_shape.iter().product::<usize>().max(1);
+                let res_flat = result.into_shape_with_order((batch_size, k, n))
+                    .map_err(|e| runtime_error(format!("@-grad-rhs: sum reshape: {}", e)))?;
+                for i in 0..batch_size {
+                    sum_res += &res_flat.index_axis(ndarray::Axis(0), i).into_dyn();
+                }
+                sum_res
+            } else {
+                result
+            }
         }
     };
     Ok(Value::tensor_f32(result))
