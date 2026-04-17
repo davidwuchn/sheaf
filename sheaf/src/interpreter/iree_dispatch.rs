@@ -6,6 +6,7 @@
 #![cfg(iree_runtime)]
 
 use crate::sheaf_msg;
+use crate::runtime::jit::JitVagOutcome;
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::Value;
@@ -63,34 +64,34 @@ pub(super) fn try_iree_dispatch(
 }
 
 /// Try to JIT-compile a value-and-grad call into a single VMFB (forward + backward).
-/// Returns `Some(Ok(result))` on success, `None` to fall through to the interpreter.
 pub(super) fn try_jit_vag(
     func: &Value,
     params: &Value,
     env: &mut Env,
-) -> Option<Result<Value, SheafError>> {
-    // Augment the closure with free variables resolved from the environment.
-    // We use dynamic scoping, so lambdas don't capture free vars at creation.
-    // The JIT needs them as explicit captures.
-    let augmented_func = augment_closure_with_free_vars(func, env)?;
+) -> JitVagOutcome {
+    let augmented_func = match augment_closure_with_free_vars(func, env) {
+        Some(f) => f,
+        None => return JitVagOutcome::Unsupported,
+    };
 
-    let jit = env.jit_compiler.as_mut()?;
+    let jit = match env.jit_compiler.as_mut() {
+        Some(j) => j,
+        None => return JitVagOutcome::Unsupported,
+    };
 
-    let (session_idx, sig, param_names) = jit.try_jit_value_and_grad(
+    let (session_idx, sig, param_names) = match jit.try_jit_value_and_grad(
         &augmented_func,
         params,
         &env.registry,
         &mut env.vmfb_sessions,
-    )?;
+    ) {
+        Some(x) => x,
+        None => return jit.classify_vag_skip(),
+    };
 
-    // Build the argument list: fn params first, then captures (same order as param_names)
     let (fn_params, closure) = match &augmented_func {
-        Value::Function {
-            params: p,
-            closure: c,
-            ..
-        } => (p, c),
-        _ => return None,
+        Value::Function { params: p, closure: c, .. } => (p, c),
+        _ => return JitVagOutcome::Unsupported,
     };
 
     let mut args: Vec<Value> = Vec::new();
@@ -105,19 +106,20 @@ pub(super) fn try_jit_vag(
         }
     }
 
-    // Dispatch via IREE
-    let session = env.vmfb_sessions.get(session_idx)?;
-    let iree_session = session.downcast_ref::<crate::runtime::iree_session::IreeSession>()?;
+    let session = match env.vmfb_sessions.get(session_idx) {
+        Some(s) => s,
+        None => return JitVagOutcome::Bug("vmfb session lost".to_string()),
+    };
+    let iree_session = match session.downcast_ref::<crate::runtime::iree_session::IreeSession>() {
+        Some(s) => s,
+        None => return JitVagOutcome::Bug("downcast to IreeSession failed".to_string()),
+    };
 
     let result = match iree_session.call_typed_device("module.value_and_grad", &args, &sig.return_type) {
         Ok(v) => v,
-        Err(e) => {
-            return Some(Err(e));
-        }
+        Err(e) => return JitVagOutcome::Success(Err(e)),
     };
 
-    // Unpack: IREE returns Tuple([loss_tensor, grad_elements...])
-    // We need to return List([Float(loss), grad_value])
     if crate::core::config::verbosity() >= 2 {
         let desc = match &result {
             Value::Tuple(elems) => format!("Tuple(len={})", elems.len()),
@@ -130,26 +132,27 @@ pub(super) fn try_jit_vag(
             }
         }
     }
+
     let unpacked = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unpack_vag_result(&result, params)
     })) {
         Ok(Some(v)) => v,
         Ok(None) => {
-            return Some(Err(runtime_error(
-                "value-and-grad: result unpacking failed".to_string()
+            return JitVagOutcome::Success(Err(runtime_error(
+                "value-and-grad: result unpacking failed".to_string(),
             )));
         }
         Err(e) => {
             let detail = e.downcast_ref::<String>().map(|s| s.as_str())
                 .or_else(|| e.downcast_ref::<&str>().copied())
                 .unwrap_or("unknown");
-            return Some(Err(runtime_error(format!(
+            return JitVagOutcome::Success(Err(runtime_error(format!(
                 "value-and-grad: result unpacking panicked: {}", detail
             ))));
         }
     };
 
-    Some(Ok(unpacked))
+    JitVagOutcome::Success(Ok(unpacked))
 }
 
 /// Augment a lambda's closure with free variables from the dynamic environment.

@@ -35,15 +35,16 @@ pub(super) fn eval_value_and_grad_hof(args: &[Value], _env: &mut Env) -> Result<
 pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut Env) -> Result<Value, SheafError> {
     #[cfg(iree_runtime)]
     if env.tracer.is_none() {
+        use crate::runtime::jit::JitVagOutcome;
         match super::iree_dispatch::try_jit_vag(func, params, env) {
-            Some(result) => return result,
-            None => {
-                if params.contains_tensors() {
-                    return Err(runtime_error(
-                        "value-and-grad: JIT compilation failed for tensor parameters \
-                         (see -vv output for details). This is an issue with Sheaf."
-                    ));
-                }
+            JitVagOutcome::Success(result) => return result,
+            JitVagOutcome::Unsupported => {}
+            JitVagOutcome::Bug(reason) => {
+                return Err(runtime_error(format!(
+                    "value-and-grad: JIT compilation failed: {} \
+                     (run with -vv for details). This is a bug in Sheaf.",
+                    reason
+                )));
             }
         }
     }

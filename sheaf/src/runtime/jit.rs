@@ -40,33 +40,42 @@ pub fn detect_cuda_target() -> Option<String> {
     }).clone()
 }
 
-use super::toolchain::{IREE_COMPILER_VERSION, find_iree_compile, ensure_toolchain};
+use super::toolchain::{ensure_toolchain, find_iree_compile, IREE_COMPILER_VERSION};
 
-use crate::sheaf_msg;
-use crate::autodiff::reverse::{to_anf, reverse_grad};
-use crate::lowering::codegen::{
-    collect_tuple_leaves, expand_tuple_to_symbols, CodeGenerator,
-};
+use crate::autodiff::reverse::{reverse_grad, to_anf};
+use crate::core::expr::{CompiledExpr, FunctionDef, VmfbSession};
+use crate::lowering::codegen::{collect_tuple_leaves, expand_tuple_to_symbols, CodeGenerator};
 use crate::lowering::config::{layout_to_index_map, lower_get_calls};
 use crate::lowering::effects::{collect_effects, collect_hof_calls};
 use crate::lowering::stablehlo::{Register, StableHLOEmitter};
 use crate::lowering::transforms::{
-    extract_scalar_constants, lower_inlined_gets, propagate_let_layouts,
-    resolve_static_constants, unroll_reduces,
+    extract_scalar_constants, lower_inlined_gets, propagate_let_layouts, resolve_static_constants,
+    unroll_reduces,
 };
-use crate::core::expr::{CompiledExpr, FunctionDef, VmfbSession};
+use crate::sheaf_msg;
 
 /// Count AST nodes in an expression tree. Used to bail out of JIT
 /// when inlining or unrolling produces a graph that is too large.
 fn expr_node_count(expr: &CompiledExpr) -> usize {
     match expr {
-        CompiledExpr::FunctionCall { args, .. } => 1 + args.iter().map(expr_node_count).sum::<usize>(),
+        CompiledExpr::FunctionCall { args, .. } => {
+            1 + args.iter().map(expr_node_count).sum::<usize>()
+        }
         CompiledExpr::Let { bindings, body } => {
-            1 + bindings.iter().map(|(_, v)| expr_node_count(v)).sum::<usize>() + expr_node_count(body)
+            1 + bindings
+                .iter()
+                .map(|(_, v)| expr_node_count(v))
+                .sum::<usize>()
+                + expr_node_count(body)
         }
         CompiledExpr::Do(exprs) => 1 + exprs.iter().map(expr_node_count).sum::<usize>(),
-        CompiledExpr::If { condition, then_branch, else_branch } => {
-            1 + expr_node_count(condition) + expr_node_count(then_branch)
+        CompiledExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            1 + expr_node_count(condition)
+                + expr_node_count(then_branch)
                 + else_branch.as_ref().map_or(0, |e| expr_node_count(e))
         }
         CompiledExpr::Lambda { body, .. } => 1 + expr_node_count(body),
@@ -88,6 +97,7 @@ pub struct JitCompiler {
     iree_compile_path: Option<String>,
     target_backend: String,
     failed_fns: HashSet<String>,
+    last_vag_fail_reason: Option<String>,
     /// Cache compiled VAG sessions: vag_key -> (session_idx, signature, param_names)
     vag_cache: HashMap<String, (usize, FunctionSignature, Vec<String>)>,
 }
@@ -117,6 +127,7 @@ impl JitCompiler {
             iree_compile_path,
             target_backend,
             failed_fns: HashSet::new(),
+            last_vag_fail_reason: None,
             vag_cache: HashMap::new(),
         }
     }
@@ -178,7 +189,14 @@ impl JitCompiler {
         }
 
         let backend = self.target_backend.clone();
-        self.compile_function(iree_compile.clone(), func_def, args, registry, vmfb_sessions, &backend)
+        self.compile_function(
+            iree_compile.clone(),
+            func_def,
+            args,
+            registry,
+            vmfb_sessions,
+            &backend,
+        )
     }
 
     fn compile_function(
@@ -199,11 +217,13 @@ impl JitCompiler {
         let mut constants: HashMap<(String, Vec<usize>), f64> = HashMap::new();
 
         for (param_name, arg_val) in func_def.params.iter().zip(args) {
-
             let ty = match value_to_stablehlo_type(arg_val) {
                 Ok(ty) => ty,
                 Err(e) => {
-                    self.jit_fail(name, &format!("arg '{}' has {}", param_name, e.short_message()));
+                    self.jit_fail(
+                        name,
+                        &format!("arg '{}' has {}", param_name, e.short_message()),
+                    );
                     return None;
                 }
             };
@@ -257,7 +277,8 @@ impl JitCompiler {
                             } else {
                                 "?".to_string()
                             };
-                            top_fields.entry(indices[0])
+                            top_fields
+                                .entry(indices[0])
                                 .or_insert((path[0].clone(), ty_str));
                         } else if !top_fields.contains_key(&indices[0]) {
                             // Nested field: show as tuple<...>
@@ -614,8 +635,7 @@ impl JitCompiler {
                             vmfb_session_idx: None,
                             known_param_types: Vec::new(),
                             compile_error: None,
-                        }
-                    });
+                        });
                 }
                 _ => {
                     // Tensor, Dict, Tuple etc. -> promote to MLIR parameter
@@ -731,7 +751,13 @@ impl JitCompiler {
         // Bail out if inlining produced a graph that is too large
         let node_count = expr_node_count(&body);
         if node_count > MAX_VAG_GRAPH_NODES {
-            self.jit_fail(&vag_key, &format!("graph too large after inlining ({} nodes, limit {})", node_count, MAX_VAG_GRAPH_NODES));
+            self.jit_fail(
+                &vag_key,
+                &format!(
+                    "graph too large after inlining ({} nodes, limit {})",
+                    node_count, MAX_VAG_GRAPH_NODES
+                ),
+            );
             return None;
         }
 
@@ -753,8 +779,13 @@ impl JitCompiler {
             .collect();
         // Debug: log remaining reduces before unrolling
         if crate::core::config::verbosity() >= 2 {
-            sheaf_msg!("jit: [vag] param_index_maps keys: {:?}",
-                param_index_maps.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>());
+            sheaf_msg!(
+                "jit: [vag] param_index_maps keys: {:?}",
+                param_index_maps
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>()
+            );
             log_remaining_reduces(&body, "before unroll");
         }
         body = unroll_reduces(&body, &known_types_vec);
@@ -765,7 +796,13 @@ impl JitCompiler {
         // Bail out if unrolling produced a graph that is too large
         let node_count = expr_node_count(&body);
         if node_count > MAX_VAG_GRAPH_NODES {
-            self.jit_fail(&vag_key, &format!("graph too large after unrolling ({} nodes, limit {})", node_count, MAX_VAG_GRAPH_NODES));
+            self.jit_fail(
+                &vag_key,
+                &format!(
+                    "graph too large after unrolling ({} nodes, limit {})",
+                    node_count, MAX_VAG_GRAPH_NODES
+                ),
+            );
             return None;
         }
 
@@ -950,7 +987,8 @@ impl JitCompiler {
                     let param_ty = &param_types[idx];
                     match param_ty {
                         StableHLOType::Tuple(..) => {
-                            let leaves = all_leaves.iter()
+                            let leaves = all_leaves
+                                .iter()
                                 .find(|(i, _)| *i == idx)
                                 .map(|(_, l)| l)
                                 .unwrap();
@@ -1052,11 +1090,18 @@ impl JitCompiler {
         let cached_vmfb = cache_dir.join(format!("{}.{}.vmfb", vag_cache_name, backend_suffix));
 
         let force_recompile = crate::core::config::verbosity() >= 2;
-        let vmfb_data = if !force_recompile && cached_vmfb.exists() && manifest_hash_matches(&cache_dir, &vag_cache_name, &content_hash) {
+        let vmfb_data = if !force_recompile
+            && cached_vmfb.exists()
+            && manifest_hash_matches(&cache_dir, &vag_cache_name, &content_hash)
+        {
             match std::fs::read(&cached_vmfb) {
                 Ok(d) => {
                     if crate::core::config::verbosity() >= 2 {
-                        sheaf_msg!("jit: value_and_grad (cached, {}KB, {})", d.len() / 1024, backend);
+                        sheaf_msg!(
+                            "jit: value_and_grad (cached, {}KB, {})",
+                            d.len() / 1024,
+                            backend
+                        );
                     } else if crate::core::config::verbosity() >= 1 {
                         sheaf_msg!("jit: value_and_grad (cached)");
                     }
@@ -1075,7 +1120,8 @@ impl JitCompiler {
                 sheaf_msg!("jit: value-and-grad | saved {}", debug_path.display());
             }
 
-            let data = match self.run_iree_compile(&iree_compile, "value_and_grad", &mlir, &backend) {
+            let data = match self.run_iree_compile(&iree_compile, "value_and_grad", &mlir, &backend)
+            {
                 Some(d) => d,
                 None => {
                     self.jit_fail(&vag_key, "compilation failed on all backends");
@@ -1114,7 +1160,13 @@ impl JitCompiler {
 
     /// Run iree-compile on MLIR source for the given backend.
     /// Returns compiled VMFB bytes, or None if compilation fails.
-    fn run_iree_compile(&self, iree_compile: &str, name: &str, mlir: &str, backend: &str) -> Option<Vec<u8>> {
+    fn run_iree_compile(
+        &self,
+        iree_compile: &str,
+        name: &str,
+        mlir: &str,
+        backend: &str,
+    ) -> Option<Vec<u8>> {
         if crate::core::config::verbosity() >= 1 {
             sheaf_msg!("jit: compiling {} [{}]...", name, backend);
         }
@@ -1184,11 +1236,48 @@ impl JitCompiler {
 
     fn jit_fail(&mut self, name: &str, reason: &str) {
         self.failed_fns.insert(name.to_string());
-        let display_name = if name.starts_with("__vag_") { "value-and-grad" } else { name };
+        if name.starts_with("__vag_") {
+            self.last_vag_fail_reason = Some(reason.to_string());
+        }
+        let display_name = if name.starts_with("__vag_") {
+            "value-and-grad"
+        } else {
+            name
+        };
         if crate::core::config::verbosity() >= 1 {
             sheaf_msg!("jit: {} skipped ({})", display_name, reason);
         }
     }
+
+    /// Classify the last VAG skip reason as legitimate (unsupported pattern)
+    /// or a bug (JIT should handle but failed).
+    pub fn classify_vag_skip(&self) -> JitVagOutcome {
+        match &self.last_vag_fail_reason {
+            None => JitVagOutcome::Unsupported,
+            Some(reason) => {
+                let legit = reason.starts_with("has HOF calls")
+                    || reason.starts_with("scalar-only")
+                    || reason.starts_with("unsupported capture type")
+                    || reason.starts_with("graph too large");
+                if legit {
+                    JitVagOutcome::Unsupported
+                } else {
+                    JitVagOutcome::Bug(reason.clone())
+                }
+            }
+        }
+    }
+}
+
+/// Why the JIT skipped a value-and-grad call.
+#[derive(Debug)]
+pub enum JitVagOutcome {
+    /// JIT compiled and executed successfully, or had a runtime error.
+    Success(Result<Value, SheafError>),
+    /// JIT architecture doesn't support this pattern — interpreter fallback OK.
+    Unsupported,
+    /// JIT should handle this but failed — likely a Sheaf bug.
+    Bug(String),
 }
 
 /// Navigate a tuple type tree using indices to find the leaf type.
@@ -1214,9 +1303,14 @@ fn substitute_scalar(expr: &CompiledExpr, name: &str, val: f64) -> CompiledExpr 
         CompiledExpr::Symbol(s) if s == name => CompiledExpr::Float(val),
         CompiledExpr::FunctionCall {
             name: fn_name,
-            args, .. } => CompiledExpr::FunctionCall {
+            args,
+            ..
+        } => CompiledExpr::FunctionCall {
             name: fn_name.clone(),
-            args: args.iter().map(|a| substitute_scalar(a, name, val)).collect(),
+            args: args
+                .iter()
+                .map(|a| substitute_scalar(a, name, val))
+                .collect(),
             loc: None,
         },
         CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
@@ -1238,7 +1332,10 @@ fn substitute_scalar(expr: &CompiledExpr, name: &str, val: f64) -> CompiledExpr 
         }
         CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
             callee: Box::new(substitute_scalar(callee, name, val)),
-            args: args.iter().map(|a| substitute_scalar(a, name, val)).collect(),
+            args: args
+                .iter()
+                .map(|a| substitute_scalar(a, name, val))
+                .collect(),
         },
         CompiledExpr::If {
             condition,
@@ -1252,7 +1349,10 @@ fn substitute_scalar(expr: &CompiledExpr, name: &str, val: f64) -> CompiledExpr 
                 .map(|e| Box::new(substitute_scalar(e, name, val))),
         },
         CompiledExpr::Do(exprs) => CompiledExpr::Do(
-            exprs.iter().map(|e| substitute_scalar(e, name, val)).collect(),
+            exprs
+                .iter()
+                .map(|e| substitute_scalar(e, name, val))
+                .collect(),
         ),
         other => other.clone(),
     }
@@ -1295,14 +1395,22 @@ fn log_remaining_reduces(expr: &CompiledExpr, label: &str) {
             sheaf_msg!("jit: [{}] reduce with coll={}", label, coll_desc);
         }
         CompiledExpr::FunctionCall { args, .. } => {
-            for a in args { log_remaining_reduces(a, label); }
+            for a in args {
+                log_remaining_reduces(a, label);
+            }
         }
         CompiledExpr::Let { bindings, body } => {
-            for (_, v) in bindings { log_remaining_reduces(v, label); }
+            for (_, v) in bindings {
+                log_remaining_reduces(v, label);
+            }
             log_remaining_reduces(body, label);
         }
         CompiledExpr::Lambda { body, .. } => log_remaining_reduces(body, label),
-        CompiledExpr::Do(exprs) => { for e in exprs { log_remaining_reduces(e, label); } }
+        CompiledExpr::Do(exprs) => {
+            for e in exprs {
+                log_remaining_reduces(e, label);
+            }
+        }
         _ => {}
     }
 }
@@ -1313,28 +1421,45 @@ fn log_unresolved_shapes(expr: &CompiledExpr, label: &str) {
         CompiledExpr::FunctionCall { name, args, .. } if name == "reshape" && args.len() == 2 => {
             match &args[1] {
                 CompiledExpr::Vector(elems) => {
-                    let unresolved: Vec<_> = elems.iter()
+                    let unresolved: Vec<_> = elems
+                        .iter()
                         .filter(|e| !matches!(e, CompiledExpr::Integer(_)))
                         .map(|e| format!("{:?}", e))
                         .collect();
                     if !unresolved.is_empty() {
-                        sheaf_msg!("jit: [{}] reshape with unresolved shape elements: {:?}", label, unresolved);
+                        sheaf_msg!(
+                            "jit: [{}] reshape with unresolved shape elements: {:?}",
+                            label,
+                            unresolved
+                        );
                     }
                 }
                 other => {
-                    sheaf_msg!("jit: [{}] reshape with non-vector shape: {:?}", label, other);
+                    sheaf_msg!(
+                        "jit: [{}] reshape with non-vector shape: {:?}",
+                        label,
+                        other
+                    );
                 }
             }
         }
         CompiledExpr::FunctionCall { args, .. } => {
-            for a in args { log_unresolved_shapes(a, label); }
+            for a in args {
+                log_unresolved_shapes(a, label);
+            }
         }
         CompiledExpr::Let { bindings, body } => {
-            for (_, v) in bindings { log_unresolved_shapes(v, label); }
+            for (_, v) in bindings {
+                log_unresolved_shapes(v, label);
+            }
             log_unresolved_shapes(body, label);
         }
         CompiledExpr::Lambda { body, .. } => log_unresolved_shapes(body, label),
-        CompiledExpr::Do(exprs) => { for e in exprs { log_unresolved_shapes(e, label); } }
+        CompiledExpr::Do(exprs) => {
+            for e in exprs {
+                log_unresolved_shapes(e, label);
+            }
+        }
         _ => {}
     }
 }
@@ -1371,6 +1496,12 @@ fn update_manifest(cache_dir: &std::path::Path, name: &str, hash: &str) {
             .ok()
             .and_then(|d| serde_json::from_str(&d).ok())
             .unwrap_or_default();
-    manifest.insert(name.to_string(), serde_json::Value::String(hash.to_string()));
-    let _ = std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap());
+    manifest.insert(
+        name.to_string(),
+        serde_json::Value::String(hash.to_string()),
+    );
+    let _ = std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    );
 }
