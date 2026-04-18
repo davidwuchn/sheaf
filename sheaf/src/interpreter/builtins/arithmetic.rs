@@ -698,6 +698,20 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let idx_b: Vec<char> = parts[1].chars().collect();
     let idx_out: Vec<char> = rhs.chars().collect();
 
+    // Validate subscript dimension count matches operand shapes
+    if idx_a.len() != a.ndim() {
+        return Err(runtime_error(format!(
+            "einsum: operand A has {} dimensions but subscript '{}' specifies {}",
+            a.ndim(), parts[0], idx_a.len()
+        )));
+    }
+    if idx_b.len() != b.ndim() {
+        return Err(runtime_error(format!(
+            "einsum: operand B has {} dimensions but subscript '{}' specifies {}",
+            b.ndim(), parts[1], idx_b.len()
+        )));
+    }
+
     // Build sizes from non-scalar operand first, then broadcast scalar operands
     let mut sizes: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
     for (&label, &dim) in idx_b.iter().zip(b.shape().iter()) {
