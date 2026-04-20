@@ -69,25 +69,57 @@ pub(super) fn eval_filter(args: &[Value], env: &mut Env) -> Result<Value, SheafE
 }
 
 pub(super) fn eval_reduce(args: &[Value], env: &mut Env) -> Result<Value, SheafError> {
-    if args.len() != 3 {
-        return Err(runtime_error("reduce requires 3 arguments: (reduce fn init coll)"));
-    }
-    let func = &args[0];
-    let mut acc = args[1].clone();
-    match &args[2] {
+    let (func, init, coll) = match args.len() {
+        2 => (&args[0], None, &args[1]),
+        3 => (&args[0], Some(&args[1]), &args[2]),
+        _ => return Err(runtime_error("reduce requires 2 or 3 arguments: (reduce fn coll) or (reduce fn init coll)")),
+    };
+    let mut acc = match init {
+        Some(init_val) => init_val.clone(),
+        None => match coll {
+            Value::List(items) | Value::Tuple(items) => {
+                if items.is_empty() {
+                    return Err(runtime_error("reduce: cannot reduce empty collection without init"));
+                }
+                items[0].clone()
+            }
+            Value::Tensor { data, .. } => {
+                if data.len() == 0 {
+                    return Err(runtime_error("reduce: cannot reduce empty tensor without init"));
+                }
+                if data.ndim() == 1 {
+                    Value::Float(data[[0]])
+                } else {
+                    let first = data.index_axis(ndarray::Axis(0), 0).to_owned();
+                    Value::tensor_f32(first)
+                }
+            }
+            Value::Dict(map) => {
+                let first_key = map.keys().next().cloned().ok_or_else(|| runtime_error("reduce: cannot reduce empty dict without init"))?;
+                map[&first_key].clone()
+            }
+            other => return Err(runtime_error(format!("reduce: expected a list, a tensor, or a dict, got {}", other.type_name()))),
+        },
+    };
+    // Determine if we need to skip the first element (no init provided)
+    let skip_first = init.is_none();
+    match coll {
         Value::List(items) => {
-            for item in items {
+            let start = if skip_first { 1 } else { 0 };
+            for item in &items[start..] {
                 acc = call_function(func, &[acc, item.clone()], env)?;
             }
             Ok(acc)
         }
         Value::Tensor { data, .. } => {
             if data.ndim() == 1 {
-                for &x in data.iter() {
+                let iter = data.iter().skip(if skip_first { 1 } else { 0 });
+                for &x in iter {
                     acc = call_function(func, &[acc, Value::Float(x)], env)?;
                 }
             } else {
-                for i in 0..data.shape()[0] {
+                let start = if skip_first { 1 } else { 0 };
+                for i in start..data.shape()[0] {
                     let row = data.index_axis(ndarray::Axis(0), i).to_owned();
                     acc = call_function(func, &[acc, Value::tensor_f32(row)], env)?;
                 }
@@ -95,10 +127,11 @@ pub(super) fn eval_reduce(args: &[Value], env: &mut Env) -> Result<Value, SheafE
             Ok(acc)
         }
         Value::Dict(map) => {
-            let n = dict_scan_length(map)?;
-            for i in 0..n {
-                let slice = slice_dict(map, i)?;
-                acc = call_function(func, &[acc, slice], env)?;
+            let keys: Vec<_> = map.keys().cloned().collect();
+            let start = if skip_first { 1 } else { 0 };
+            for key in &keys[start..] {
+                let val = map[key].clone();
+                acc = call_function(func, &[acc, val], env)?;
             }
             Ok(acc)
         }

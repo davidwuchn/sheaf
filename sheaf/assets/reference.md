@@ -1383,8 +1383,11 @@ Reduces all leaves of a PyTree to a single value by applying a binary function c
 Reduces a collection to a single value by applying a binary function func cumulatively to the elements of seq, from left to right, starting with the init value. Each step takes the current accumulator and the next element to produce the new accumulator.
 
 ```sheaf
-;; Simple sum: 0 + 1 + 2 + 3 + 4
-(reduce + 0 [1 2 3 4]) ; => 10.
+;; Simple sum: 1 + 2 + 3 + 4
+(reduce + [1 2 3 4]) ; => 10.
+
+;; Subtract from 10: 1 - 2 - 3 -4
+(reduce - 10 [1 2 3 4]) ; => 0.
 
 ;; Finding the maximum value across multiple tensors
 ;; Useful for tracking the peak activation across different layers

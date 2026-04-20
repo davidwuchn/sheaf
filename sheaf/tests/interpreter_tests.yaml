@@ -411,6 +411,12 @@
   test: (tree-reduce maximum {:l1 [1.0 5.0] :l2 [2.0]} -1e9)
   expected: "[2. 5.]"
 - name: reduce
+  test: (reduce + [1 2 3 4])
+  expected: "10.0"
+- name: reduce
+  test: (reduce - 10 [1 2 3 4])
+  expected: "0.0"
+- name: reduce
   test: (reduce maximum -1e9 [[1 5] [2 3] [8 4]])
   expected: "[8. 5.]"
 - name: apply
