@@ -24,6 +24,7 @@ ndarray = "0.16"
 getrandom = "0.2"
 rustyline = "14"
 nvml-wrapper = "0.10"
+libc = "0.2"
 
 [package.metadata]
 iree-version = "3.10.0"

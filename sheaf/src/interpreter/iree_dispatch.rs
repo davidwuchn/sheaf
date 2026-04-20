@@ -89,6 +89,10 @@ pub(super) fn try_jit_vag(
         None => return jit.classify_vag_skip(),
     };
 
+    if let Some(ref mut mp) = env.mem_profiler {
+        mp.sample("after VAG compile");
+    }
+
     let (fn_params, closure) = match &augmented_func {
         Value::Function { params: p, closure: c, .. } => (p, c),
         _ => return JitVagOutcome::Unsupported,
@@ -119,6 +123,10 @@ pub(super) fn try_jit_vag(
         Ok(v) => v,
         Err(e) => return JitVagOutcome::Success(Err(e)),
     };
+
+    if let Some(ref mut mp) = env.mem_profiler {
+        mp.sample("after VAG dispatch");
+    }
 
     if crate::core::config::verbosity() >= 2 {
         let desc = match &result {

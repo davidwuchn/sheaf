@@ -185,6 +185,11 @@ impl IreeSession {
         &self.device_handle
     }
 
+    /// Returns the raw IREE device allocator pointer for memory statistics queries.
+    pub fn device_allocator_ptr(&self) -> *mut crate::runtime::iree_ffi::iree_hal_allocator_t {
+        unsafe { iree_runtime_session_device_allocator(self.session) }
+    }
+
     pub fn load_vmfb(&mut self, data: Vec<u8>) -> Result<(), SheafError> {
         unsafe {
             self._vmfb_data = Some(data);

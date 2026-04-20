@@ -109,6 +109,39 @@ pub fn eval_source_with_blame(
     file_path: Option<&std::path::Path>,
     tracer_config: Option<TracerConfig>,
 ) -> Result<Value, SheafError> {
+    let (val, _) = eval_source_with_blame_internal(source, file_path, tracer_config, true, false)?;
+    Ok(val)
+}
+
+/// Evaluate source with --blame profiling (and optionally tracing).
+/// When `mem_profile` is true, samples RSS at key checkpoints and returns the report.
+pub fn eval_source_with_blame_mem(
+    source: &str,
+    file_path: Option<&std::path::Path>,
+    tracer_config: Option<TracerConfig>,
+) -> Result<(Value, String), SheafError> {
+    let (val, report) = eval_source_with_blame_internal(source, file_path, tracer_config, true, true)?;
+    let report_str = report.unwrap_or_default();
+    Ok((val, report_str))
+}
+
+/// Evaluate source with memory profiling only (no blame).
+pub fn eval_source_with_mem(
+    source: &str,
+    file_path: Option<&std::path::Path>,
+) -> Result<(Value, String), SheafError> {
+    let (val, report) = eval_source_with_blame_internal(source, file_path, None, false, true)?;
+    let report_str = report.unwrap_or_default();
+    Ok((val, report_str))
+}
+
+fn eval_source_with_blame_internal(
+    source: &str,
+    file_path: Option<&std::path::Path>,
+    tracer_config: Option<TracerConfig>,
+    blame_report: bool,
+    mem_profile: bool,
+) -> Result<(Value, Option<String>), SheafError> {
     let filename = file_path
         .and_then(|p| p.to_str())
         .unwrap_or("<eval>");
@@ -134,21 +167,57 @@ pub fn eval_source_with_blame(
 
     let mut env = Env::with_registry(compiler.registry.clone());
     env.vmfb_sessions = compiler.vmfb_sessions.clone();
-    env.profiler = Some(crate::interpreter::profiler::Profiler::new());
+    register_builtins(&mut env);
+    // Only create blame profiler when caller wants blame report
+    if blame_report {
+        env.profiler = Some(crate::interpreter::profiler::Profiler::new());
+    }
     if let Some(config) = tracer_config {
         env.tracer = Some(Tracer::from_config(config));
     }
-    register_builtins(&mut env);
+    env.mem_profiler = Some(crate::interpreter::mem_profile::MemProfiler::new());
+    if mem_profile {
+        if let Some(ref mut mp) = env.mem_profiler {
+            mp.sample("after init");
+        }
+    }
     let mut last = Value::Nil;
     for c in &compiled {
         if !matches!(c, CompiledExpr::Nil) {
             last = interpreter::eval(c, &mut env)?;
         }
     }
-    if let Some(ref profiler) = env.profiler {
-        profiler.report();
+    if mem_profile {
+        if let Some(ref mut mp) = env.mem_profiler {
+            mp.sample("after eval");
+        }
     }
-    Ok(last)
+    #[cfg(iree_runtime)]
+    if mem_profile {
+        if let Some(ref mut mp) = env.mem_profiler {
+            for session in &env.vmfb_sessions {
+                if let Some(iree_session) = session.downcast_ref::<crate::runtime::iree_session::IreeSession>() {
+                    mp.sample_iree(iree_session.device_allocator_ptr());
+                }
+            }
+        }
+    }
+    if blame_report {
+        if let Some(ref profiler) = env.profiler {
+            profiler.report();
+        }
+    }
+
+    // Release IREE resources before reporting memory peak to capture teardown spikes
+    let mp = env.mem_profiler.take();
+    drop(env);
+
+    let mem_report = if mem_profile {
+        mp.as_ref().map(|m| m.report())
+    } else {
+        None
+    };
+    Ok((last, mem_report))
 }
 
 /// Stateful interpreter: accumulates definitions and bindings across calls.

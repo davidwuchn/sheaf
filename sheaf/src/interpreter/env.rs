@@ -63,6 +63,8 @@ pub struct Env {
     pub tracer: Option<crate::interpreter::tracer::Tracer>,
     /// Aggregated profiler for --blame mode.
     pub profiler: Option<crate::interpreter::profiler::Profiler>,
+    /// Memory profiler for --mem-profile mode.
+    pub mem_profiler: Option<crate::interpreter::mem_profile::MemProfiler>,
     /// Functions for which an IREE structure mismatch warning was already emitted.
     pub iree_mismatch_warned: std::collections::HashSet<String>,
     /// Optional wall-clock deadline for evaluation (safety net).
@@ -91,6 +93,7 @@ impl Env {
             eval_deadline: None,
             trace_targets: None,
             trace_stale_calls: 0,
+            mem_profiler: None,
             #[cfg(iree_runtime)]
             jit_compiler: Some(crate::runtime::jit::JitCompiler::new()),
         }
@@ -108,6 +111,7 @@ impl Env {
             eval_deadline: None,
             trace_targets: None,
             trace_stale_calls: 0,
+            mem_profiler: None,
             #[cfg(iree_runtime)]
             jit_compiler: Some(crate::runtime::jit::JitCompiler::new()),
         }

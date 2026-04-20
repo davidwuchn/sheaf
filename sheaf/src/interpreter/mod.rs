@@ -10,6 +10,7 @@ pub mod eval;
 mod iree_dispatch;
 pub(crate) mod hof;
 pub mod profiler;
+pub mod mem_profile;
 mod vag;
 pub mod tracer;
 pub mod value;

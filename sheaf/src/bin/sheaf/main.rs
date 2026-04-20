@@ -35,6 +35,7 @@ fn main() {
     let mut trace_enabled = false;
     let mut trace_scope: Option<Vec<String>> = None;
     let mut guard_specs: Vec<String> = Vec::new();
+    let mut mem_profile = false;
     let mut remaining: Vec<String> = Vec::new();
     let mut i = 0;
     while i < tail.len() {
@@ -53,6 +54,7 @@ fn main() {
             }
             "--jit-profile" => jit_profile = true,
             "--blame" => blame = true,
+            "--mem-profile" => mem_profile = true,
             "--trace" => {
                 trace_enabled = true;
                 if tail.get(i + 1).map(|a| !a.starts_with('-')).unwrap_or(false) {
@@ -103,6 +105,7 @@ fn main() {
                 trace_enabled,
                 trace_scope,
                 cli_guards,
+                mem_profile,
             );
         }
 
@@ -117,7 +120,7 @@ fn main() {
                     sheaf_msg!("sheaf: -c requires an expression");
                     exit(1);
                 }
-                run_expr_v2(&expr, blame, trace_enabled, trace_scope, cli_guards);
+                run_expr_v2(&expr, blame, trace_enabled, trace_scope, cli_guards, mem_profile);
             } else if remaining.is_empty() {
                 run_repl();
             } else {
@@ -145,6 +148,7 @@ Options:
     --trace-out FORMAT     Trace output: console (default), json
     --guard SPEC           Runtime guard: [scope:]variable:check (repeatable)
     --blame                Profile execution and print timing report
+    --mem-profile          Memory profiling (RSS at key checkpoints)
 
 Advanced options:
     --device DEVICE        Run on specific device: cpu, metal, cuda, vulkan (default: auto)
@@ -156,6 +160,7 @@ Examples:
     sheaf -c '(+ 1 2)'
     sheaf --blame train.shf
     sheaf --guard no-nan train.shf
+    sheaf --mem-profile gpt2.shf
     sheaf train.shf --guard loss:range:0:20",
         env!("CARGO_PKG_VERSION")
     );
@@ -170,42 +175,8 @@ fn is_silent_result(val: &sheaf_compiler::interpreter::value::Value) -> bool {
     }
 }
 
-fn run_expr_v2(
-    source: &str,
-    blame: bool,
-    trace_enabled: bool,
-    trace_scope: Option<Vec<String>>,
-    cli_guards: Vec<sheaf_compiler::interpreter::tracer::CliGuard>,
-) {
-    use sheaf_compiler::interpreter::eval::{eval_source, eval_source_with_blame, eval_source_with_tracing};
-    use sheaf_compiler::interpreter::tracer::{LogFormat, TraceLevel, TracerConfig};
-
-    let needs_tracing = trace_enabled || !cli_guards.is_empty();
-    let result = if blame {
-        let tracer_config = if needs_tracing {
-            Some(TracerConfig {
-                enabled: trace_enabled,
-                scope_filter: trace_scope,
-                level: TraceLevel::Normal,
-                format: LogFormat::Console,
-                cli_guards,
-            })
-        } else {
-            None
-        };
-        eval_source_with_blame(source, None, tracer_config)
-    } else if needs_tracing {
-        let config = TracerConfig {
-            enabled: trace_enabled,
-            scope_filter: trace_scope,
-            level: TraceLevel::Normal,
-            format: LogFormat::Console,
-            cli_guards,
-        };
-        eval_source_with_tracing(source, None, config)
-    } else {
-        eval_source(source)
-    };
+/// Print a result value (or exit on error).
+fn print_result(result: Result<sheaf_compiler::interpreter::value::Value, sheaf_compiler::core::error::SheafError>) {
     match result {
         Ok(val) => {
             if !is_silent_result(&val) {
@@ -219,35 +190,19 @@ fn run_expr_v2(
     }
 }
 
-fn run_file_v2(
-    path: &str,
+fn run_expr_v2(
+    source: &str,
     blame: bool,
     trace_enabled: bool,
     trace_scope: Option<Vec<String>>,
     cli_guards: Vec<sheaf_compiler::interpreter::tracer::CliGuard>,
+    mem_profile: bool,
 ) {
-    use std::path::PathBuf;
-    use sheaf_compiler::interpreter::eval::{eval_source_with_blame, eval_source_with_path, eval_source_with_tracing};
+    use sheaf_compiler::interpreter::eval::{eval_source, eval_source_with_blame, eval_source_with_blame_mem, eval_source_with_mem, eval_source_with_tracing};
     use sheaf_compiler::interpreter::tracer::{LogFormat, TraceLevel, TracerConfig};
 
-    let abs_path = PathBuf::from(path)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(path));
-
-    let source = match std::fs::read_to_string(&abs_path) {
-        Ok(s) => s,
-        Err(e) => {
-            sheaf_msg!("sheaf: cannot read '{}': {}", path, e);
-            exit(1);
-        }
-    };
-    sheaf_compiler::core::error_format::register_source(
-        abs_path.to_str().unwrap_or(path),
-        &source,
-    );
-
     let needs_tracing = trace_enabled || !cli_guards.is_empty();
-    let result = if blame {
+    if blame {
         let tracer_config = if needs_tracing {
             Some(TracerConfig {
                 enabled: trace_enabled,
@@ -259,7 +214,37 @@ fn run_file_v2(
         } else {
             None
         };
-        eval_source_with_blame(&source, Some(&abs_path), tracer_config)
+        if mem_profile {
+            let (val, mem_report) = eval_source_with_blame_mem(source, None, tracer_config)
+                .unwrap_or_else(|e| {
+                    sheaf_msg!("{}", sheaf_compiler::core::error_format::format_error(&e));
+                    exit(1);
+                });
+            if !is_silent_result(&val) {
+                println!("{}", val);
+            }
+            if !mem_report.is_empty() {
+                eprintln!("{}", mem_report);
+            }
+        } else {
+            eval_source_with_blame(source, None, tracer_config)
+                .unwrap_or_else(|e| {
+                    sheaf_msg!("{}", sheaf_compiler::core::error_format::format_error(&e));
+                    exit(1);
+                });
+        }
+    } else if mem_profile {
+        let (val, mem_report) = eval_source_with_mem(source, None)
+            .unwrap_or_else(|e| {
+                sheaf_msg!("{}", sheaf_compiler::core::error_format::format_error(&e));
+                exit(1);
+            });
+        if !is_silent_result(&val) {
+            println!("{}", val);
+        }
+        if !mem_report.is_empty() {
+            eprintln!("{}", mem_report);
+        }
     } else if needs_tracing {
         let config = TracerConfig {
             enabled: trace_enabled,
@@ -268,21 +253,92 @@ fn run_file_v2(
             format: LogFormat::Console,
             cli_guards,
         };
-        eval_source_with_tracing(&source, Some(&abs_path), config)
+        print_result(eval_source_with_tracing(source, None, config));
     } else {
-        eval_source_with_path(&source, Some(&abs_path))
-    };
+        print_result(eval_source(source));
+    }
+}
 
-    match result {
-        Ok(val) => {
+fn run_file_v2(
+    path: &str,
+    blame: bool,
+    trace_enabled: bool,
+    trace_scope: Option<Vec<String>>,
+    cli_guards: Vec<sheaf_compiler::interpreter::tracer::CliGuard>,
+    mem_profile: bool,
+) {
+    use std::path::PathBuf;
+    use sheaf_compiler::interpreter::eval::{eval_source_with_blame, eval_source_with_blame_mem, eval_source_with_path, eval_source_with_mem, eval_source_with_tracing};
+    use sheaf_compiler::interpreter::tracer::{LogFormat, TraceLevel, TracerConfig};
+
+    let abs_path = PathBuf::from(path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(path));
+
+    let source = std::fs::read_to_string(&abs_path).unwrap_or_else(|e| {
+        sheaf_msg!("sheaf: cannot read '{}': {}", path, e);
+        exit(1);
+    });
+    sheaf_compiler::core::error_format::register_source(
+        abs_path.to_str().unwrap_or(path),
+        &source,
+    );
+
+    let needs_tracing = trace_enabled || !cli_guards.is_empty();
+    if blame {
+        let tracer_config = if needs_tracing {
+            Some(TracerConfig {
+                enabled: trace_enabled,
+                scope_filter: trace_scope,
+                level: TraceLevel::Normal,
+                format: LogFormat::Console,
+                cli_guards,
+            })
+        } else {
+            None
+        };
+        if mem_profile {
+            let (val, mem_report) = eval_source_with_blame_mem(&source, Some(&abs_path), tracer_config)
+                .unwrap_or_else(|e| {
+                    sheaf_msg!("{}", sheaf_compiler::core::error_format::format_error(&e));
+                    exit(1);
+                });
             if !is_silent_result(&val) {
                 println!("{}", val);
             }
+            if !mem_report.is_empty() {
+                eprintln!("{}", mem_report);
+            }
+        } else {
+            eval_source_with_blame(&source, Some(&abs_path), tracer_config)
+                .unwrap_or_else(|e| {
+                    sheaf_msg!("{}", sheaf_compiler::core::error_format::format_error(&e));
+                    exit(1);
+                });
         }
-        Err(e) => {
-            sheaf_msg!("{}", sheaf_compiler::core::error_format::format_error(&e));
-            exit(1);
+    } else if mem_profile {
+        let (val, mem_report) = eval_source_with_mem(&source, Some(&abs_path))
+            .unwrap_or_else(|e| {
+                sheaf_msg!("{}", sheaf_compiler::core::error_format::format_error(&e));
+                exit(1);
+            });
+        if !is_silent_result(&val) {
+            println!("{}", val);
         }
+        if !mem_report.is_empty() {
+            eprintln!("{}", mem_report);
+        }
+    } else if needs_tracing {
+        let config = TracerConfig {
+            enabled: trace_enabled,
+            scope_filter: trace_scope,
+            level: TraceLevel::Normal,
+            format: LogFormat::Console,
+            cli_guards,
+        };
+        print_result(eval_source_with_tracing(&source, Some(&abs_path), config));
+    } else {
+        print_result(eval_source_with_path(&source, Some(&abs_path)));
     }
 }
 

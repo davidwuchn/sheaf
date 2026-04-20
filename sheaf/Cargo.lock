@@ -518,6 +518,7 @@ version = "2.0.0"
 dependencies = [
  "clap",
  "getrandom",
+ "libc",
  "ndarray",
  "nvml-wrapper",
  "rustyline",
