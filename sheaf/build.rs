@@ -31,6 +31,7 @@ fn main() {
 
     // macOS system frameworks
     if cfg!(target_os = "macos") {
+        println!("cargo:rustc-link-lib=framework=Accelerate");
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rustc-link-lib=framework=Metal");
