@@ -43,7 +43,7 @@ pub fn detect_cuda_target() -> Option<String> {
 
 use super::toolchain::{ensure_toolchain, find_iree_compile, IREE_COMPILER_VERSION};
 
-use crate::autodiff::reverse::{reverse_grad, to_anf};
+use crate::autodiff::{reverse::{reverse_grad, to_anf}, simplify, transforms::cse};
 use crate::core::expr::{CompiledExpr, FunctionDef, VmfbSession};
 use crate::lowering::codegen::{collect_tuple_leaves, expand_tuple_to_symbols, CodeGenerator};
 use crate::lowering::config::{layout_to_index_map, lower_get_calls};
@@ -948,6 +948,12 @@ impl JitCompiler {
                 let (backward_bindings, grad_sym_map) =
                     reverse_grad(&anf_bindings, &anf_body, &all_wrt_symbols, &shape_map);
 
+                // Apply AST-level optimizations to backward bindings
+                let backward_bindings: Vec<(String, CompiledExpr)> = backward_bindings
+                    .into_iter()
+                    .map(|(name, expr)| (name, cse(simplify(expr))))
+                    .collect();
+
                 if crate::core::config::verbosity() >= 2 {
                     sheaf_msg!("jit: [vag] ANF: {} fwd bindings, {} bwd bindings, {} wrt symbols",
                         anf_bindings.len(), backward_bindings.len(), all_wrt_symbols.len());
@@ -1194,7 +1200,6 @@ impl JitCompiler {
         let mut cmd = std::process::Command::new(iree_compile);
         cmd.arg(&mlir_path)
             .arg(format!("--iree-hal-target-backends={}", backend))
-            .arg("--iree-opt-const-eval=false")
             .arg("-o")
             .arg(&vmfb_path)
             .stderr(stderr_cfg);

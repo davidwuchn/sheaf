@@ -131,6 +131,18 @@ pub fn simplify(expr: CompiledExpr) -> CompiledExpr {
                     (_, CompiledExpr::Float(f)) if *f == 0.0 => args.into_iter().next().unwrap(),
                     _ => call("-", args),
                 },
+                "transpose" | "tr" => {
+                    // Detect: transpose(transpose(x)) → x (double transpose elimination)
+                    if args.len() == 1 {
+                        if let CompiledExpr::FunctionCall { name, args: inner_args, .. } = &args[0] {
+                            if (name == "transpose" || name == "tr") && inner_args.len() == 1 {
+                                // Double transpose cancels out
+                                return inner_args[0].clone();
+                            }
+                        }
+                    }
+                    call(&name, args)
+                },
                 _ => call(&name, args),
             }
         }
