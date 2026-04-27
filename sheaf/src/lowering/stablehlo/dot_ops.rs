@@ -74,42 +74,175 @@ impl StableHLOEmitter {
             return (reg, result_ty);
         }
 
-        // General case: both rank >= 2
-        let n_batch = if rhs_rank <= 2 {
-            0
-        } else {
-            lhs_rank.min(rhs_rank).saturating_sub(2)
-        };
-        let lhs_contract = lhs_rank as i64 - 1;
-        let rhs_contract = n_batch as i64;
+    // General case: both rank >= 2
+    let n_batch = if rhs_rank <= 2 {
+        0
+    } else {
+        lhs_rank.min(rhs_rank).saturating_sub(2)
+    };
+    let lhs_contract = lhs_rank as i64 - 1;
+    let rhs_contract = n_batch as i64;
 
-        let mut result_shape: Vec<i64> = lhs_shape[..n_batch].to_vec();
-        result_shape.extend_from_slice(&lhs_shape[n_batch..lhs_rank - 1]);
-        result_shape.extend_from_slice(&rhs_shape[n_batch + 1..]);
+    let mut result_shape: Vec<i64> = lhs_shape[..n_batch].to_vec();
+    result_shape.extend_from_slice(&lhs_shape[n_batch..lhs_rank - 1]);
+    result_shape.extend_from_slice(&rhs_shape[n_batch + 1..]);
 
-        let result_ty = StableHLOType::f32_tensor(result_shape);
+    // Flatten leading size-1 batch dims on the higher-rank operand when the
+    // other operand is 2D (e.g. [1,M,K] @ [K,N]). IREE generates much faster
+    // GEMM kernels for 2D dot_general than for batched 3D+ patterns.
+    let lhs_leading_1 = if lhs_rank > 2 && rhs_rank <= 2 {
+        let mut n = 0;
+        for &d in &lhs_shape[..lhs_rank - 2] {
+            if d == 1 { n += 1; } else { break; }
+        }
+        if n == lhs_rank - 2 { n } else { n }
+    } else {
+        0
+    };
+    let rhs_leading_1 = if rhs_rank > 2 && lhs_rank <= 2 {
+        let mut n = 0;
+        for &d in &rhs_shape[..rhs_rank - 2] {
+            if d == 1 { n += 1; } else { break; }
+        }
+        if n == rhs_rank - 2 { n } else { n }
+    } else {
+        0
+    };
+
+    if lhs_leading_1 > 0 {
+        let lhs_flat_shape: Vec<i64> = lhs_shape[lhs_leading_1..].to_vec();
+        let (lhs_flat, lhs_flat_ty) = self.emit_reshape(lhs, lhs_ty, &lhs_flat_shape);
+        let flat_lhs_contract = lhs_contract - lhs_leading_1 as i64;
+        let flat_result_shape: Vec<i64> = result_shape[lhs_leading_1..].to_vec();
+        let flat_result_ty = StableHLOType::f32_tensor(flat_result_shape.clone());
         let reg = self.fresh_register();
+        self.body.push(format!(
+            " {} = stablehlo.dot_general {}, {}, contracting_dims = [{}] x [{}] : ({}, {}) -> {}",
+            reg.to_mlir(), lhs_flat.to_mlir(), rhs.to_mlir(),
+            flat_lhs_contract, rhs_contract,
+            lhs_flat_ty.to_mlir(), rhs_ty.to_mlir(), flat_result_ty.to_mlir()
+        ));
+        let result_ty = StableHLOType::f32_tensor(result_shape.clone());
+        let (result_reg, _) = self.emit_reshape(&reg, &flat_result_ty, &result_shape);
+        return (result_reg, result_ty);
+    }
 
-        if n_batch == 0 {
+    if rhs_leading_1 > 0 {
+        let rhs_flat_shape: Vec<i64> = rhs_shape[rhs_leading_1..].to_vec();
+        let (rhs_flat, rhs_flat_ty) = self.emit_reshape(rhs, rhs_ty, &rhs_flat_shape);
+        let flat_rhs_contract = rhs_contract - rhs_leading_1 as i64;
+        let flat_result_shape: Vec<i64> = result_shape[rhs_leading_1..].to_vec();
+        let flat_result_ty = StableHLOType::f32_tensor(flat_result_shape.clone());
+        let reg = self.fresh_register();
+        self.body.push(format!(
+            " {} = stablehlo.dot_general {}, {}, contracting_dims = [{}] x [{}] : ({}, {}) -> {}",
+            reg.to_mlir(), lhs.to_mlir(), rhs_flat.to_mlir(),
+            lhs_contract, flat_rhs_contract,
+            lhs_ty.to_mlir(), rhs_flat_ty.to_mlir(), flat_result_ty.to_mlir()
+        ));
+        let result_ty = StableHLOType::f32_tensor(result_shape.clone());
+        let (result_reg, _) = self.emit_reshape(&reg, &flat_result_ty, &result_shape);
+        return (result_reg, result_ty);
+    }
+
+    // If all batch dims are size 1, flatten to 2D matmul + reshape.
+    // This gives IREE a simpler GEMM pattern instead of a batched loop.
+    let all_batch_are_1 = n_batch > 0
+        && lhs_shape[..n_batch].iter().all(|&d| d == 1)
+        && rhs_shape[..n_batch].iter().all(|&d| d == 1);
+
+    if all_batch_are_1 {
+        let lhs_2d_shape = vec![lhs_shape[n_batch..lhs_rank - 1].iter().product::<i64>(), lhs_shape[lhs_rank - 1]];
+        let rhs_2d_shape = vec![rhs_shape[n_batch], rhs_shape[n_batch + 1..].iter().product::<i64>()];
+        let (lhs_flat, lhs_2d_ty) = self.emit_reshape(lhs, lhs_ty, &lhs_2d_shape);
+        let (rhs_flat, rhs_2d_ty) = self.emit_reshape(rhs, rhs_ty, &rhs_2d_shape);
+        let m = lhs_2d_shape[0];
+        let n = rhs_2d_shape[1];
+        let result_2d_shape = vec![m, n];
+        let result_2d_ty = StableHLOType::f32_tensor(result_2d_shape.clone());
+        let reg = self.fresh_register();
+        self.body.push(format!(
+            " {} = stablehlo.dot_general {}, {}, contracting_dims = [1] x [0] : ({}, {}) -> {}",
+            reg.to_mlir(), lhs_flat.to_mlir(), rhs_flat.to_mlir(),
+            lhs_2d_ty.to_mlir(), rhs_2d_ty.to_mlir(), result_2d_ty.to_mlir()
+        ));
+        let result_ty = StableHLOType::f32_tensor(result_shape.clone());
+        let (result_reg, _) = self.emit_reshape(&reg, &result_2d_ty, &result_shape);
+        return (result_reg, result_ty);
+    }
+
+    // Peel leading size-1 batch dims.
+    // This reduces batch loop iterations in IREE's kernel generation.
+    let n_peel = if n_batch > 0 {
+        let mut n = 0;
+        for i in 0..n_batch {
+            if lhs_shape[i] == 1 && rhs_shape[i] == 1 {
+                n += 1;
+            } else {
+                break;
+            }
+        }
+        n
+    } else {
+        0
+    };
+
+    if n_peel > 0 {
+        let lhs_flat_shape: Vec<i64> = lhs_shape[n_peel..].to_vec();
+        let rhs_flat_shape: Vec<i64> = rhs_shape[n_peel..].to_vec();
+        let (lhs_flat, lhs_flat_ty) = self.emit_reshape(lhs, lhs_ty, &lhs_flat_shape);
+        let (rhs_flat, rhs_flat_ty) = self.emit_reshape(rhs, rhs_ty, &rhs_flat_shape);
+        let lhs_flat_contract = lhs_contract - n_peel as i64;
+        let rhs_flat_contract = rhs_contract - n_peel as i64;
+        let flat_result_shape: Vec<i64> = result_shape[n_peel..].to_vec();
+        let flat_result_ty = StableHLOType::f32_tensor(flat_result_shape.clone());
+        let remaining_batch = n_batch - n_peel;
+        let reg = self.fresh_register();
+        if remaining_batch == 0 {
             self.body.push(format!(
-                "    {} = stablehlo.dot_general {}, {}, contracting_dims = [{}] x [{}] : ({}, {}) -> {}",
-                reg.to_mlir(), lhs.to_mlir(), rhs.to_mlir(),
-                lhs_contract, rhs_contract,
-                lhs_ty.to_mlir(), rhs_ty.to_mlir(), result_ty.to_mlir()
+                " {} = stablehlo.dot_general {}, {}, contracting_dims = [{}] x [{}] : ({}, {}) -> {}",
+                reg.to_mlir(), lhs_flat.to_mlir(), rhs_flat.to_mlir(),
+                lhs_flat_contract, rhs_flat_contract,
+                lhs_flat_ty.to_mlir(), rhs_flat_ty.to_mlir(), flat_result_ty.to_mlir()
             ));
         } else {
-            let batch_dims: Vec<String> = (0..n_batch).map(|i| i.to_string()).collect();
-            let batch_str = batch_dims.join(", ");
+            let batch_dims: Vec<String> = (0..remaining_batch).map(|i| i.to_string()).collect();
             self.body.push(format!(
-                "    {} = stablehlo.dot_general {}, {}, batching_dims = [{}] x [{}], contracting_dims = [{}] x [{}] : ({}, {}) -> {}",
-                reg.to_mlir(), lhs.to_mlir(), rhs.to_mlir(),
-                batch_str, batch_str,
-                lhs_contract, rhs_contract,
-                lhs_ty.to_mlir(), rhs_ty.to_mlir(), result_ty.to_mlir()
+                " {} = stablehlo.dot_general {}, {}, batching_dims = [{}] x [{}], contracting_dims = [{}] x [{}] : ({}, {}) -> {}",
+                reg.to_mlir(), lhs_flat.to_mlir(), rhs_flat.to_mlir(),
+                batch_dims.join(", "), batch_dims.join(", "),
+                lhs_flat_contract, rhs_flat_contract,
+                lhs_flat_ty.to_mlir(), rhs_flat_ty.to_mlir(), flat_result_ty.to_mlir()
             ));
         }
+        let result_ty = StableHLOType::f32_tensor(result_shape.clone());
+        let (result_reg, _) = self.emit_reshape(&reg, &flat_result_ty, &result_shape);
+        return (result_reg, result_ty);
+    }
 
-        (reg, result_ty)
+    let result_ty = StableHLOType::f32_tensor(result_shape);
+    let reg = self.fresh_register();
+
+    if n_batch == 0 {
+        self.body.push(format!(
+            "  {} = stablehlo.dot_general {}, {}, contracting_dims = [{}] x [{}] : ({}, {}) -> {}",
+            reg.to_mlir(), lhs.to_mlir(), rhs.to_mlir(),
+            lhs_contract, rhs_contract,
+            lhs_ty.to_mlir(), rhs_ty.to_mlir(), result_ty.to_mlir()
+        ));
+    } else {
+        let batch_dims: Vec<String> = (0..n_batch).map(|i| i.to_string()).collect();
+        let batch_str = batch_dims.join(", ");
+        self.body.push(format!(
+            "  {} = stablehlo.dot_general {}, {}, batching_dims = [{}] x [{}], contracting_dims = [{}] x [{}] : ({}, {}) -> {}",
+            reg.to_mlir(), lhs.to_mlir(), rhs.to_mlir(),
+            batch_str, batch_str,
+            lhs_contract, rhs_contract,
+            lhs_ty.to_mlir(), rhs_ty.to_mlir(), result_ty.to_mlir()
+        ));
+    }
+
+    (reg, result_ty)
     }
 
     /// Emit einsum via dot_general + optional transpose.

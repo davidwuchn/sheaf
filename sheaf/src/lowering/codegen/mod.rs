@@ -197,25 +197,25 @@ impl CodeGenerator {
                 );
                 self.bindings.insert(n.to_string(), (elem_reg, element_types[i].clone()));
             }
-        } else {
-            let (reg, ty) = self.generate(value_expr)?;
-            if matches!(&ty, StableHLOType::Tuple(..)) {
-                if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args, .. } = value_expr {
-                    if fn_name == "get" && fn_args.len() >= 2 {
-                        if let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last() {
-                            if let Some(sub_layout) = self.tuple_key_layouts.get(k).cloned() {
-                                self.tuple_key_layouts.insert(name.to_string(), sub_layout);
-                            }
+    } else {
+        let (reg, ty) = self.generate(value_expr)?;
+        if matches!(&ty, StableHLOType::Tuple(..)) {
+            if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args, .. } = value_expr {
+                if fn_name == "get" && fn_args.len() >= 2 {
+                    if let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last() {
+                        if let Some(sub_layout) = self.tuple_key_layouts.get(k).cloned() {
+                            self.tuple_key_layouts.insert(name.to_string(), sub_layout);
                         }
                     }
-                } else if let CompiledExpr::Symbol(src) = value_expr {
-                    if let Some(layout) = self.tuple_key_layouts.get(src).cloned() {
-                        self.tuple_key_layouts.insert(name.to_string(), layout);
-                    }
+                }
+            } else if let CompiledExpr::Symbol(src) = value_expr {
+                if let Some(layout) = self.tuple_key_layouts.get(src).cloned() {
+                    self.tuple_key_layouts.insert(name.to_string(), layout);
                 }
             }
-            self.bindings.insert(name.to_string(), (reg, ty));
         }
+            self.bindings.insert(name.to_string(), (reg, ty));
+            }
         Ok(())
     }
 
@@ -395,15 +395,14 @@ impl CodeGenerator {
 
             CompiledExpr::FunctionCall { name, args, .. } => self.generate_function_call(name, args),
 
-            CompiledExpr::Let { bindings, body } => {
-                let saved_bindings = self.bindings.clone();
-                let saved_lambda_bindings = self.lambda_bindings.clone();
-                for (name, value_expr) in bindings {
-                    if matches!(value_expr, CompiledExpr::Lambda { .. }) {
-                        // Store lambda for inlining: no SSA emitted.
-                        self.lambda_bindings
-                            .insert(name.clone(), value_expr.clone());
-                    } else if name.starts_with('[') && name.ends_with(']') {
+    CompiledExpr::Let { bindings, body } => {
+        let saved_bindings = self.bindings.clone();
+        let saved_lambda_bindings = self.lambda_bindings.clone();
+        for (name, value_expr) in bindings {
+            if matches!(value_expr, CompiledExpr::Lambda { .. }) {
+                self.lambda_bindings
+                    .insert(name.clone(), value_expr.clone());
+            } else if name.starts_with('[') && name.ends_with(']') {
                         // Destructuring bind: [a b c] = tuple -> get_tuple_element
                         let names: Vec<&str> =
                             name[1..name.len() - 1].split_whitespace().collect();
@@ -470,13 +469,13 @@ impl CodeGenerator {
                                 }
                             }
                         }
-                        self.bindings.insert(name.clone(), (reg, ty));
-                    }
-                }
-                let result = self.generate(body)?;
-                self.bindings = saved_bindings;
-                self.lambda_bindings = saved_lambda_bindings;
-                Ok(result)
+            self.bindings.insert(name.clone(), (reg, ty));
+            }
+        }
+        let result = self.generate(body)?;
+        self.bindings = saved_bindings;
+        self.lambda_bindings = saved_lambda_bindings;
+        Ok(result)
             }
 
             CompiledExpr::If {
@@ -695,15 +694,15 @@ impl CodeGenerator {
         let leaves = self.emitter.collect_virtual_leaves(result_reg, &result_ty);
         let (leaf_regs, leaf_tys): (Vec<_>, Vec<_>) = leaves.into_iter().unzip();
 
-        if leaf_regs.len() == 1 {
-            self.emitter.emit_return(&leaf_regs[0], &leaf_tys[0]);
-            let body = self.emitter.body.clone();
+    if leaf_regs.len() == 1 {
+        self.emitter.emit_return(&leaf_regs[0], &leaf_tys[0]);
+        let body = self.emitter.body.clone();
             let decl = self.emitter
                 .emit_func_declaration(name, &flat_params, &leaf_tys[0], &body);
             Ok((decl, result_ty))
-        } else {
-            self.emitter.emit_return_multi(&leaf_regs, &leaf_tys);
-            let body = self.emitter.body.clone();
+    } else {
+        self.emitter.emit_return_multi(&leaf_regs, &leaf_tys);
+        let body = self.emitter.body.clone();
             let decl = self.emitter
                 .emit_func_declaration_multi(name, &flat_params, &leaf_tys, &body);
             Ok((decl, result_ty))
@@ -732,8 +731,8 @@ impl CodeGenerator {
                 all_tys.push(leaf_t);
             }
         }
-        self.emitter.emit_return_multi(&all_regs, &all_tys);
-        let body = self.emitter.body.clone();
+    self.emitter.emit_return_multi(&all_regs, &all_tys);
+    let body = self.emitter.body.clone();
         self.emitter
             .emit_func_declaration_multi(name, &flat_params, &all_tys, &body)
     }

@@ -162,7 +162,6 @@ pub fn reverse_grad(
     let mut adj_names: HashMap<String, String> = HashMap::new();
     let mut backward_bindings: Vec<(String, CompiledExpr)> = Vec::new();
 
-    // Seed: the output adjoint is 1.0
     if let CompiledExpr::Symbol(s) = anf_body {
         let seed_name = fresh_grad_name();
         backward_bindings.push((seed_name.clone(), CompiledExpr::Float(1.0)));
@@ -173,7 +172,7 @@ pub fn reverse_grad(
     for (name, value) in anf_bindings.iter().rev() {
         let adj_sym = match adj_names.get(name) {
             Some(s) => CompiledExpr::Symbol(s.clone()),
-            None => continue, // this binding doesn't contribute to the output
+            None => continue,
         };
 
         distribute_adjoint_named(value, &adj_sym, &mut adj_names, &mut backward_bindings, shapes);
@@ -297,7 +296,6 @@ fn distribute_adjoint_named(
     shapes: &HashMap<String, Vec<i64>>,
 ) {
     match expr {
-        // Alias: let x = y  ->  dy += dx
         CompiledExpr::Symbol(s) => {
             accumulate_named(s, adj_sym.clone(), adj_names, bindings);
         }
@@ -539,8 +537,6 @@ fn distribute_fn_adjoint_named(
         }
 
         "softmax" => {
-            // d_input = softmax(x) * (adj - sum(adj * softmax(x), axis=-1, keepdims=true))
-            // Pass axis from original softmax args (default -1)
             let axis = parse_keyword_int(args, "axis").unwrap_or(-1);
             let fwd_args: Vec<CompiledExpr> = args.to_vec();
             let sm = emit_binding(bindings, call("softmax", fwd_args));

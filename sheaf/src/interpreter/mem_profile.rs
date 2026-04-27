@@ -341,6 +341,7 @@ fn current_phys_footprint() -> usize {
         phys_footprint:              u64,
     }
 
+    #[allow(clashing_extern_declarations)]
     unsafe extern "C" {
         fn task_info(
             target_task: mach_port_t,

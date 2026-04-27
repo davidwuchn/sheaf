@@ -979,12 +979,11 @@ impl JitCompiler {
                     }
                 }
 
-                // Generate backward bindings (adjoint computations).
-                // Backward bindings are always simple name=expr (no Lambda/destructuring).
-                for (name, value_expr) in &backward_bindings {
-                    let (reg, ty) = codegen.generate(value_expr)?;
-                    codegen.bind_symbol(name, reg, ty);
-                }
+        // Generate backward bindings.
+        for (name, value_expr) in &backward_bindings {
+    let (reg, ty) = codegen.generate(value_expr)?;
+        codegen.bind_symbol(name, reg, ty);
+    }
 
                 // Collect gradient registers for each wrt param.
                 let mut grad_regs: Vec<Register> = Vec::new();

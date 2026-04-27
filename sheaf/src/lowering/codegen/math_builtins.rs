@@ -14,47 +14,36 @@ impl CodeGenerator {
         name: &str,
         args: &[CompiledExpr],
     ) -> Option<SheafResult<(Register, StableHLOType)>> {
-        // Arithmetic operations (binary or n-ary fold-left)
         if matches!(name, "+" | "-" | "*" | "/") && args.len() >= 2 {
             Some(self.gen_arithmetic(name, args))
         }
-        // Extended arithmetic: **, //, mod
         else if matches!(name, "**" | "//" | "%" | "mod") && args.len() == 2 {
             Some(self.gen_extended_arithmetic(name, args))
         }
-        // Min/max operations (binary)
         else if matches!(name, "min" | "max") && args.len() == 2 {
             Some(self.gen_minmax_binary(name, args))
         }
-        // Comparison operations
         else if matches!(name, "=" | "==" | "!=" | "<" | "<=" | ">" | ">=") && args.len() == 2 {
             Some(self.gen_comparison(name, args))
         }
-        // Matrix multiply
         else if name == "@" && args.len() == 2 {
             Some(self.gen_matmul(args))
         }
-        // Boolean binary operations
         else if matches!(name, "and" | "or") && args.len() == 2 {
             Some(self.gen_boolean_binop(name, args))
         }
-        // Unary negation: (- x) -> negate
         else if name == "-" && args.len() == 1 {
             Some(self.gen_math_unary("neg", args))
         }
-        // Math unary operations: sqrt, exp, log, abs, neg
         else if matches!(name, "sqrt" | "exp" | "log" | "abs" | "neg") && args.len() == 1 {
             Some(self.gen_math_unary(name, args))
         }
-        // Boolean not
         else if name == "not" && args.len() == 1 {
             Some(self.gen_not(args))
         }
-        // tanh
         else if name == "tanh" && args.len() == 1 {
             Some(self.gen_tanh(args))
         }
-        // minimum/maximum: element-wise min/max
         else if matches!(name, "minimum" | "maximum") && args.len() == 2 {
             Some(self.gen_minimum_maximum(name, args))
         }
@@ -115,7 +104,8 @@ impl CodeGenerator {
     ) -> SheafResult<(Register, StableHLOType)> {
         let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
         let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
-        let (result_reg, result_ty) = self.emitter.emit_matmul(&lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
+        let (result_reg, result_ty) =
+            self.emitter.emit_matmul(&lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
         Ok((result_reg, result_ty))
     }
 
