@@ -18,14 +18,11 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 serde_json = "1.0"
-ndarray = "0.16"
+ndarray = { version = "0.16", features = ["blas"] }
 getrandom = "0.2"
 rustyline = "14"
 nvml-wrapper = "0.10"
 libc = "0.2"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-ndarray = { version = "0.16", features = ["blas"] }
 blas-src = { version = "0.10", features = ["accelerate"] }
 
 [package.metadata]
