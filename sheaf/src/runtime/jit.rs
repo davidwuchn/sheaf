@@ -51,7 +51,7 @@ use crate::lowering::effects::{collect_effects, collect_hof_calls};
 use crate::lowering::stablehlo::{Register, StableHLOEmitter};
 use crate::lowering::transforms::{
     extract_scalar_constants, lower_inlined_gets, propagate_let_layouts, resolve_static_constants,
-    unroll_reduces,
+    substitute_scalar_param, unroll_reduces,
 };
 use crate::sheaf_msg;
 
@@ -329,7 +329,7 @@ impl JitCompiler {
         }
         body = lower_inlined_gets(&body, &param_index_maps);
 
-        // Resolve static constants
+        // Compute param_shapes (needed by both preprocess_vag_lambda and resolve_static_constants)
         let param_shapes: HashMap<String, Vec<i64>> = func_def
             .params
             .iter()
@@ -343,7 +343,16 @@ impl JitCompiler {
                 }
             })
             .collect();
-        body = resolve_static_constants(&body, &constants, &param_shapes);
+
+        // Preprocess VAG lambda bodies BEFORE resolve_static_constants so that
+        // VAG lambdas get their own resolve_static_constants with correct (unshadowed)
+        // param_shapes. Then the outer resolve_static_constants can safely skip
+        // Lambda bodies since they're already resolved.
+        body = self.preprocess_vag_lambda(
+            &body, registry, &constants, &param_shapes, &param_index_maps, &known_types,
+        );
+
+        body = resolve_static_constants(&body, &constants, &param_shapes, true);
 
         // Build key layouts for codegen
         let mut tuple_key_layouts: HashMap<String, BTreeMap<String, usize>> = HashMap::new();
@@ -522,6 +531,25 @@ impl JitCompiler {
         Some((session_idx, sig))
     }
 
+    /// Preprocess VAG lambda bodies found in a function body.
+    ///
+    /// When the body contains `((value-and-grad loss-fn) params)`, the Lambda
+    /// inside `__value-and-grad-hof__` hasn't been preprocessed by the standard
+    /// pipeline (inline_function_calls doesn't recurse into Lambdas). This method
+    /// finds the Lambda, applies the same preprocessing (inline, lower_gets,
+    /// resolve_static_constants), and puts it back.
+    fn preprocess_vag_lambda(
+        &self,
+        body: &CompiledExpr,
+        registry: &HashMap<String, FunctionDef>,
+        constants: &HashMap<(String, Vec<usize>), f64>,
+        param_shapes: &HashMap<String, Vec<i64>>,
+        param_index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+        known_types: &[(String, StableHLOType)],
+    ) -> CompiledExpr {
+        preprocess_vag_lambda_rec(body, registry, constants, param_shapes, param_index_maps, known_types)
+    }
+
     /// JIT-compile a value-and-grad closure into a single VMFB.
     ///
     /// The closure `func` is `(fn [p] loss-body)` with captured values in its closure.
@@ -655,7 +683,7 @@ impl JitCompiler {
         // Substitute scalar captures in body
         let mut body = body.clone();
         for (name, val) in &scalar_substitutions {
-            body = substitute_scalar(&body, name, *val);
+            body = substitute_scalar_param(&body, name, *val);
         }
 
         // Type inference from runtime args
@@ -831,7 +859,7 @@ impl JitCompiler {
         for (param_name, param_ty) in all_param_names.iter().zip(sig.param_types.iter()) {
             inject_tuple_shapes(param_name, param_ty, &[], &mut param_shapes);
         }
-        body = resolve_static_constants(&body, &constants, &param_shapes);
+        body = resolve_static_constants(&body, &constants, &param_shapes, false);
 
         // Build key layouts for codegen
         let mut tuple_key_layouts: HashMap<String, BTreeMap<String, usize>> = HashMap::new();
@@ -1280,9 +1308,9 @@ impl JitCompiler {
 pub enum JitVagOutcome {
     /// JIT compiled and executed successfully, or had a runtime error.
     Success(Result<Value, SheafError>),
-    /// JIT architecture doesn't support this pattern — interpreter fallback OK.
+    /// JIT architecture doesn't support this pattern: interpreter fallback OK.
     Unsupported,
-    /// JIT should handle this but failed — likely a Sheaf bug.
+    /// JIT should handle this but failed: likely a Sheaf bug.
     Bug(String),
 }
 
@@ -1303,66 +1331,6 @@ fn resolve_leaf_type(ty: &StableHLOType, indices: &[usize]) -> StableHLOType {
     current
 }
 
-/// Substitute all occurrences of `Symbol(name)` with `Float(val)` in a compiled expression.
-fn substitute_scalar(expr: &CompiledExpr, name: &str, val: f64) -> CompiledExpr {
-    match expr {
-        CompiledExpr::Symbol(s) if s == name => CompiledExpr::Float(val),
-        CompiledExpr::FunctionCall {
-            name: fn_name,
-            args,
-            ..
-        } => CompiledExpr::FunctionCall {
-            name: fn_name.clone(),
-            args: args
-                .iter()
-                .map(|a| substitute_scalar(a, name, val))
-                .collect(),
-            loc: None,
-        },
-        CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
-            bindings: bindings
-                .iter()
-                .map(|(k, v)| (k.clone(), substitute_scalar(v, name, val)))
-                .collect(),
-            body: Box::new(substitute_scalar(body, name, val)),
-        },
-        CompiledExpr::Lambda { params, body } => {
-            if params.contains(&name.to_string()) {
-                expr.clone() // shadowed
-            } else {
-                CompiledExpr::Lambda {
-                    params: params.clone(),
-                    body: Box::new(substitute_scalar(body, name, val)),
-                }
-            }
-        }
-        CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
-            callee: Box::new(substitute_scalar(callee, name, val)),
-            args: args
-                .iter()
-                .map(|a| substitute_scalar(a, name, val))
-                .collect(),
-        },
-        CompiledExpr::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => CompiledExpr::If {
-            condition: Box::new(substitute_scalar(condition, name, val)),
-            then_branch: Box::new(substitute_scalar(then_branch, name, val)),
-            else_branch: else_branch
-                .as_ref()
-                .map(|e| Box::new(substitute_scalar(e, name, val))),
-        },
-        CompiledExpr::Do(exprs) => CompiledExpr::Do(
-            exprs
-                .iter()
-                .map(|e| substitute_scalar(e, name, val))
-                .collect(),
-        ),
-        other => other.clone(),
-    }
-}
 
 #[cfg(iree_runtime)]
 fn inject_tuple_shapes(
@@ -1372,10 +1340,17 @@ fn inject_tuple_shapes(
     shapes: &mut HashMap<String, Vec<i64>>,
 ) {
     match ty {
-        StableHLOType::Tuple(elems, _) => {
+        StableHLOType::Tuple(elems, keys) => {
             for (i, elem_ty) in elems.iter().enumerate() {
                 let mut child_indices = indices.to_vec();
                 child_indices.push(i);
+                if let Some(key_names) = keys {
+                    if let Some(key) = key_names.get(i) {
+                        shapes.insert(key.clone(), elem_ty.shape().to_vec());
+                        inject_tuple_shapes(key, elem_ty, &child_indices, shapes);
+                        continue;
+                    }
+                }
                 inject_tuple_shapes(param_name, elem_ty, &child_indices, shapes);
             }
         }
@@ -1510,4 +1485,89 @@ fn update_manifest(cache_dir: &std::path::Path, name: &str, hash: &str) {
         &manifest_path,
         serde_json::to_string_pretty(&manifest).unwrap(),
     );
+}
+
+
+fn preprocess_vag_lambda_rec(
+    expr: &CompiledExpr,
+    registry: &HashMap<String, FunctionDef>,
+    constants: &HashMap<(String, Vec<usize>), f64>,
+    param_shapes: &HashMap<String, Vec<i64>>,
+    param_index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+    known_types: &[(String, StableHLOType)],
+) -> CompiledExpr {
+    let recurse = |e: &CompiledExpr| preprocess_vag_lambda_rec(e, registry, constants, param_shapes, param_index_maps, known_types);
+
+    match expr {
+        CompiledExpr::LambdaCall { callee, args } => {
+            let new_callee = recurse(callee);
+            let new_args: Vec<CompiledExpr> = args.iter().map(&recurse).collect();
+
+            if let CompiledExpr::FunctionCall { name, args: inner_args, .. } = &new_callee {
+                if name == "__value-and-grad-hof__" && inner_args.len() == 1 {
+                    let preprocessed_lambda = preprocess_one_vag_lambda(
+                        &inner_args[0], registry, constants, param_shapes, param_index_maps, known_types,
+                    );
+                    return CompiledExpr::LambdaCall {
+                        callee: Box::new(CompiledExpr::FunctionCall {
+                            name: "__value-and-grad-hof__".to_string(),
+                            args: vec![preprocessed_lambda],
+                            loc: None,
+                        }),
+                        args: new_args,
+                    };
+                }
+            }
+            CompiledExpr::LambdaCall { callee: Box::new(new_callee), args: new_args }
+        }
+        _ => expr.map_children(recurse),
+    }
+}
+
+fn preprocess_one_vag_lambda(
+    lambda_expr: &CompiledExpr,
+    registry: &HashMap<String, FunctionDef>,
+    constants: &HashMap<(String, Vec<usize>), f64>,
+    param_shapes: &HashMap<String, Vec<i64>>,
+    param_index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+    known_types: &[(String, StableHLOType)],
+) -> CompiledExpr {
+    let (params, body) = match lambda_expr {
+        CompiledExpr::Lambda { params, body, .. } => (params.clone(), body.as_ref().clone()),
+        _ => return lambda_expr.clone(),
+    };
+
+    let mut lambda_param_shapes: HashMap<String, Vec<i64>> = param_shapes.clone();
+    for (name, ty) in known_types {
+        if params.contains(name) {
+            inject_tuple_shapes(name, ty, &[], &mut lambda_param_shapes);
+        }
+    }
+
+    let body = preprocess_body(&body, registry, param_index_maps, constants, &lambda_param_shapes, false);
+
+    CompiledExpr::Lambda {
+        params,
+        body: Box::new(body),
+    }
+}
+
+fn preprocess_body(
+    body: &CompiledExpr,
+    registry: &HashMap<String, FunctionDef>,
+    param_index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+    constants: &HashMap<(String, Vec<usize>), f64>,
+    param_shapes: &HashMap<String, Vec<i64>>,
+    skip_lambda: bool,
+) -> CompiledExpr {
+    let mut body = crate::autodiff::inline_function_calls(body, registry);
+
+    for (param_name, index_map) in param_index_maps {
+        body = lower_get_calls(&body, param_name, index_map);
+    }
+    body = lower_inlined_gets(&body, param_index_maps);
+
+    body = resolve_static_constants(&body, constants, param_shapes, skip_lambda);
+
+    body
 }
