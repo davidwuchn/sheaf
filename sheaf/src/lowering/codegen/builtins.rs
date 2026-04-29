@@ -157,11 +157,15 @@ impl CodeGenerator {
             }
 
             if !tree_tys.iter().all(|t| t.tuple_structure_matches(&tree_tys[0])) {
-                return Err(SheafError::Compile {
-                    message: "tree-map: all tree arguments must have the same tuple structure"
-                        .to_string(),
-                    location: crate::core::error::SourceLocation::unknown(),
-                });
+                                let ty_strs: Vec<String> = tree_tys.iter().map(|t| {
+                                let mlir = t.to_mlir();
+                                let len = if let StableHLOType::Tuple(e, _) = t { e.len() } else { 0 };
+                                format!("(len={} {}...)", len, &mlir[..mlir.len().min(80)])
+                            }).collect();
+                            return Err(SheafError::Compile {
+                                message: format!("tree-map: all tree arguments must have the same tuple structure (got: {:?})", ty_strs),
+                                location: crate::core::error::SourceLocation::unknown(),
+                            });
             }
 
             self.generate_tree_map(lambda, &tree_regs, &tree_tys)

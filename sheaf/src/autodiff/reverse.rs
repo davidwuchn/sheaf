@@ -778,7 +778,13 @@ fn distribute_fn_adjoint_named(
         // get(table, indices): embedding lookup / gather on axis 0.
         // Backward: scatter-add the adjoint into a zeros table.
         // For tensor indices: transpose(one-hot(indices, V)) @ adj
-        // For scalar index:  reshape(one-hot(idx, V), [V,1]) @ reshape(adj, [1,D])
+        // For scalar index: reshape(one-hot(idx, V), [V,1]) @ reshape(adj, [1,D])
+        //
+        // Dict-access get (e.g. get(dict, :key)) is not tensor indexing:
+        // just pass the adjoint through to the dict argument.
+        "get" if args.len() == 2 && matches!(&args[1], CompiledExpr::Keyword(_)) => {
+            acc_arg(&args[0], adj.clone(), adj_names, bindings);
+        }
         "get" if args.len() == 2 => {
             let is_scalar_index = matches!(&args[1],
                 CompiledExpr::Integer(_) | CompiledExpr::Float(_)

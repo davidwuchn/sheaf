@@ -92,13 +92,19 @@ pub(crate) fn replace_symbol(expr: &CompiledExpr, name: &str, replacement: &Comp
                 body: new_body,
             }
         }
-        CompiledExpr::Do(exprs) => CompiledExpr::Do(
-            exprs
-                .iter()
-                .map(|e| replace_symbol(e, name, replacement))
-                .collect(),
-        ),
-        other => other.clone(),
+    CompiledExpr::Vector(elems) => CompiledExpr::Vector(
+        elems
+            .iter()
+            .map(|e| replace_symbol(e, name, replacement))
+            .collect(),
+    ),
+    CompiledExpr::Do(exprs) => CompiledExpr::Do(
+        exprs
+            .iter()
+            .map(|e| replace_symbol(e, name, replacement))
+            .collect(),
+    ),
+    other => other.clone(),
     }
 }
 

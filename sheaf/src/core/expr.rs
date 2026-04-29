@@ -610,6 +610,72 @@ pub enum CompiledExpr {
     },
 }
 
+impl CompiledExpr {
+    pub fn map_children(&self, mut f: impl FnMut(&CompiledExpr) -> CompiledExpr) -> CompiledExpr {
+        match self {
+            CompiledExpr::Integer(_)
+            | CompiledExpr::Float(_)
+            | CompiledExpr::Boolean(_)
+            | CompiledExpr::Nil
+            | CompiledExpr::String(_)
+            | CompiledExpr::Keyword(_)
+            | CompiledExpr::FunctionRef(_)
+            | CompiledExpr::Symbol(_)
+            | CompiledExpr::GetTupleElement { .. }
+            | CompiledExpr::Quoted(_)
+            | CompiledExpr::ValueAndGrad { .. } => self.clone(),
+            CompiledExpr::Vector(elems) => CompiledExpr::Vector(elems.iter().map(&mut f).collect()),
+            CompiledExpr::Dict(pairs) => CompiledExpr::Dict(
+                pairs.iter().map(|(k, v)| (f(k), f(v))).collect(),
+            ),
+            CompiledExpr::FunctionCall { name, args, .. } => CompiledExpr::FunctionCall {
+                name: name.clone(),
+                args: args.iter().map(&mut f).collect(),
+                loc: None,
+            },
+            CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
+                bindings: bindings.iter().map(|(k, v)| (k.clone(), f(v))).collect(),
+                body: Box::new(f(body)),
+            },
+            CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
+                condition: Box::new(f(condition)),
+                then_branch: Box::new(f(then_branch)),
+                else_branch: else_branch.as_ref().map(|e| Box::new(f(e))),
+            },
+            CompiledExpr::Do(exprs) => CompiledExpr::Do(exprs.iter().map(&mut f).collect()),
+            CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
+                params: params.clone(),
+                body: Box::new(f(body)),
+            },
+            CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
+                callee: Box::new(f(callee)),
+                args: args.iter().map(&mut f).collect(),
+            },
+            CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => CompiledExpr::Repeat {
+                index_var: index_var.clone(),
+                count: Box::new(f(count)),
+                acc_var: acc_var.clone(),
+                acc_init: Box::new(f(acc_init)),
+                body: Box::new(f(body)),
+            },
+            CompiledExpr::While { condition, acc_var, acc_init, body } => CompiledExpr::While {
+                condition: Box::new(f(condition)),
+                acc_var: acc_var.clone(),
+                acc_init: Box::new(f(acc_init)),
+                body: Box::new(f(body)),
+            },
+            CompiledExpr::Guard { check, expr } => CompiledExpr::Guard {
+                check: check.clone(),
+                expr: Box::new(f(expr)),
+            },
+            CompiledExpr::Def { name, value } => CompiledExpr::Def {
+                name: name.clone(),
+                value: Box::new(f(value)),
+            },
+        }
+    }
+}
+
 /// Manual Debug impl: omits `loc` from FunctionCall to keep cache keys stable.
 impl std::fmt::Debug for CompiledExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

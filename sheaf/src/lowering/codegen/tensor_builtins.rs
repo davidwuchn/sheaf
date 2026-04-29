@@ -374,9 +374,10 @@ impl CodeGenerator {
         }
         let start = match positionals.first() {
             Some(CompiledExpr::Integer(n)) => *n,
+            Some(CompiledExpr::Float(f)) if f.fract() == 0.0 => *f as i64,
             _ => {
                 return Err(SheafError::Compile {
-                    message: "slice: start must be integer".to_string(),
+                    message: format!("slice: start must be integer, got {:?}", positionals.first()),
                     location: crate::core::error::SourceLocation::unknown(),
                 });
             }
@@ -387,9 +388,10 @@ impl CodeGenerator {
         let end = if positionals.len() > 1 {
             match positionals[1] {
                 CompiledExpr::Integer(n) => *n,
+                CompiledExpr::Float(f) if f.fract() == 0.0 => *f as i64,
                 _ => {
                     return Err(SheafError::Compile {
-                        message: "slice: end must be integer".to_string(),
+                        message: format!("slice: end must be integer, got {:?}", positionals[1]),
                         location: crate::core::error::SourceLocation::unknown(),
                     });
                 }

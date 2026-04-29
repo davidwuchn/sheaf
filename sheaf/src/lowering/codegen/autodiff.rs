@@ -6,14 +6,59 @@
 
 use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::core::expr::CompiledExpr;
-use crate::core::error::SheafResult;
+use crate::core::error::{SheafError, SheafResult};
+use crate::lowering::config::lower_get_calls;
 use super::helpers::TupleLeaf;
-use super::CodeGenerator;
+use super::{CodeGenerator, collect_tuple_leaves, expand_tuple_to_symbols};
+use super::control_flow::build_deep_index_map;
+use std::collections::HashMap;
+
+fn rewrite_gte_param(expr: &CompiledExpr, aliases: &[String], canonical: &str) -> CompiledExpr {
+    match expr {
+        CompiledExpr::GetTupleElement { param, indices } if aliases.contains(param) => {
+            CompiledExpr::GetTupleElement { param: canonical.to_string(), indices: indices.clone() }
+        }
+        other => other.map_children(|e| rewrite_gte_param(e, aliases, canonical)),
+    }
+}
+
+fn collect_param_aliases(expr: &CompiledExpr, param_name: &str, aliases: &mut Vec<String>) {
+    match expr {
+        CompiledExpr::Let { bindings, body } => {
+            for (name, value) in bindings {
+                match value {
+                    CompiledExpr::Symbol(s) if s == param_name => {
+                        if !aliases.contains(name) { aliases.push(name.clone()); }
+                    }
+                    CompiledExpr::GetTupleElement { param, .. } if param == param_name => {
+                        if !aliases.contains(name) { aliases.push(name.clone()); }
+                    }
+                    _ => {}
+                }
+                collect_param_aliases(value, param_name, aliases);
+            }
+            collect_param_aliases(body, param_name, aliases);
+        }
+        CompiledExpr::FunctionCall { args, .. } => {
+            for a in args { collect_param_aliases(a, param_name, aliases); }
+        }
+        CompiledExpr::LambdaCall { callee, args } => {
+            collect_param_aliases(callee, param_name, aliases);
+            for a in args { collect_param_aliases(a, param_name, aliases); }
+        }
+        CompiledExpr::If { condition, then_branch, else_branch } => {
+            collect_param_aliases(condition, param_name, aliases);
+            collect_param_aliases(then_branch, param_name, aliases);
+            if let Some(e) = else_branch { collect_param_aliases(e, param_name, aliases); }
+        }
+        CompiledExpr::Do(exprs) => {
+            for e in exprs { collect_param_aliases(e, param_name, aliases); }
+        }
+        _ => {}
+    }
+}
 
 impl CodeGenerator {
-    /// Build a gradient tuple using pre-computed gradient expressions (from reverse-mode AD).
-    ///
-    /// `grad_map`: maps leaf symbol name -> gradient CompiledExpr
     pub(crate) fn build_grad_tuple_from_map(
         &mut self,
         leaves: &[TupleLeaf],
@@ -54,8 +99,6 @@ impl CodeGenerator {
                     let (grad_reg, grad_ty) = self.generate(&grad_expr)?;
                     self.reduce_broadcast_grad(grad_reg, &grad_ty, ty)
                 } else {
-                    // No leaf found: parameter not directly accessed (e.g. passed
-                    // to scan as a whole). Emit zeros of the correct shape.
                     let shape = leaf_ty.shape();
                     let zeros_expr = if shape.is_empty() {
                         CompiledExpr::Float(0.0)
@@ -74,8 +117,6 @@ impl CodeGenerator {
         }
     }
 
-    /// Reduce a gradient to match the parameter shape when broadcasting introduced
-    /// extra leading dimensions. E.g. grad is [4,8] but param is [8] -> reduce_sum axis 0.
     pub(crate) fn reduce_broadcast_grad(
         &mut self,
         grad_reg: Register,
@@ -89,7 +130,6 @@ impl CodeGenerator {
             return Ok((grad_reg, grad_ty.clone()));
         }
 
-        // Same number of elements but different shape -> reshape (e.g. [32] -> [32,1])
         let grad_elems: i64 = grad_shape.iter().product();
         let param_elems: i64 = param_shape.iter().product();
         if grad_elems == param_elems && grad_elems > 0 && grad_shape != param_shape {
@@ -115,5 +155,155 @@ impl CodeGenerator {
             cur_ty = t;
         }
         Ok((cur_reg, cur_ty))
+    }
+
+    pub(super) fn generate_vag_inline(
+        &mut self,
+        loss_fn_expr: &CompiledExpr,
+        call_args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+    let (fn_params, fn_body) = match loss_fn_expr {
+        CompiledExpr::Lambda { params, body, .. } => {
+    let b = body.as_ref().clone();
+    (params.clone(), b)
+        }
+            other => {
+                return Err(SheafError::Compile {
+                    message: format!("value-and-grad: expected lambda, got {:?}", other),
+                    location: crate::core::error::SourceLocation::unknown(),
+                });
+            }
+        };
+
+        if call_args.len() != 1 {
+            return Err(SheafError::Compile {
+                message: format!("value-and-grad inline: expected 1 arg, got {}", call_args.len()),
+                location: crate::core::error::SourceLocation::unknown(),
+            });
+        }
+
+        let (wrt_reg, wrt_ty) = self.generate(&call_args[0])?;
+        let param_name = fn_params.get(0)
+            .ok_or_else(|| SheafError::Compile {
+                message: "value-and-grad: lambda must have at least 1 parameter".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            })?;
+
+        let saved_bindings = self.bindings.clone();
+        let saved_lambda_bindings = self.lambda_bindings.clone();
+
+        self.bindings.insert(param_name.clone(), (wrt_reg, wrt_ty.clone()));
+
+        if let Some(layout_key) = self.layout_key_map.get(&wrt_reg).cloned() {
+            if let Some(layout) = self.tuple_key_layouts.get(&layout_key).cloned() {
+                self.tuple_key_layouts.insert(param_name.clone(), layout);
+            }
+            let idx_entries: Vec<_> = self.idx_to_key.iter()
+                .filter(|((name, _), _)| name == &layout_key)
+                .map(|((_, idx), key)| (*idx, key.clone()))
+                .collect();
+        for (idx, key) in idx_entries {
+            self.idx_to_key.insert((param_name.clone(), idx), key);
+        }
+    }
+
+    let fn_body = if self.tuple_key_layouts.contains_key(param_name) {
+        let index_map = build_deep_index_map(&param_name, &self.tuple_key_layouts);
+        let mut param_aliases = vec![param_name.clone()];
+        collect_param_aliases(&fn_body, param_name, &mut param_aliases);
+        let mut body = fn_body;
+        for alias in &param_aliases {
+            body = lower_get_calls(&body, alias, &index_map);
+        }
+        if param_aliases.len() > 1 {
+            body = rewrite_gte_param(&body, &param_aliases[1..], param_name);
+        }
+        body
+    } else {
+        fn_body
+    };
+
+    let (leaves, expanded_body) = match &wrt_ty {
+            StableHLOType::Tuple(..) => {
+                let leaves = collect_tuple_leaves(&fn_body, param_name);
+                let expanded = expand_tuple_to_symbols(&fn_body, param_name);
+                (leaves, expanded)
+            }
+            _ => (Vec::<TupleLeaf>::new(), fn_body.clone()),
+        };
+
+        let mut all_wrt_symbols: Vec<String> = Vec::new();
+        if !leaves.is_empty() {
+            for leaf in &leaves {
+                let gte = CompiledExpr::GetTupleElement {
+                    param: param_name.clone(),
+                    indices: leaf.indices.clone(),
+                };
+                let (reg, ty) = self.generate(&gte)?;
+                self.bindings.insert(leaf.symbol.clone(), (reg, ty));
+                all_wrt_symbols.push(leaf.symbol.clone());
+            }
+        } else {
+            all_wrt_symbols.push(param_name.clone());
+        }
+
+    let anf_expr = crate::autodiff::reverse::to_anf(&expanded_body);
+    let (anf_bindings, anf_body) = match &anf_expr {
+        CompiledExpr::Let { bindings, body } => (bindings.clone(), body.as_ref().clone()),
+        other => (vec![], other.clone()),
+    };
+
+        for (name, value_expr) in &anf_bindings {
+            self.generate_binding(name, value_expr)?;
+        }
+
+        let (loss_reg, loss_ty) = self.generate(&anf_body)?;
+
+        let shape_map: HashMap<String, Vec<i64>> = self.binding_shapes();
+
+    let (backward_bindings, grad_sym_map) =
+        crate::autodiff::reverse::reverse_grad(&anf_bindings, &anf_body, &all_wrt_symbols, &shape_map);
+
+    let backward_bindings: Vec<(String, CompiledExpr)> = backward_bindings
+            .into_iter()
+            .map(|(name, expr)| {
+                use crate::autodiff::{simplify, transforms::cse};
+                (name, cse(simplify(expr)))
+            })
+            .collect();
+
+        for (name, value_expr) in &backward_bindings {
+            let (reg, ty) = self.generate(value_expr)?;
+            self.bindings.insert(name.clone(), (reg, ty));
+        }
+
+    let (grad_reg, grad_ty) = if !leaves.is_empty() {
+        let leaf_grad_map: HashMap<String, CompiledExpr> = leaves.iter().map(|leaf| {
+            let grad_expr = grad_sym_map
+                .get(&leaf.symbol)
+                .map(|sym_name| CompiledExpr::Symbol(sym_name.clone()))
+                .unwrap_or(CompiledExpr::Float(0.0));
+            (leaf.symbol.clone(), grad_expr)
+        }).collect();
+        self.build_grad_tuple_from_map(&leaves, &wrt_ty, &leaf_grad_map)?
+    } else {
+        let grad_expr = grad_sym_map
+            .get(param_name)
+            .map(|sym_name| CompiledExpr::Symbol(sym_name.clone()))
+            .unwrap_or(CompiledExpr::Float(0.0));
+        let (grad_reg, grad_ty) = self.generate(&grad_expr)?;
+        self.reduce_broadcast_grad(grad_reg, &grad_ty, &wrt_ty)?
+    };
+
+    self.lambda_bindings = saved_lambda_bindings;
+
+        let (tuple_reg, tuple_ty) = self.emitter.emit_tuple(
+            &[loss_reg, grad_reg],
+            &[loss_ty, grad_ty],
+        );
+
+        self.bindings = saved_bindings;
+
+        Ok((tuple_reg, tuple_ty))
     }
 }

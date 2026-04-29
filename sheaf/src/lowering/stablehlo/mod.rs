@@ -267,6 +267,7 @@ pub struct StableHLOEmitter {
     /// Populated from constants and scalar function params; used to resolve
     /// shape-critical values (e.g. K in top_k) at codegen time.
     known_scalars: HashMap<Register, f64>,
+    known_tensors: HashMap<Register, Vec<f64>>,
 }
 
 impl StableHLOEmitter {
@@ -277,6 +278,7 @@ impl StableHLOEmitter {
             reduce_mean_cache: HashMap::new(),
             virtual_tuples: HashMap::new(),
             known_scalars: HashMap::new(),
+            known_tensors: HashMap::new(),
         }
     }
 
@@ -288,6 +290,14 @@ impl StableHLOEmitter {
     /// Look up a register's known compile-time scalar value.
     pub fn known_scalar_value(&self, reg: &Register) -> Option<f64> {
         self.known_scalars.get(reg).copied()
+    }
+
+    pub fn set_known_tensor(&mut self, reg: Register, values: Vec<f64>) {
+        self.known_tensors.insert(reg, values);
+    }
+
+    pub fn known_tensor_values(&self, reg: &Register) -> Option<&Vec<f64>> {
+        self.known_tensors.get(reg)
     }
 
     /// Generate a fresh register name

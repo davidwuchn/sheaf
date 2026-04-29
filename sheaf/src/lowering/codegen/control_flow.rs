@@ -14,7 +14,7 @@ use super::CodeGenerator;
 /// Build a deep index_map from `tuple_key_layouts` for a given root layout key.
 /// Descends recursively into nested layouts to produce entries like
 /// `["attn", "c_attn", "weight"] -> [0, 0, 0]`.
-fn build_deep_index_map(
+pub(super) fn build_deep_index_map(
     root_key: &str,
     tuple_key_layouts: &HashMap<String, BTreeMap<String, usize>>,
 ) -> BTreeMap<Vec<String>, Vec<usize>> {
@@ -23,7 +23,7 @@ fn build_deep_index_map(
     map
 }
 
-fn build_deep_index_map_rec(
+pub(super) fn build_deep_index_map_rec(
     key: &str,
     path: &[String],
     indices: &[usize],
@@ -58,6 +58,12 @@ impl CodeGenerator {
         callee: &CompiledExpr,
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
+        if let CompiledExpr::FunctionCall { name, args: inner_args, .. } = callee {
+            if name == "__value-and-grad-hof__" && inner_args.len() == 1 {
+                return self.generate_vag_inline(&inner_args[0], args);
+            }
+        }
+
         // Resolve callee -- may be a Lambda directly, or a Symbol bound in lambda_bindings.
         let lambda = match callee {
             CompiledExpr::Lambda { .. } => callee.clone(),

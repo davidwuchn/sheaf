@@ -138,76 +138,13 @@ pub fn lower_get_calls(
     param_name: &str,
     index_map: &BTreeMap<Vec<String>, Vec<usize>>,
 ) -> CompiledExpr {
-    // Try to match a (get ...) chain rooted at `param_name`.
-    // Returns Some((key_path, leaf)) if fully matched, None otherwise.
     if let Some(indices) = try_extract_get_chain(expr, param_name, index_map) {
         return CompiledExpr::GetTupleElement {
             param: param_name.to_string(),
             indices,
         };
     }
-
-    // Recurse into sub-expressions
-    match expr {
-        CompiledExpr::FunctionCall { name, args, .. } => CompiledExpr::FunctionCall {
-            name: name.clone(),
-            args: args
-                .iter()
-                .map(|a| lower_get_calls(a, param_name, index_map))
-                .collect(),
-            loc: None,
-        },
-        CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
-            bindings: bindings
-                .iter()
-                .map(|(k, v)| (k.clone(), lower_get_calls(v, param_name, index_map)))
-                .collect(),
-            body: Box::new(lower_get_calls(body, param_name, index_map)),
-        },
-        CompiledExpr::Do(exprs) => CompiledExpr::Do(
-            exprs
-                .iter()
-                .map(|e| lower_get_calls(e, param_name, index_map))
-                .collect(),
-        ),
-        CompiledExpr::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => CompiledExpr::If {
-            condition: Box::new(lower_get_calls(condition, param_name, index_map)),
-            then_branch: Box::new(lower_get_calls(then_branch, param_name, index_map)),
-            else_branch: else_branch
-                .as_ref()
-                .map(|e| Box::new(lower_get_calls(e, param_name, index_map))),
-        },
-        CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
-            params: params.clone(),
-            body: Box::new(lower_get_calls(body, param_name, index_map)),
-        },
-        CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
-            callee: Box::new(lower_get_calls(callee, param_name, index_map)),
-            args: args
-                .iter()
-                .map(|a| lower_get_calls(a, param_name, index_map))
-                .collect(),
-        },
-        CompiledExpr::Repeat {
-            index_var,
-            count,
-            acc_var,
-            acc_init,
-            body,
-        } => CompiledExpr::Repeat {
-            index_var: index_var.clone(),
-            count: Box::new(lower_get_calls(count, param_name, index_map)),
-            acc_var: acc_var.clone(),
-            acc_init: Box::new(lower_get_calls(acc_init, param_name, index_map)),
-            body: Box::new(lower_get_calls(body, param_name, index_map)),
-        },
-        // Leaf nodes: unchanged
-        other => other.clone(),
-    }
+    expr.map_children(|e| lower_get_calls(e, param_name, index_map))
 }
 
 /// Try to extract the tuple indices for a `(get ... :key)` chain rooted at `param_name`.

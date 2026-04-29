@@ -70,10 +70,11 @@ impl CodeGenerator {
                 })
             }
         } else {
-            let data: Vec<f64> = dims.iter().map(|&d| d as f64).collect();
-            let shape = vec![data.len() as i64];
-            let (reg, ty) = self.emitter.emit_nd_tensor_constant(&data, &shape);
-            Ok((reg, ty))
+        let data: Vec<f64> = dims.iter().map(|&d| d as f64).collect();
+        let shape = vec![data.len() as i64];
+        let (reg, ty) = self.emitter.emit_nd_tensor_constant(&data, &shape);
+        self.emitter.set_known_tensor(reg, data);
+        Ok((reg, ty))
         }
     }
 
@@ -82,9 +83,10 @@ impl CodeGenerator {
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
         let (_, operand_ty) = self.generate(&args[0])?;
-        let ndim = operand_ty.shape().len() as i64;
-        let reg = self.emitter.emit_constant_f32(ndim as f64);
-        Ok((reg, StableHLOType::ScalarF32))
+    let ndim = operand_ty.shape().len() as f64;
+    let reg = self.emitter.emit_constant_f32(ndim);
+    self.emitter.set_known_scalar(reg, ndim);
+    Ok((reg, StableHLOType::ScalarF32))
     }
 
     fn gen_count_len(
@@ -100,9 +102,10 @@ impl CodeGenerator {
                 location: crate::core::error::SourceLocation::unknown(),
             });
         }
-        let len = shape[0];
-        let reg = self.emitter.emit_constant_f32(len as f64);
-        Ok((reg, StableHLOType::ScalarF32))
+    let len = shape[0] as f64;
+    let reg = self.emitter.emit_constant_f32(len);
+    self.emitter.set_known_scalar(reg, len);
+    Ok((reg, StableHLOType::ScalarF32))
     }
 
     fn gen_first(
@@ -120,6 +123,14 @@ impl CodeGenerator {
                 Ok((operand_reg, operand_ty))
             }
             _ => {
+        if let Some(vals) = self.emitter.known_tensor_values(&operand_reg) {
+            if !vals.is_empty() {
+                let val = vals[0];
+                let reg = self.emitter.emit_constant_f32(val);
+                self.emitter.set_known_scalar(reg, val);
+                return Ok((reg, StableHLOType::ScalarF32));
+            }
+        }
                 let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, 0);
                 Ok((reg, ty))
             }
@@ -162,8 +173,21 @@ impl CodeGenerator {
                 location: crate::core::error::SourceLocation::unknown(),
             });
         }
+        if let Some(vals) = self.emitter.known_tensor_values(&operand_reg) {
+            if !vals.is_empty() {
+                let val = vals[vals.len() - 1];
+                let reg = self.emitter.emit_constant_f32(val);
+                self.emitter.set_known_scalar(reg, val);
+                return Ok((reg, StableHLOType::ScalarF32));
+            }
+        }
         let last_idx = shape[0] - 1;
         let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, last_idx);
+        if let Some(vals) = self.emitter.known_tensor_values(&operand_reg) {
+            if (last_idx as usize) < vals.len() {
+                self.emitter.set_known_scalar(reg, vals[last_idx as usize]);
+            }
+        }
         Ok((reg, ty))
     }
 
