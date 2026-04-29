@@ -11,14 +11,18 @@ use std::collections::{BTreeMap, HashMap};
 /// Substitute known scalar constants and propagate Let-bound constants.
 /// Handles: GetTupleElement -> Integer, (static expr) -> evaluate, Symbol -> local constant,
 /// and constant folding of arithmetic on known values.
+///
+/// When `skip_lambda` is true, Lambda bodies are not recursed into (they are
+/// resolved separately with their own scope by callers like preprocess_vag_lambda).
 pub fn resolve_static_constants(
     expr: &CompiledExpr,
     constants: &HashMap<(String, Vec<usize>), f64>,
     param_shapes: &HashMap<String, Vec<i64>>,
+    skip_lambda: bool,
 ) -> CompiledExpr {
     let mut locals: HashMap<String, CompiledExpr> = HashMap::new();
     let mut shapes: HashMap<String, Vec<i64>> = param_shapes.clone();
-    resolve_constants_rec(expr, constants, &mut locals, &mut shapes)
+    resolve_constants_rec(expr, constants, &mut locals, &mut shapes, skip_lambda)
 }
 
 fn resolve_constants_rec(
@@ -26,6 +30,7 @@ fn resolve_constants_rec(
     constants: &HashMap<(String, Vec<usize>), f64>,
     locals: &mut HashMap<String, CompiledExpr>,
     shapes: &mut HashMap<String, Vec<i64>>,
+    skip_lambda: bool,
 ) -> CompiledExpr {
     match expr {
         CompiledExpr::GetTupleElement { param, indices } => {
@@ -44,7 +49,7 @@ fn resolve_constants_rec(
                 _ => None,
             };
             let shape = shape_from_sym.or_else(|| {
-                let resolved = resolve_constants_rec(&args[0], constants, locals, shapes);
+                let resolved = resolve_constants_rec(&args[0], constants, locals, shapes, skip_lambda);
                 try_infer_shape(&resolved, shapes)
             });
             if let Some(sh) = shape {
@@ -54,13 +59,13 @@ fn resolve_constants_rec(
             }
             CompiledExpr::FunctionCall {
                 name: name.clone(),
-                args: args.iter().map(|a| resolve_constants_rec(a, constants, locals, shapes)).collect(),
+                args: args.iter().map(|a| resolve_constants_rec(a, constants, locals, shapes, skip_lambda)).collect(),
                 loc: None,
             }
         }
         CompiledExpr::FunctionCall { name, args, .. } if name == "get" && args.len() == 2 => {
-            let recv = resolve_constants_rec(&args[0], constants, locals, shapes);
-            let idx = resolve_constants_rec(&args[1], constants, locals, shapes);
+            let recv = resolve_constants_rec(&args[0], constants, locals, shapes, skip_lambda);
+            let idx = resolve_constants_rec(&args[1], constants, locals, shapes, skip_lambda);
             if let (CompiledExpr::Vector(elems), CompiledExpr::Integer(i)) = (&recv, &idx) {
                 let len = elems.len() as i64;
                 let norm = if *i < 0 { len + i } else { *i };
@@ -71,8 +76,8 @@ fn resolve_constants_rec(
             CompiledExpr::FunctionCall { name: name.clone(), args: vec![recv, idx], loc: None }
         }
         CompiledExpr::FunctionCall { name, args, .. } if name == "cons" && args.len() == 2 => {
-            let head = resolve_constants_rec(&args[0], constants, locals, shapes);
-            let tail = resolve_constants_rec(&args[1], constants, locals, shapes);
+            let head = resolve_constants_rec(&args[0], constants, locals, shapes, skip_lambda);
+            let tail = resolve_constants_rec(&args[1], constants, locals, shapes, skip_lambda);
             let tail_elems = match &tail {
                 CompiledExpr::Vector(v) => Some(v.clone()),
                 CompiledExpr::Quoted(inner) => {
@@ -100,7 +105,7 @@ fn resolve_constants_rec(
             }
         }
         CompiledExpr::FunctionCall { name, args, .. } if name == "int" && args.len() == 1 => {
-            let inner = resolve_constants_rec(&args[0], constants, locals, shapes);
+            let inner = resolve_constants_rec(&args[0], constants, locals, shapes, skip_lambda);
             match &inner {
                 CompiledExpr::Integer(_) => inner,
                 CompiledExpr::Float(f) => CompiledExpr::Integer(*f as i64),
@@ -110,19 +115,19 @@ fn resolve_constants_rec(
         CompiledExpr::FunctionCall { name, args, .. }
             if (name == "first" || name == "last") && args.len() == 1 =>
         {
-            let recv = resolve_constants_rec(&args[0], constants, locals, shapes);
+            let recv = resolve_constants_rec(&args[0], constants, locals, shapes, skip_lambda);
             push_first_last(name, recv)
         }
         CompiledExpr::FunctionCall { name, args, .. } => {
             let resolved: Vec<_> = args.iter()
-                .map(|a| resolve_constants_rec(a, constants, locals, shapes))
+                .map(|a| resolve_constants_rec(a, constants, locals, shapes, skip_lambda))
                 .collect();
             try_fold_arithmetic(name, &resolved)
                 .unwrap_or_else(|| CompiledExpr::FunctionCall { name: name.clone(), args: resolved, loc: None })
         }
         CompiledExpr::Let { bindings, body } => {
             let new_bindings: Vec<_> = bindings.iter().map(|(k, v)| {
-                let resolved = resolve_constants_rec(v, constants, locals, shapes);
+                let resolved = resolve_constants_rec(v, constants, locals, shapes, skip_lambda);
                 match &resolved {
                     CompiledExpr::Integer(_) | CompiledExpr::Float(_) => {
                         locals.insert(k.clone(), resolved.clone());
@@ -148,34 +153,41 @@ fn resolve_constants_rec(
             }).collect();
             CompiledExpr::Let {
                 bindings: new_bindings,
-                body: Box::new(resolve_constants_rec(body, constants, locals, shapes)),
+                body: Box::new(resolve_constants_rec(body, constants, locals, shapes, skip_lambda)),
             }
         }
         CompiledExpr::Do(exprs) => CompiledExpr::Do(
-            exprs.iter().map(|e| resolve_constants_rec(e, constants, locals, shapes)).collect(),
+            exprs.iter().map(|e| resolve_constants_rec(e, constants, locals, shapes, skip_lambda)).collect(),
         ),
         CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
-            condition: Box::new(resolve_constants_rec(condition, constants, locals, shapes)),
-            then_branch: Box::new(resolve_constants_rec(then_branch, constants, locals, shapes)),
-            else_branch: else_branch.as_ref().map(|e| Box::new(resolve_constants_rec(e, constants, locals, shapes))),
+            condition: Box::new(resolve_constants_rec(condition, constants, locals, shapes, skip_lambda)),
+            then_branch: Box::new(resolve_constants_rec(then_branch, constants, locals, shapes, skip_lambda)),
+            else_branch: else_branch.as_ref().map(|e| Box::new(resolve_constants_rec(e, constants, locals, shapes, skip_lambda))),
         },
-        CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
-            params: params.clone(),
-            body: Box::new(resolve_constants_rec(body, constants, locals, shapes)),
-        },
+    CompiledExpr::Lambda { params, body } => {
+        if skip_lambda {
+            let _ = (constants, locals, shapes);
+            CompiledExpr::Lambda { params: params.clone(), body: body.clone() }
+        } else {
+            CompiledExpr::Lambda {
+                params: params.clone(),
+                body: Box::new(resolve_constants_rec(body, constants, locals, shapes, skip_lambda)),
+            }
+        }
+    }
         CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
-            callee: Box::new(resolve_constants_rec(callee, constants, locals, shapes)),
-            args: args.iter().map(|a| resolve_constants_rec(a, constants, locals, shapes)).collect(),
+            callee: Box::new(resolve_constants_rec(callee, constants, locals, shapes, skip_lambda)),
+            args: args.iter().map(|a| resolve_constants_rec(a, constants, locals, shapes, skip_lambda)).collect(),
         },
         CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => CompiledExpr::Repeat {
             index_var: index_var.clone(),
-            count: Box::new(resolve_constants_rec(count, constants, locals, shapes)),
+            count: Box::new(resolve_constants_rec(count, constants, locals, shapes, skip_lambda)),
             acc_var: acc_var.clone(),
-            acc_init: Box::new(resolve_constants_rec(acc_init, constants, locals, shapes)),
-            body: Box::new(resolve_constants_rec(body, constants, locals, shapes)),
+            acc_init: Box::new(resolve_constants_rec(acc_init, constants, locals, shapes, skip_lambda)),
+            body: Box::new(resolve_constants_rec(body, constants, locals, shapes, skip_lambda)),
         },
         CompiledExpr::Vector(elems) => CompiledExpr::Vector(
-            elems.iter().map(|e| resolve_constants_rec(e, constants, locals, shapes)).collect(),
+            elems.iter().map(|e| resolve_constants_rec(e, constants, locals, shapes, skip_lambda)).collect(),
         ),
         other => other.clone(),
     }
