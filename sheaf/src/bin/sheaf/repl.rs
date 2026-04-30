@@ -417,22 +417,38 @@ fn print_general_help() {
 }
 
 fn print_symbol_help(name: &str) {
-    // Search for ### <name> in embedded reference
-    let header = format!("### {}", name);
-    let start = match REFERENCE.find(&header) {
-        Some(pos) => pos,
-        None => {
-            // Try case-insensitive or partial match
-            eprintln!("No help found for '{}'.", name);
-            return;
-        }
+    // Search for ### or #### <name> in embedded reference
+    let header_h4 = format!("#### {}", name);
+    let header_h3 = format!("### {}", name);
+    let (start, header_len) = match REFERENCE.find(&header_h4) {
+        Some(pos) => (pos, header_h4.len()),
+        None => match REFERENCE.find(&header_h3) {
+            Some(pos) => {
+                // Make sure it's actually ### and not a substring of ####
+                if pos > 0 && REFERENCE.as_bytes()[pos - 1] == b'#' {
+                    eprintln!("No help found for '{}'.", name);
+                    return;
+                }
+                (pos, header_h3.len())
+            }
+            None => {
+                eprintln!("No help found for '{}'.", name);
+                return;
+            }
+        },
     };
 
-    // Extract until next ### or ## heading
-    let content = &REFERENCE[start + header.len()..];
-    let end = content.find("\n### ")
-        .or_else(|| content.find("\n## "))
-        .unwrap_or(content.len());
+    // Extract until next heading at any level (##, ###, or ####)
+    let content = &REFERENCE[start + header_len..];
+    let end = [
+        content.find("\n## "),
+        content.find("\n### "),
+        content.find("\n#### "),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .unwrap_or(content.len());
     let section = content[..end].trim();
 
     // Parse and display
