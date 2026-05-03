@@ -319,7 +319,7 @@ impl CompilerContext {
                 if let Some(op_name) = elements[0].as_symbol() {
                     if self.macro_engine.macros.contains_key(op_name) {
                         let expanded = self.macro_engine.expand(exp, &self.env, &self.registry)?;
-                        return self.compile(&expanded);
+                        return self.compile(&expanded).map_err(|e| e.with_location(&loc));
                     }
                 }
 

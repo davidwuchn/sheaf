@@ -93,6 +93,20 @@ impl fmt::Display for SheafError {
 }
 
 impl SheafError {
+    pub fn with_location(self, loc: &SourceLocation) -> Self {
+        match self {
+            SheafError::Compile { message, .. } => SheafError::Compile {
+                message,
+                location: loc.clone(),
+            },
+            SheafError::Runtime { message, .. } => SheafError::Runtime {
+                message,
+                location: Some(loc.clone()),
+            },
+            other => other,
+        }
+    }
+
     /// Return just the message, without location or error-kind prefix.
     pub fn short_message(&self) -> &str {
         match self {
