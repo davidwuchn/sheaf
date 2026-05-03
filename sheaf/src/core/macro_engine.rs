@@ -152,7 +152,8 @@ impl MacroEngine {
         match template {
             SheafValue::Unquote(inner, uloc) => {
                 if depth == 0 {
-                    Ok(substitute_symbols(inner, bindings))
+                    let substituted = substitute_symbols(inner, bindings);
+                    eval_at_compile_time(&substituted, bindings, compiler_env, registry, loc)
                 } else {
                     let expanded =
                         self.expand_quasiquote(inner, bindings, depth - 1, compiler_env, registry, loc)?;
