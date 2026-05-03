@@ -106,7 +106,7 @@ impl MacroEngine {
             }
             // Non-quasiquoted body (e.g., `(defmacro comment [& body] nil)`)
             SheafValue::Nil(_) => Ok(SheafValue::Nil(call_loc.clone())),
-            _ => Ok(substitute_symbols(template, bindings)),
+            _ => eval_at_compile_time(template, bindings, compiler_env, registry, call_loc),
         }
     }
 
