@@ -45,6 +45,16 @@ impl StableHLOEmitter {
         (vreg, StableHLOType::Tuple(types.to_vec(), None))
     }
 
+    pub fn emit_tuple_with_keys(
+        &mut self,
+        regs: &[Register],
+        types: &[StableHLOType],
+        keys: &Option<Vec<String>>,
+    ) -> (Register, StableHLOType) {
+        let (reg, _) = self.emit_tuple(regs, types);
+        (reg, StableHLOType::Tuple(types.to_vec(), keys.clone()))
+    }
+
     /// Emit a return statement
     pub fn emit_return(&mut self, reg: &Register, ty: &StableHLOType) {
         self.body

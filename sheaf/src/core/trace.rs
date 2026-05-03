@@ -228,11 +228,12 @@ pub fn value_to_stablehlo_type(val: &Value) -> SheafResult<StableHLOType> {
             // Dict -> Tuple sorted by key (matching codegen convention)
             let mut keys: Vec<&String> = map.keys().collect();
             keys.sort();
+            let sorted_keys: Vec<String> = keys.iter().map(|k| (*k).clone()).collect();
             let tys: SheafResult<Vec<StableHLOType>> = keys
                 .iter()
                 .map(|k| value_to_stablehlo_type(&map[*k]))
                 .collect();
-            Ok(StableHLOType::Tuple(tys?, None))
+            Ok(StableHLOType::Tuple(tys?, Some(sorted_keys)))
         }
         Value::List(items) => {
             // Empty list -> empty tuple (0 leaves, consistent with runtime flattening)

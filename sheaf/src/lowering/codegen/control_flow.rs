@@ -126,7 +126,7 @@ impl CodeGenerator {
     ) -> SheafResult<(Register, StableHLOType)> {
         // Use the first tree's type to drive the tuple structure
         match &tree_tys[0] {
-            StableHLOType::Tuple(first_elem_tys, _) => {
+            StableHLOType::Tuple(first_elem_tys, keys) => {
                 let mut result_regs = Vec::new();
                 let mut result_tys = Vec::new();
                 for (idx, _) in first_elem_tys.iter().enumerate() {
@@ -151,7 +151,8 @@ impl CodeGenerator {
                     result_regs.push(r);
                     result_tys.push(t);
                 }
-                Ok(self.emitter.emit_tuple(&result_regs, &result_tys))
+                let (reg, _) = self.emitter.emit_tuple_with_keys(&result_regs, &result_tys, keys);
+                Ok((reg, StableHLOType::Tuple(result_tys, keys.clone())))
             }
             _ => {
                 // Leaf: inline the lambda with tree_regs as arguments

@@ -52,6 +52,7 @@ impl ValueLayout {
 
     /// Reconstruct a Value from a flat tuple using this layout.
     /// Converts Value::Tuple -> Value::Dict/List based on the stored structure.
+    /// Also recurses into Value::Dict sub-values that may still contain Tuples.
     pub fn reconstruct(&self, val: crate::interpreter::value::Value) -> crate::interpreter::value::Value {
         use crate::interpreter::value::Value;
         match (self, val) {
@@ -62,6 +63,15 @@ impl ValueLayout {
                     .map(|((key, sub_layout), elem)| (key.clone(), sub_layout.reconstruct(elem)))
                     .collect();
                 Value::Dict(map)
+            }
+            (ValueLayout::Dict(entries), Value::Dict(map)) if entries.len() == map.len() => {
+                let mut result = std::collections::BTreeMap::new();
+                for (key, sub_layout) in entries {
+                    if let Some(sub_val) = map.get(key) {
+                        result.insert(key.clone(), sub_layout.reconstruct(sub_val.clone()));
+                    }
+                }
+                Value::Dict(result)
             }
             (ValueLayout::List(items), Value::Tuple(elems)) if items.len() == elems.len() => {
                 let list = items
@@ -98,6 +108,16 @@ pub fn reconstruct_jit_result(
                 .map(|(et, ev)| reconstruct_jit_result(ev, et, layouts))
                 .collect();
             Value::Tuple(reconstructed)
+        }
+        // Dict already constructed by unflatten_value: recurse into values
+        // using the layout matching on each sub-value
+        (StableHLOType::Tuple(elem_tys, _), Value::Dict(map)) if elem_tys.len() == map.len() => {
+            let mut result = std::collections::BTreeMap::new();
+            for (i, (key, sub_val)) in map.into_iter().enumerate() {
+                let sub_ty = elem_tys.get(i).cloned().unwrap_or(StableHLOType::scalar_f32());
+                result.insert(key, reconstruct_jit_result(sub_val, &sub_ty, layouts));
+            }
+            Value::Dict(result)
         }
         (_, v) => v,
     }
@@ -440,11 +460,18 @@ fn infer_type_with_context(
                 };
                 key1.cmp(&key2)
             });
+            let dict_keys: Vec<String> = sorted
+                .iter()
+                .filter_map(|(k, _)| match k {
+                    CompiledExpr::Keyword(k) => Some(k.clone()),
+                    _ => None,
+                })
+                .collect();
             let mut elem_tys = Vec::new();
             for (_, val) in &sorted {
                 elem_tys.push(infer_type_with_context(val, symbol_types)?);
             }
-            Ok(StableHLOType::Tuple(elem_tys, None))
+            Ok(StableHLOType::Tuple(elem_tys, Some(dict_keys)))
         }
 
         _ => infer_type(expr),
