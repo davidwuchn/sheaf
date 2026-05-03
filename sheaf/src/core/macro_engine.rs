@@ -102,7 +102,7 @@ impl MacroEngine {
         match template {
             // Quasiquoted body: the common case for macros
             SheafValue::Quasiquote(inner, _) => {
-                self.expand_quasiquote(inner, bindings, 0, compiler_env, registry, call_loc)
+                expand_quasiquote(inner, bindings, 0, compiler_env, registry, call_loc)
             }
             // Non-quasiquoted body (e.g., `(defmacro comment [& body] nil)`)
             SheafValue::Nil(_) => Ok(SheafValue::Nil(call_loc.clone())),
@@ -138,10 +138,10 @@ impl MacroEngine {
 
         Ok(bindings)
     }
+}
 
     /// Expand quasiquote with depth tracking for nested quasiquotes.
     fn expand_quasiquote(
-        &mut self,
         template: &SheafValue,
         bindings: &Bindings,
         depth: usize,
@@ -156,7 +156,7 @@ impl MacroEngine {
                     eval_at_compile_time(&substituted, bindings, compiler_env, registry, loc)
                 } else {
                     let expanded =
-                        self.expand_quasiquote(inner, bindings, depth - 1, compiler_env, registry, loc)?;
+                        expand_quasiquote(inner, bindings, depth - 1, compiler_env, registry, loc)?;
                     Ok(SheafValue::Unquote(Box::new(expanded), uloc.clone()))
                 }
             }
@@ -169,21 +169,21 @@ impl MacroEngine {
                     eval_at_compile_time(&substituted, bindings, compiler_env, registry, loc)
                 } else {
                     let expanded =
-                        self.expand_quasiquote(inner, bindings, depth - 1, compiler_env, registry, loc)?;
+                        expand_quasiquote(inner, bindings, depth - 1, compiler_env, registry, loc)?;
                     Ok(SheafValue::UnquoteSplicing(Box::new(expanded), uloc.clone()))
                 }
             }
 
             SheafValue::Quasiquote(inner, qloc) => {
                 let expanded =
-                    self.expand_quasiquote(inner, bindings, depth + 1, compiler_env, registry, loc)?;
+                    expand_quasiquote(inner, bindings, depth + 1, compiler_env, registry, loc)?;
                 Ok(SheafValue::Quasiquote(Box::new(expanded), qloc.clone()))
             }
 
             SheafValue::List(elements, lloc) => {
                 let mut result = Vec::new();
                 for elem in elements {
-                    match self.expand_quasiquote_element(elem, bindings, depth, compiler_env, registry, loc)? {
+                    match expand_quasiquote_element(elem, bindings, depth, compiler_env, registry, loc)? {
                         ExpandedItem::Single(v) => result.push(v),
                         ExpandedItem::Splice(vs) => result.extend(vs),
                     }
@@ -194,7 +194,7 @@ impl MacroEngine {
             SheafValue::Vector(elements, vloc) => {
                 let mut result = Vec::new();
                 for elem in elements {
-                    match self.expand_quasiquote_element(elem, bindings, depth, compiler_env, registry, loc)? {
+                    match expand_quasiquote_element(elem, bindings, depth, compiler_env, registry, loc)? {
                         ExpandedItem::Single(v) => result.push(v),
                         ExpandedItem::Splice(vs) => result.extend(vs),
                     }
@@ -218,7 +218,6 @@ impl MacroEngine {
 
     /// Expand a single element within a list/vector, detecting splice markers.
     fn expand_quasiquote_element(
-        &mut self,
         elem: &SheafValue,
         bindings: &Bindings,
         depth: usize,
@@ -245,9 +244,8 @@ impl MacroEngine {
             }
         }
 
-        let expanded = self.expand_quasiquote(elem, bindings, depth, compiler_env, registry, loc)?;
+        let expanded = expand_quasiquote(elem, bindings, depth, compiler_env, registry, loc)?;
         Ok(ExpandedItem::Single(expanded))
-    }
 }
 
 /// Replace symbols in an expression with their bindings (no evaluation).
@@ -306,6 +304,11 @@ fn eval_at_compile_time(
 
         // Quoted expressions return their content
         SheafValue::Quote(inner, _) => Ok((**inner).clone()),
+
+        // Quasiquoted expressions: expand with current bindings
+        SheafValue::Quasiquote(inner, _) => {
+            expand_quasiquote(inner, bindings, 0, compiler_env, registry, loc)
+        }
 
         // Vectors: eval each element
         SheafValue::Vector(elems, vloc) => {
@@ -465,8 +468,7 @@ fn apply_builtin(
             let items = expect_list_or_vec(args.first(), "count", loc)?;
             Ok(SheafValue::Integer(items.len() as i64, loc.clone()))
         }
-        "list" => Ok(SheafValue::List(args.to_vec(), loc.clone())),
-        "cons" => {
+    "cons" => {
             if args.len() < 2 {
                 return Err(compile_error("cons requires 2 arguments", loc));
             }

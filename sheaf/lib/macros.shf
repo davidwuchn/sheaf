@@ -2,17 +2,17 @@
 ;; Sheaf Standard Macro Library
 
 
-;; defmodel.shf - Model definition macro for neural networks
+;; defmodel - Model definition macro for neural networks
+;; Layer spec: [linear :name activation?]
+;; activation is optional; if present, wraps the linear expression
 (defn transform-layer [spec]
   (let [layer-name (nth spec 1)
-        activation (if (> (count spec) 3)
-                     (nth spec 3)
-                     nil)
-        linear-expr (list '+ (list '@ '_ 'W) 'b)
-        activated-expr (if activation
-                         (list activation linear-expr)
-                         linear-expr)]
-    (list 'with-params [p layer-name] activated-expr)))
+        activation (if (>= (count spec) 3)
+                     (nth spec 2)
+                     nil)]
+    (if activation
+      `(with-params [p ~layer-name] (~activation (+ (@ _ W) b)))
+      `(with-params [p ~layer-name] (+ (@ _ W) b)))))
 
 
 (defmacro defmodel [name input-params & layers]
@@ -30,11 +30,7 @@
 ;;   (defn linear-layer [x w b]
 ;;     ((vmap (lambda [x] (+ (@ x w) b)) [0 nil nil]) x w b))
 (defmacro defbatch [name params axes & body]
-  (let [; Find which params are batched (axis 0) vs shared (nil)
-        batched-params (list)
-        ; For simplicity, we pass all params to the inner lambda
-        ; and let vmap handle the axis selection
-        inner-fn `(lambda ~params ~@body)]
+  (let [inner-fn `(lambda ~params ~@body)]
     `(defn ~name ~params
        ((vmap ~inner-fn ~axes) ~@params))))
 
