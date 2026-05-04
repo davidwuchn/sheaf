@@ -49,20 +49,11 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
         CompiledExpr::Quoted(sv) => sheaf_value_to_value(sv),
 
         CompiledExpr::FunctionRef(name) => {
-            // Try env first (builtins live here)
             if let Ok(val) = env.get(name) {
                 return Ok(val);
             }
-            // Registry functions -> Value::Function with real params/body
-            if let Some(func_def) = env.registry.get(name).cloned() {
-                if let Some(body) = func_def.body_compiled {
-                    return Ok(Value::Function {
-                        name: Some(name.to_string()),
-                        params: func_def.params,
-                        body,
-                        closure: vec![],
-                    });
-                }
+            if env.registry.contains_key(name) {
+                return Ok(Value::Nil);
             }
             Err(runtime_error(format!("Undefined function: {}", name)))
         }
