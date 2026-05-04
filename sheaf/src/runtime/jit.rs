@@ -1298,7 +1298,8 @@ impl JitCompiler {
                 let legit = reason.starts_with("has HOF calls")
                     || reason.starts_with("scalar-only")
                     || reason.starts_with("unsupported capture type")
-                    || reason.starts_with("graph too large");
+                    || reason.starts_with("graph too large")
+                    || reason.contains("Function call not yet supported");
                 if legit {
                     JitVagOutcome::Unsupported
                 } else {
