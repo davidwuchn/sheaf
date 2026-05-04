@@ -1,0 +1,29 @@
+# Macro engine regression tests
+
+- name: basic quasiquote expansion
+  test: (defmacro dbl [x] `(+ ~x ~x)) (dbl 3)
+  expected: "6"
+
+- name: unquote evaluation in quasiquote
+  test: (defmacro add-n [x n] `(+ ~x ~n)) (add-n 10 5)
+  expected: "15"
+
+- name: splice
+  test: (defmacro wrap [& body] `[~@body]) (wrap 1 2 3)
+  expected: "[1. 2. 3.]"
+
+- name: macro with let body
+  test: (defmacro double [x] (let [y x] `(+ ~y ~y))) (double 7)
+  expected: "14"
+
+- name: macro with helper function
+  test: (defn my-helper [x] (first x)) (defmacro first-of [coll] `(do ~(my-helper coll))) (first-of [42 99])
+  expected: "42.0"
+
+- name: macro with let and helper
+  test: (defn my-helper2 [coll] (nth coll 1)) (defmacro second-of [coll] (let [v (my-helper2 coll)] `(+ 0 ~v))) (second-of [10 20 30])
+  expected: "20.0"
+
+- name: defmodel stdlib
+  test: (defmodel m (x) [linear :l1 relu] [linear :l2 sigmoid]) (m (tensor [1.0 2.0]) {:l1 {:W (zeros (quote [2 2])) :b (zeros (quote [2]))} :l2 {:W (zeros (quote [2 1])) :b (zeros (quote [1]))}})
+  expected: "[0.5]"

@@ -120,8 +120,11 @@ fn test_all_yaml() {
 
     let mut cases = parse_test_yaml(&base.join("interpreter_tests.yaml"));
     let vag_cases = parse_test_yaml(&base.join("vag_tests.yaml"));
+    let macro_cases = parse_test_yaml(&base.join("macro_tests.yaml"));
     let vag_count = vag_cases.len();
+    let macro_count = macro_cases.len();
     cases.extend(vag_cases);
+    cases.extend(macro_cases);
 
     assert!(!cases.is_empty(), "No test cases loaded");
 
@@ -146,7 +149,7 @@ fn test_all_yaml() {
         );
     }
 
-    eprintln!("{} tests passed ({} interpreter + {} VAG)", cases.len(), cases.len() - vag_count, vag_count);
+    eprintln!("{} tests passed ({} interpreter + {} VAG + {} macro)", cases.len(), cases.len() - vag_count - macro_count, vag_count, macro_count);
 }
 
 #[test]
