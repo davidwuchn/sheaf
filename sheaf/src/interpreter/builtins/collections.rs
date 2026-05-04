@@ -87,9 +87,14 @@ fn builtin_nth(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             let idx = resolve_idx(f, items.len());
             items.get(idx).cloned().ok_or_else(|| runtime_error("nth: index out of bounds"))
         }
-        Value::Tensor { data, .. } => {
-            let idx = resolve_idx(f, data.shape()[0]);
-            let sliced = data.index_axis(ndarray::Axis(0), idx).to_owned();
+            Value::Tensor { data, .. } => {
+                let dim0 = data.shape()[0];
+                let idx = resolve_idx(f, dim0);
+                if idx >= dim0 {
+                    return Err(runtime_error(
+                        format!("nth: index {} out of bounds for tensor with dim0={}", idx, dim0)));
+                }
+                let sliced = data.index_axis(ndarray::Axis(0), idx).to_owned();
             if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
             else { Ok(Value::tensor_f32(sliced)) }
         }
