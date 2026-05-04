@@ -241,10 +241,10 @@ impl SpecialForm for DefnForm {
 
                 (Some(body_compiled), signature, known_param_types, None)
             }
-            Err(e) => {
-                // Body compilation failed -- register as AST-only function
-                // but store the error for deferred reporting at call site.
-                (None, None, vec![], Some(e))
+            Err(_) => {
+                // Body compilation failed -- register as AST-only function.
+                // The mini-eval can still call it via its AST body (macro helpers).
+                (None, None, vec![], None)
             }
         };
 

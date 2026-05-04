@@ -52,7 +52,15 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
             if let Ok(val) = env.get(name) {
                 return Ok(val);
             }
-            if env.registry.contains_key(name) {
+            if let Some(func_def) = env.registry.get(name) {
+                if let Some(ref body) = func_def.body_compiled {
+                    return Ok(Value::Function {
+                        name: Some(name.to_string()),
+                        params: func_def.params.clone(),
+                        body: body.clone(),
+                        closure: vec![],
+                    });
+                }
                 return Ok(Value::Nil);
             }
             Err(runtime_error(format!("Undefined function: {}", name)))
@@ -613,10 +621,12 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
             return result;
         }
 
-        // If body compilation failed, report the original error
-        if let Some(ref err) = func_def.compile_error {
+        // AST-only function (macro helper): no compiled body available
+        if func_def.body_compiled.is_none() {
             if let Some(ref mut p) = env.profiler { p.exit(); }
-            return Err(err.clone());
+            return Err(runtime_error(format!(
+                "{}: cannot call at runtime (compile-time only function)", name
+            )));
         }
 
         if let Some(ref mut p) = env.profiler { p.exit(); }
