@@ -49,77 +49,113 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
         }
     }
 
-    use crate::autodiff::{contains_undiffable_ops, grad_simplified, inline_function_calls};
+    use crate::autodiff::{collect_free_vars, collect_function_call_names, contains_undiffable_ops, grad_simplified, inline_function_calls};
 
     if let Value::Function { params: fn_params, body, closure, .. } = func {
         if fn_params.len() == 1 {
             let param_name = &fn_params[0];
 
-            let mut aug_registry = env.registry.clone();
-            for (name, val) in closure {
-                if let Value::Function { params: fp, body: fb, .. } = val {
-                    aug_registry.entry(name.clone()).or_insert_with(|| {
-                        crate::core::expr::FunctionDef {
-                            name: name.clone(),
-                            params: fp.clone(),
-                            body: crate::core::ast::SheafValue::Nil(
-                                crate::core::error::SourceLocation::new(0, 0, "".into()),
-                            ),
-                            body_compiled: Some(fb.clone()),
-                            signature: None,
-                            vmfb_session_idx: None,
-                            known_param_types: Vec::new(),
-                            compile_error: None,
+        let mut aug_registry = env.registry.clone();
+
+        // Collect free variables and function call targets from the body and
+        // augment from the env so that inlining can resolve calls like (model x p).
+        let mut free_set = std::collections::HashSet::new();
+        collect_free_vars(body, &mut free_set);
+        let mut call_names = std::collections::HashSet::new();
+        collect_function_call_names(body, &mut call_names);
+        // Function calls that are NOT in the registry may be closure variables
+        for name in &call_names {
+            if !env.registry.contains_key(name.as_str()) {
+                free_set.insert(name.clone());
+            }
+        }
+        for p in fn_params {
+            free_set.remove(p.as_str());
+        }
+        for (k, _) in closure {
+            free_set.remove(k.as_str());
+        }
+        let mut free: Vec<&str> = free_set.iter().map(|s| s.as_str()).collect();
+        free.sort();
+
+        // Build augmented closure: existing closure + free vars from env.
+        // Only capture user-defined values (tensors, functions, etc.).
+        // Builtins (BuiltinFn) and registry defns are already resolvable.
+        let mut aug_closure = closure.clone();
+        for name in &free {
+            if !env.registry.contains_key(*name) {
+                if let Ok(val) = env.get(name) {
+                    if !matches!(val, Value::BuiltinFn { .. }) {
+                        aug_closure.push((name.to_string(), val.clone()));
+                    }
+                }
+            }
+        }
+
+        for (name, val) in &aug_closure {
+            if let Value::Function { params: fp, body: fb, .. } = val {
+                aug_registry.entry(name.clone()).or_insert_with(|| {
+                    crate::core::expr::FunctionDef {
+                        name: name.clone(),
+                        params: fp.clone(),
+                        body: crate::core::ast::SheafValue::Nil(
+                            crate::core::error::SourceLocation::new(0, 0, "".into()),
+                        ),
+                        body_compiled: Some(fb.clone()),
+                        signature: None,
+                        vmfb_session_idx: None,
+                        known_param_types: Vec::new(),
+                        compile_error: None,
+                    }
+                });
+            }
+        }
+        let inlined = inline_function_calls(body, &aug_registry);
+
+        // Direct symbolic path for pure-tensor expressions
+        if !contains_undiffable_ops(&inlined) {
+            env.push_scope();
+            for (name, val) in &aug_closure {
+                env.set(name, val.clone());
+            }
+            env.set(param_name, params.clone());
+
+            let loss_val = eval(&inlined, env)?;
+            let loss = scalar_from_value(&loss_val)?;
+            let grad_expr = grad_simplified(&inlined, param_name);
+            let grad_val = eval(&grad_expr, env)?;
+
+            env.pop_scope();
+            return Ok(Value::List(vec![Value::Float(loss), grad_val]));
+        }
+
+        // Tracing path: evaluate non-tensor ops (string gets, comparisons)
+        // with the interpreter, keep tensor ops symbolic, then differentiate.
+        {
+            use crate::autodiff::trace::{trace_expr, LeafMap};
+
+            env.push_scope();
+            for (name, val) in &aug_closure {
+                env.set(name, val.clone());
+            }
+            env.set(param_name, params.clone());
+
+            let mut leaf_map = LeafMap::new();
+        match trace_expr(&inlined, env, &mut leaf_map) {
+            Ok(traced) => {
+                if !contains_undiffable_ops(&traced) {
+                        env.pop_scope();
+                        let loss_val = call_function(func, &[params.clone()], env)?;
+                        let loss = scalar_from_value(&loss_val)?;
+
+                        env.push_scope();
+                        for (name, val) in &aug_closure {
+                            env.set(name, val.clone());
                         }
-                    });
-                }
-            }
-            let inlined = inline_function_calls(body, &aug_registry);
-
-            // Direct symbolic path for pure-tensor expressions
-            if !contains_undiffable_ops(&inlined) {
-                env.push_scope();
-                for (name, val) in closure {
-                    env.set(name, val.clone());
-                }
-                env.set(param_name, params.clone());
-
-                let loss_val = eval(&inlined, env)?;
-                let loss = scalar_from_value(&loss_val)?;
-                let grad_expr = grad_simplified(&inlined, param_name);
-                let grad_val = eval(&grad_expr, env)?;
-
-                env.pop_scope();
-                return Ok(Value::List(vec![Value::Float(loss), grad_val]));
-            }
-
-            // Tracing path: evaluate non-tensor ops (string gets, comparisons)
-            // with the interpreter, keep tensor ops symbolic, then differentiate.
-            {
-                use crate::autodiff::trace::{trace_expr, LeafMap};
-
-                env.push_scope();
-                for (name, val) in closure {
-                    env.set(name, val.clone());
-                }
-                env.set(param_name, params.clone());
-
-                let mut leaf_map = LeafMap::new();
-                match trace_expr(&inlined, env, &mut leaf_map) {
-                    Ok(traced) => {
-                        if !contains_undiffable_ops(&traced) {
-                            env.pop_scope();
-                            let loss_val = call_function(func, &[params.clone()], env)?;
-                            let loss = scalar_from_value(&loss_val)?;
-
-                            env.push_scope();
-                            for (name, val) in closure {
-                                env.set(name, val.clone());
-                            }
-                            env.set(param_name, params.clone());
-                            for (sym, val) in &leaf_map.leaves {
-                                env.set(sym, val.clone());
-                            }
+                        env.set(param_name, params.clone());
+                        for (sym, val) in &leaf_map.leaves {
+                            env.set(sym, val.clone());
+                        }
 
                             let grad_tree = build_grad_from_leaves(
                                 &traced, params, &leaf_map.leaves, env,

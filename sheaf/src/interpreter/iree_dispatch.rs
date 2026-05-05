@@ -172,7 +172,7 @@ fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
     };
 
     let mut free_set = std::collections::HashSet::new();
-    collect_free_vars_compiled(body, &mut free_set);
+    crate::autodiff::collect_free_vars(body, &mut free_set);
 
     // Remove the lambda's own params
     for p in fn_params {
@@ -201,64 +201,6 @@ fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
         body: body.clone(),
         closure: augmented_closure,
     })
-}
-
-/// Collect all symbol names referenced in a CompiledExpr (not bound by inner let/lambda).
-fn collect_free_vars_compiled(expr: &crate::core::expr::CompiledExpr, out: &mut std::collections::HashSet<String>) {
-    use crate::core::expr::CompiledExpr;
-    match expr {
-        CompiledExpr::Symbol(name) => {
-            out.insert(name.clone());
-        }
-        CompiledExpr::FunctionCall { args, .. } => {
-            for a in args {
-                collect_free_vars_compiled(a, out);
-            }
-        }
-        CompiledExpr::Let { bindings, body } => {
-            for (_, v) in bindings {
-                collect_free_vars_compiled(v, out);
-            }
-            // Let-bound names shadow, but we're collecting conservatively
-            // (the JIT will just ignore extra captures)
-            collect_free_vars_compiled(body, out);
-        }
-        CompiledExpr::Do(exprs) => {
-            for e in exprs {
-                collect_free_vars_compiled(e, out);
-            }
-        }
-        CompiledExpr::If { condition, then_branch, else_branch } => {
-            collect_free_vars_compiled(condition, out);
-            collect_free_vars_compiled(then_branch, out);
-            if let Some(e) = else_branch {
-                collect_free_vars_compiled(e, out);
-            }
-        }
-        CompiledExpr::Lambda { params, body } => {
-            let mut inner = std::collections::HashSet::new();
-            collect_free_vars_compiled(body, &mut inner);
-            for p in params {
-                inner.remove(p.as_str());
-            }
-            out.extend(inner);
-        }
-        CompiledExpr::LambdaCall { callee, args } => {
-            collect_free_vars_compiled(callee, out);
-            for a in args {
-                collect_free_vars_compiled(a, out);
-            }
-        }
-        CompiledExpr::GetTupleElement { param, .. } => {
-            out.insert(param.clone());
-        }
-        CompiledExpr::Vector(elems) => {
-            for e in elems {
-                collect_free_vars_compiled(e, out);
-            }
-        }
-        _ => {} // Literals, Float, Integer, etc.
-    }
 }
 
 /// Unpack a value-and-grad IREE result into [Float(loss), grad_dict_or_tensor].
