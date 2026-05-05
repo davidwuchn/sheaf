@@ -9,7 +9,7 @@ pub mod trace;
 pub mod transforms;
 
 // Re-export public API from submodules.
-pub use analysis::{contains_undiffable_ops, find_undiffable_ops};
+pub use analysis::{collect_free_vars, collect_function_call_names, contains_undiffable_ops, find_undiffable_ops};
 pub use transforms::{cse, fold_dict_gets, inline_function_calls};
 
 // `grad(expr, wrt)` returns a new `CompiledExpr` representing dL/d(wrt),

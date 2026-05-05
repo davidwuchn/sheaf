@@ -12,7 +12,8 @@ use crate::core::expr::CompiledExpr;
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::Value;
-use crate::interpreter::{eval, dict_scan_length, slice_dict};
+use crate::interpreter::eval;
+use crate::interpreter::hof::{dict_scan_length, slice_dict};
 use std::collections::HashMap;
 
 /// Map from synthetic leaf symbol names to their concrete tensor Values.

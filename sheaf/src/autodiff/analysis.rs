@@ -4,6 +4,107 @@
 //! Static analysis of expressions for autodiff compatibility.
 
 use crate::core::expr::CompiledExpr;
+use std::collections::HashSet;
+
+/// Collect all symbol names referenced in a CompiledExpr (not bound by inner let/lambda).
+pub fn collect_free_vars(expr: &CompiledExpr, out: &mut HashSet<String>) {
+    match expr {
+        CompiledExpr::Symbol(name) => {
+            out.insert(name.clone());
+        }
+        CompiledExpr::FunctionCall { args, .. } => {
+            for a in args {
+                collect_free_vars(a, out);
+            }
+        }
+        CompiledExpr::Let { bindings, body } => {
+            for (_, v) in bindings {
+                collect_free_vars(v, out);
+            }
+            collect_free_vars(body, out);
+        }
+        CompiledExpr::Do(exprs) => {
+            for e in exprs {
+                collect_free_vars(e, out);
+            }
+        }
+        CompiledExpr::If { condition, then_branch, else_branch } => {
+            collect_free_vars(condition, out);
+            collect_free_vars(then_branch, out);
+            if let Some(e) = else_branch {
+                collect_free_vars(e, out);
+            }
+        }
+        CompiledExpr::Lambda { params, body } => {
+            let mut inner = HashSet::new();
+            collect_free_vars(body, &mut inner);
+            for p in params {
+                inner.remove(p.as_str());
+            }
+            out.extend(inner);
+        }
+        CompiledExpr::LambdaCall { callee, args } => {
+            collect_free_vars(callee, out);
+            for a in args {
+                collect_free_vars(a, out);
+            }
+        }
+        CompiledExpr::GetTupleElement { param, .. } => {
+            out.insert(param.clone());
+        }
+        CompiledExpr::Vector(elems) => {
+            for e in elems {
+                collect_free_vars(e, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Collect all function call target names in a CompiledExpr.
+pub fn collect_function_call_names(expr: &CompiledExpr, out: &mut HashSet<String>) {
+    match expr {
+        CompiledExpr::FunctionCall { name, args, .. } => {
+            out.insert(name.clone());
+            for a in args {
+                collect_function_call_names(a, out);
+            }
+        }
+        CompiledExpr::Let { bindings, body } => {
+            for (_, v) in bindings {
+                collect_function_call_names(v, out);
+            }
+            collect_function_call_names(body, out);
+        }
+        CompiledExpr::Do(exprs) => {
+            for e in exprs {
+                collect_function_call_names(e, out);
+            }
+        }
+        CompiledExpr::If { condition, then_branch, else_branch } => {
+            collect_function_call_names(condition, out);
+            collect_function_call_names(then_branch, out);
+            if let Some(e) = else_branch {
+                collect_function_call_names(e, out);
+            }
+        }
+        CompiledExpr::Lambda { body, .. } => {
+            collect_function_call_names(body, out);
+        }
+        CompiledExpr::LambdaCall { callee, args } => {
+            collect_function_call_names(callee, out);
+            for a in args {
+                collect_function_call_names(a, out);
+            }
+        }
+        CompiledExpr::Vector(elems) => {
+            for e in elems {
+                collect_function_call_names(e, out);
+            }
+        }
+        _ => {}
+    }
+}
 
 /// Check whether an expression contains ops that the symbolic AD cannot differentiate.
 ///
