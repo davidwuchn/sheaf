@@ -524,6 +524,8 @@ fn extract_scalars_rec(
     let scalar = match val {
         Value::Int(n) => Some(*n as f64),
         Value::Float(f) => Some(*f as f64),
+        Value::Tensor { data, .. } if data.is_empty() => None,
+        Value::Tensor { data, .. } if data.len() == 1 => Some(data.iter().next().copied().unwrap() as f64),
         Value::Dict(map) => {
             for (key, child) in map {
                 path.push(key.clone());
