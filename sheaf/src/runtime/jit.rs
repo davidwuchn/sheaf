@@ -352,7 +352,7 @@ impl JitCompiler {
             &body, registry, &constants, &param_shapes, &param_index_maps, &known_types,
         );
 
-        body = resolve_static_constants(&body, &constants, &param_shapes, true);
+        body = resolve_static_constants(&body, &constants, &param_shapes, false);
 
         // Build key layouts for codegen
         let mut tuple_key_layouts: HashMap<String, BTreeMap<String, usize>> = HashMap::new();
