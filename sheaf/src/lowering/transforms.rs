@@ -169,12 +169,18 @@ fn resolve_constants_rec(
             let _ = (constants, locals, shapes);
             CompiledExpr::Lambda { params: params.clone(), body: body.clone() }
         } else {
+            let saved_locals = locals.clone();
+            for p in params {
+                locals.remove(p);
+            }
+            let resolved_body = resolve_constants_rec(body, constants, locals, shapes, skip_lambda);
+            *locals = saved_locals;
             CompiledExpr::Lambda {
                 params: params.clone(),
-                body: Box::new(resolve_constants_rec(body, constants, locals, shapes, skip_lambda)),
+                body: Box::new(resolved_body),
+                }
             }
         }
-    }
         CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
             callee: Box::new(resolve_constants_rec(callee, constants, locals, shapes, skip_lambda)),
             args: args.iter().map(|a| resolve_constants_rec(a, constants, locals, shapes, skip_lambda)).collect(),
