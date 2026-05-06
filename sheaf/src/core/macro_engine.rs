@@ -150,11 +150,18 @@ impl MacroEngine {
         loc: &SourceLocation,
     ) -> SheafResult<SheafValue> {
         match template {
-            SheafValue::Unquote(inner, uloc) => {
-                if depth == 0 {
-                    let substituted = substitute_symbols(inner, bindings);
-                    eval_at_compile_time(&substituted, bindings, compiler_env, registry, loc)
+        SheafValue::Unquote(inner, uloc) => {
+            if depth == 0 {
+                // Direct param refs (e.g. ~body) are AST fragments inserted as data.
+                // Computed unquotes (e.g. ~(+ 2 3)) are evaluated at compile time.
+                let is_direct_param = matches!(inner.as_ref(), SheafValue::Symbol(name, _) if bindings.contains_key(name));
+                let substituted = substitute_symbols(inner, bindings);
+                if is_direct_param {
+                    Ok(substituted)
                 } else {
+                    eval_at_compile_time(&substituted, bindings, compiler_env, registry, loc)
+                }
+            } else {
                     let expanded =
                         expand_quasiquote(inner, bindings, depth - 1, compiler_env, registry, loc)?;
                     Ok(SheafValue::Unquote(Box::new(expanded), uloc.clone()))
