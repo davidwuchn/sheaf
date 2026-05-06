@@ -175,8 +175,8 @@ fn eval_source_with_blame_internal(
     if let Some(config) = tracer_config {
         env.tracer = Some(Tracer::from_config(config));
     }
-    env.mem_profiler = Some(crate::interpreter::mem_profile::MemProfiler::new());
     if mem_profile {
+        env.mem_profiler = Some(crate::interpreter::mem_profile::MemProfiler::new());
         if let Some(ref mut mp) = env.mem_profiler {
             mp.sample("after init");
         }

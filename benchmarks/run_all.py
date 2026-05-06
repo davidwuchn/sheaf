@@ -114,7 +114,8 @@ def run_micro_once(expr: str, device: str, op: str | None) -> float:
 
 def bench_micro(name, setup, body, op, repeat, device, runs) -> float:
     expr = build_expr(setup, body, repeat)
-    run_micro_once(expr, device, op)  # warmup
+    for _ in range(3):  # warmup: GPU shader cache + JIT dispatch cache
+        run_micro_once(expr, device, op)
     times = [run_micro_once(expr, device, op) for _ in range(runs)]
     med = statistics.median(times)
     if repeat > 1:
