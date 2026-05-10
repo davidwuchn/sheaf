@@ -24,9 +24,17 @@ fn builtin_ones(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_arange(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (start, stop, step) = match args.len() {
-        1 => (0i64, args[0].to_f64().unwrap() as i64, 1i64),
-        2 => (args[0].to_f64().unwrap() as i64, args[1].to_f64().unwrap() as i64, 1),
-        _ => (args[0].to_f64().unwrap() as i64, args[1].to_f64().unwrap() as i64, args[2].to_f64().unwrap() as i64),
+        1 => (0i64, args[0].to_f64().ok_or_else(|| runtime_error("arange: argument must be a number"))? as i64, 1i64),
+        2 => (
+            args[0].to_f64().ok_or_else(|| runtime_error("arange: start must be a number"))? as i64,
+            args[1].to_f64().ok_or_else(|| runtime_error("arange: stop must be a number"))? as i64,
+            1,
+        ),
+        _ => (
+            args[0].to_f64().ok_or_else(|| runtime_error("arange: start must be a number"))? as i64,
+            args[1].to_f64().ok_or_else(|| runtime_error("arange: stop must be a number"))? as i64,
+            args[2].to_f64().ok_or_else(|| runtime_error("arange: step must be a number"))? as i64,
+        ),
     };
     let mut data = Vec::new();
     let mut i = start;
@@ -38,8 +46,8 @@ fn builtin_arange(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_eye(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    let n = args[0].to_f64().unwrap() as usize;
-    let m = if args.len() > 1 { args[1].to_f64().unwrap() as usize } else { n };
+    let n = args[0].to_f64().ok_or_else(|| runtime_error("eye: size must be a number"))? as usize;
+    let m = if args.len() > 1 { args[1].to_f64().ok_or_else(|| runtime_error("eye: second dimension must be a number"))? as usize } else { n };
     let mut data = vec![0.0; n * m];
     for i in 0..n.min(m) {
         data[i * m + i] = 1.0;

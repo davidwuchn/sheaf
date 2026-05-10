@@ -25,6 +25,9 @@ fn builtin_first(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::List(items) | Value::Tuple(items) => items.first().cloned().ok_or_else(|| runtime_error("first: empty list")),
         Value::Tensor { data, .. } => {
+            if data.shape()[0] == 0 {
+                return Err(runtime_error("first: empty tensor"));
+        }
             let sliced = data.index_axis(ndarray::Axis(0), 0).to_owned();
             if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
             else { Ok(Value::tensor_f32(sliced)) }
@@ -41,6 +44,9 @@ fn builtin_second(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::List(items) | Value::Tuple(items) => items.get(1).cloned().ok_or_else(|| runtime_error("second: list too short")),
         Value::Tensor { data, .. } => {
+            if data.shape()[0] < 2 {
+                return Err(runtime_error("second: tensor too short (need at least 2 elements on axis 0)"));
+        }
             let sliced = data.index_axis(ndarray::Axis(0), 1).to_owned();
             if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
             else { Ok(Value::tensor_f32(sliced)) }
@@ -58,6 +64,9 @@ fn builtin_last(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         Value::List(items) => items.last().cloned().ok_or_else(|| runtime_error("last: empty list")),
         Value::Tensor { data, .. } => {
             let n = data.shape()[0];
+            if n == 0 {
+                return Err(runtime_error("last: empty tensor"));
+        }
             let sliced = data.index_axis(ndarray::Axis(0), n - 1).to_owned();
             if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
             else { Ok(Value::tensor_f32(sliced)) }
@@ -81,19 +90,15 @@ fn builtin_rest(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_nth(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
-    let f = args[1].to_f64().unwrap();
+    let f = args[1].to_f64().ok_or_else(|| runtime_error(format!("nth: expected numeric index, got {}", args[1].type_name())))?;
     match &args[0] {
         Value::List(items) => {
-            let idx = resolve_idx(f, items.len());
-            items.get(idx).cloned().ok_or_else(|| runtime_error("nth: index out of bounds"))
+            let idx = resolve_idx(f, items.len())?;
+            Ok(items[idx].clone())
         }
             Value::Tensor { data, .. } => {
                 let dim0 = data.shape()[0];
-                let idx = resolve_idx(f, dim0);
-                if idx >= dim0 {
-                    return Err(runtime_error(
-                        format!("nth: index {} out of bounds for tensor with dim0={}", idx, dim0)));
-                }
+                let idx = resolve_idx(f, dim0)?;
                 let sliced = data.index_axis(ndarray::Axis(0), idx).to_owned();
             if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
             else { Ok(Value::tensor_f32(sliced)) }
@@ -159,7 +164,20 @@ fn builtin_get_in(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 }
             }
             (Value::Tensor { data, .. }, Value::Int(idx)) => {
-                let sliced = data.index_axis(ndarray::Axis(0), *idx as usize).to_owned();
+                let dim0 = data.shape()[0];
+                let idx_u = if *idx < 0 {
+                    let resolved = dim0 as i64 + *idx;
+                    if resolved < 0 {
+                        return Ok(default.unwrap_or(Value::Nil));
+                    }
+                    resolved as usize
+                } else {
+                    *idx as usize
+                };
+                if idx_u >= dim0 {
+                    return Ok(default.unwrap_or(Value::Nil));
+            }
+                let sliced = data.index_axis(ndarray::Axis(0), idx_u).to_owned();
                 if sliced.shape().is_empty() { Value::Float(*sliced.first().unwrap()) }
                 else { Value::tensor_f32(sliced) }
             }
@@ -280,6 +298,9 @@ fn builtin_sort(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         Some(Value::Tensor { data, dtype }) => {
             let axis = super::get_axis(kw).unwrap_or(-1);
             let ax = if axis < 0 { (data.ndim() as i64 + axis) as usize } else { axis as usize };
+            if ax >= data.ndim() {
+                return Err(runtime_error(format!("sort: axis {} out of bounds for {}D tensor", axis, data.ndim())));
+            }
 
             let mut result = (**data).clone();
             for mut lane in result.lanes_mut(ndarray::Axis(ax)) {

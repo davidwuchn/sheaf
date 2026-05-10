@@ -1,5 +1,21 @@
 use super::*;
 
+fn resolve_axis(axis: i64, ndim: usize) -> Result<usize, crate::core::error::SheafError> {
+    let ax = if axis < 0 {
+        let resolved = ndim as i64 + axis;
+        if resolved < 0 {
+            return Err(runtime_error(format!("axis {} out of bounds for {}D tensor", axis, ndim)));
+        }
+        resolved as usize
+    } else {
+        axis as usize
+    };
+    if ax >= ndim {
+        return Err(runtime_error(format!("axis {} out of bounds for {}D tensor", axis, ndim)));
+    }
+    Ok(ax)
+}
+
 pub(super) fn register(env: &mut Env) {
     env.set_builtin("sum", builtin_sum);
     env.set_builtin("mean", builtin_mean);
@@ -22,7 +38,7 @@ fn builtin_sum(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let (arr, input_dt) = to_array(&args[0])?;
     let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
-        let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
+        let ax = resolve_axis(axis, arr.ndim())?;
         let result = reduce_along_axis(&arr, ax, |v| v.iter().sum());
         if keepdims(kw) {
             Ok(Value::tensor(result.insert_axis(ndarray::Axis(ax)), dt))
@@ -38,7 +54,7 @@ fn builtin_mean(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let (arr, input_dt) = to_array(&args[0])?;
     let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
-        let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
+        let ax = resolve_axis(axis, arr.ndim())?;
         let result = reduce_along_axis(&arr, ax, |v| v.iter().sum::<f32>() / v.len() as f32);
         if keepdims(kw) {
             Ok(Value::tensor(result.insert_axis(ndarray::Axis(ax)), dt))
@@ -55,7 +71,7 @@ fn builtin_product(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let (arr, input_dt) = to_array(&args[0])?;
     let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
-        let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
+        let ax = resolve_axis(axis, arr.ndim())?;
         let result = reduce_along_axis(&arr, ax, |v| v.iter().product());
         if result.shape().is_empty() {
             Ok(Value::Float(*result.first().unwrap()))
@@ -71,7 +87,7 @@ fn builtin_min(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let (arr, input_dt) = to_array(&args[0])?;
     let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
-        let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
+        let ax = resolve_axis(axis, arr.ndim())?;
         let result = reduce_along_axis(&arr, ax, |v| v.iter().copied().fold(f32::INFINITY, f32::min));
         if keepdims(kw) {
             Ok(Value::tensor(result.insert_axis(ndarray::Axis(ax)), dt))
@@ -95,7 +111,7 @@ fn builtin_max(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let (arr, input_dt) = to_array(&args[0])?;
     let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
-        let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
+        let ax = resolve_axis(axis, arr.ndim())?;
         let result = reduce_along_axis(&arr, ax, |v| v.iter().copied().fold(f32::NEG_INFINITY, f32::max));
         if keepdims(kw) {
             Ok(Value::tensor(result.insert_axis(ndarray::Axis(ax)), dt))
@@ -118,7 +134,7 @@ fn builtin_maximum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 fn builtin_argmax(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let (arr, _dt) = to_array(&args[0])?;
     if let Some(axis) = get_axis(kw) {
-        let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
+        let ax = resolve_axis(axis, arr.ndim())?;
         let result = argreduce_along_axis(&arr, ax, |a, b| a > b);
         Ok(Value::tensor_i32(result))
     } else {
@@ -131,7 +147,7 @@ fn builtin_argmax(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 fn builtin_argmin(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let (arr, _dt) = to_array(&args[0])?;
     if let Some(axis) = get_axis(kw) {
-        let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
+        let ax = resolve_axis(axis, arr.ndim())?;
         let result = argreduce_along_axis(&arr, ax, |a, b| a < b);
         Ok(Value::tensor_i32(result))
     } else {
@@ -145,7 +161,7 @@ fn builtin_var(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let (arr, input_dt) = to_array(&args[0])?;
     let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
-        let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
+        let ax = resolve_axis(axis, arr.ndim())?;
         let mean_arr = reduce_along_axis(&arr, ax, |v| v.iter().sum::<f32>() / v.len() as f32);
         let mean_bc = mean_arr.insert_axis(ndarray::Axis(ax));
         let diff = &arr - &mean_bc;
@@ -168,7 +184,7 @@ fn builtin_normalize(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let (arr, input_dt) = to_array(&args[0])?;
     let dt = get_dtype_kwarg(kw).unwrap_or(input_dt);
     if let Some(axis) = get_axis(kw) {
-        let ax = if axis < 0 { (arr.ndim() as i64 + axis) as usize } else { axis as usize };
+        let ax = resolve_axis(axis, arr.ndim())?;
         let sum_arr = reduce_along_axis(&arr, ax, |v| v.iter().sum());
         let sum_bc = sum_arr.insert_axis(ndarray::Axis(ax));
         Ok(Value::tensor(&arr / &sum_bc, dt))

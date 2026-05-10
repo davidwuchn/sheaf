@@ -755,8 +755,12 @@ fn builtin_append_and_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let new_val = args[1].to_f64()
         .ok_or_else(|| runtime_error("append-and-roll: second argument must be a number"))?;
     let n = arr.shape()[0];
+    if n == 0 {
+        return Err(runtime_error("append-and-roll: cannot operate on empty tensor"));
+    }
     let mut data: Vec<f32> = arr.iter().skip(1).copied().collect();
     data.push(new_val as f32);
-    let result = ArrayD::from_shape_vec(IxDyn(&[n]), data).unwrap();
+    let result = ArrayD::from_shape_vec(IxDyn(&[n]), data)
+        .map_err(|e| runtime_error(format!("append-and-roll: {}", e)))?;
     Ok(Value::tensor_f32(result))
 }

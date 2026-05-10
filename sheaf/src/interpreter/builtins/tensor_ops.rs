@@ -54,8 +54,17 @@ fn builtin_transpose(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         let mut axes: Vec<usize> = (0..arr.ndim()).rev().collect();
         if args.len() > 1 {
             if let Value::List(items) = &args[1] {
-                axes = items.iter().map(|v| v.to_f64().unwrap() as usize).collect();
+                let mut resolved_axes = Vec::with_capacity(items.len());
+                for v in items {
+                    let ax = v.to_f64()
+                        .ok_or_else(|| runtime_error(format!("transpose: expected numeric axis, got {}", v.type_name())))?;
+                    if ax >= arr.ndim() as f64 {
+                        return Err(runtime_error(format!("transpose: axis {} out of bounds for {}D tensor", ax, arr.ndim())));
+                    }
+                    resolved_axes.push(ax as usize);
             }
+            axes = resolved_axes;
+        }
         }
         Ok(Value::tensor_f32(arr.permuted_axes(IxDyn(&axes))))
     }
@@ -111,8 +120,8 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_slice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if let Value::String(s) = &args[0] {
-        let start = args[1].to_f64().unwrap() as usize;
-        let end = if args.len() > 2 { args[2].to_f64().unwrap() as usize } else { s.len() };
+        let start = args[1].to_f64().ok_or_else(|| runtime_error("slice: start must be a number"))? as usize;
+        let end = if args.len() > 2 { args[2].to_f64().ok_or_else(|| runtime_error("slice: end must be a number"))? as usize } else { s.len() };
         return Ok(Value::String(s[start..end.min(s.len())].to_string()));
     }
     let (arr, _dt) = to_array(&args[0])?;
@@ -124,8 +133,19 @@ fn builtin_slice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if axis >= arr.ndim() {
         return Err(runtime_error(format!("slice: axis {} out of bounds for tensor with {} dimensions", axis_raw, arr.ndim())));
     }
-    let start = args[1].to_f64().unwrap() as usize;
-    let end = if args.len() > 2 { args[2].to_f64().unwrap() as usize } else { arr.shape()[axis] };
+    let axis_len = arr.shape()[axis];
+    let start = args[1].to_f64().ok_or_else(|| runtime_error("slice: start must be a number"))? as usize;
+    let end = if args.len() > 2 { args[2].to_f64().ok_or_else(|| runtime_error("slice: end must be a number"))? as usize } else { axis_len };
+    if start > end {
+        return Err(runtime_error(format!(
+            "slice: start ({}) > end ({})", start, end
+        )));
+    }
+    if end > axis_len {
+        return Err(runtime_error(format!(
+            "slice: end ({}) out of bounds for axis {} with size {}", end, axis, axis_len
+        )));
+    }
     let sliced = arr.slice_axis(ndarray::Axis(axis), ndarray::Slice::from(start..end));
     Ok(Value::tensor_f32(sliced.to_owned()))
 }
@@ -175,22 +195,27 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                 let last_axis = ndarray::Axis(data.ndim() - 1);
                 return match &args[2] {
                     v if v.to_f64().is_some() => {
-                        let idx = resolve_idx(v.to_f64().unwrap(), data.shape()[data.ndim() - 1]);
+                        let raw = v.to_f64().unwrap();
+                        let idx = resolve_idx(raw, data.shape()[data.ndim() - 1])?;
                         let sliced = data.index_axis(last_axis, idx).to_owned();
                         Ok(Value::tensor_f32(sliced))
                     }
                     Value::Tensor { data: range_t, .. } if range_t.ndim() == 1 && range_t.len() > 0 => {
                         let start = *range_t.first().unwrap() as usize;
                         let end = *range_t.iter().last().unwrap() as usize + 1;
-                        let sliced = data.slice_axis(last_axis, ndarray::Slice::from(start..end));
-                        Ok(Value::tensor_f32(sliced.to_owned()))
+                        let last_dim = data.shape()[data.ndim() - 1];
+                        if end > last_dim {
+                            return Err(runtime_error(format!("get: range end {} out of bounds for last axis with size {}", end, last_dim)));
                     }
+                    let sliced = data.slice_axis(last_axis, ndarray::Slice::from(start..end));
+                    Ok(Value::tensor_f32(sliced.to_owned()))
+                }
                     other => Err(runtime_error(format!("get: ... index must be int or range, got {}", other.type_name()))),
                 };
             }
             // Scalar index
             if let Some(f) = args[1].to_f64() {
-                let idx = resolve_idx(f, data.shape()[0]);
+                let idx = resolve_idx(f, data.shape()[0])?;
                 let sliced = data.index_axis(ndarray::Axis(0), idx).to_owned();
                 return if sliced.shape().is_empty() {
                     Ok(Value::Float(*sliced.first().unwrap()))
@@ -237,16 +262,14 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         Value::List(items) => {
             let f = args[1].to_f64()
                 .ok_or_else(|| runtime_error(format!("get: expected integer index, got {}", args[1].type_name())))?;
-            let idx = resolve_idx(f, items.len());
-            items.get(idx).cloned().ok_or_else(|| runtime_error("get: index out of bounds"))
+            let idx = resolve_idx(f, items.len())?;
+            Ok(items[idx].clone())
         }
         Value::String(s) => {
             let f = args[1].to_f64()
                 .ok_or_else(|| runtime_error(format!("get: expected integer index, got {}", args[1].type_name())))?;
-            let idx = resolve_idx(f, s.chars().count());
-            s.chars().nth(idx)
-                .map(|c| Value::String(c.to_string()))
-                .ok_or_else(|| runtime_error("get: string index out of bounds"))
+            let idx = resolve_idx(f, s.chars().count())?;
+            Ok(Value::String(s.chars().nth(idx).unwrap().to_string()))
         }
         Value::DeviceBuffer(_) => {
             // Materialize and retry as host tensor
@@ -299,7 +322,10 @@ fn builtin_where(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (arr, _dt) = to_array(&args[0])?;
-    let shift = args[1].to_f64().unwrap() as i64;
+    let shift = args[1].to_f64().ok_or_else(|| runtime_error("roll: shift must be a number"))? as i64;
+    if arr.is_empty() {
+        return Ok(Value::tensor_f32(arr.clone()));
+    }
     let data: Vec<f32> = arr.iter().copied().collect();
     let n = data.len() as i64;
     let shift = ((shift % n) + n) % n;
@@ -313,7 +339,7 @@ fn builtin_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_index_update(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (mut arr, _dt) = to_array(&args[0])?;
-    let idx = args[1].to_f64().unwrap() as usize;
+    let idx = args[1].to_f64().ok_or_else(|| runtime_error("index-update: index must be a number"))? as usize;
     let dim = arr.shape()[0];
     if idx >= dim {
         return Err(runtime_error(format!(
@@ -327,7 +353,7 @@ fn builtin_index_update(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             slice.assign(new_val);
         }
         other => {
-            let v = other.to_f64().unwrap() as f32;
+            let v = other.to_f64().ok_or_else(|| runtime_error(format!("index-update: value must be a number, got {}", other.type_name())))? as f32;
             arr[IxDyn(&[idx])] = v;
         }
     }
@@ -337,8 +363,17 @@ fn builtin_index_update(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 fn builtin_swapaxes(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (arr, _dt) = to_array(&args[0])?;
     let ndim = arr.ndim();
-    let ax0 = resolve_idx(args[1].to_f64().unwrap(), ndim);
-    let ax1 = resolve_idx(args[2].to_f64().unwrap(), ndim);
+    if ndim < 2 {
+        return Err(runtime_error(format!("swapaxes: tensor must have at least 2 dimensions, got {}", ndim)));
+    }
+    let ax0 = resolve_idx(
+        args[1].to_f64().ok_or_else(|| runtime_error("swapaxes: first axis must be a number"))?,
+        ndim
+    )?;
+    let ax1 = resolve_idx(
+        args[2].to_f64().ok_or_else(|| runtime_error("swapaxes: second axis must be a number"))?,
+        ndim
+    )?;
     let mut axes: Vec<usize> = (0..arr.ndim()).collect();
     axes[ax0] = ax1;
     axes[ax1] = ax0;
@@ -349,8 +384,11 @@ fn builtin_tensor_split(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let (arr, _dt) = to_array(&args[0])?;
     let num = args[1].to_f64()
         .ok_or_else(|| runtime_error("tensor-split: num-sections must be a number"))? as usize;
+    if num == 0 {
+        return Err(runtime_error("tensor-split: num-sections must be > 0"));
+    }
     let ax = get_axis(kw).unwrap_or(0);
-    let axis = resolve_idx(ax as f64, arr.ndim());
+    let axis = resolve_idx(ax as f64, arr.ndim())?;
     let dim = arr.shape()[axis];
     if dim % num != 0 {
         return Err(runtime_error(format!(
@@ -369,8 +407,18 @@ fn builtin_tensor_split(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_dynamic_slice(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (arr, _dt) = to_array(&args[0])?;
-    let start = args[1].to_f64().unwrap() as usize;
-    let end = args[2].to_f64().unwrap() as usize;
+    if arr.ndim() == 0 {
+        return Err(runtime_error("dynamic-slice: cannot slice a 0-dimensional tensor"));
+    }
+    let start = args[1].to_f64().ok_or_else(|| runtime_error("dynamic-slice: start must be a number"))? as usize;
+    let end = args[2].to_f64().ok_or_else(|| runtime_error("dynamic-slice: end must be a number"))? as usize;
+    if start > end {
+        return Err(runtime_error(format!("dynamic-slice: start ({}) > end ({})", start, end)));
+    }
+    let dim0 = arr.shape()[0];
+    if end >= dim0 {
+        return Err(runtime_error(format!("dynamic-slice: end ({}) out of bounds for axis 0 with size {}", end, dim0)));
+    }
     let sliced = arr.slice_axis(ndarray::Axis(0), ndarray::Slice::from(start..=end));
     Ok(Value::tensor_i32(sliced.to_owned()))
 }

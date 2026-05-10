@@ -175,35 +175,44 @@ fn builtin_choice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let u = splitmix64(&mut state);
     match probs {
         Some(Value::Tensor { data, .. }) => {
+            if data.is_empty() {
+                return Err(runtime_error("choice: empty probability tensor"));
+            }
             let mut cumsum = 0.0f32;
             for (i, &p) in data.iter().enumerate() {
                 cumsum += p;
                 if u < cumsum {
                     return Ok(Value::Int(i as i64));
-                }
             }
+        }
             Ok(Value::Int((data.len() - 1) as i64))
         }
         Some(Value::DeviceBuffer(db)) => {
             let data = db.to_host().map_err(|e| runtime_error(format!("choice: {}", e)))?;
+            if data.is_empty() {
+                return Err(runtime_error("choice: empty probability tensor"));
+            }
             let mut cumsum = 0.0f32;
             for (i, &p) in data.iter().enumerate() {
                 cumsum += p;
                 if u < cumsum {
                     return Ok(Value::Int(i as i64));
-                }
             }
+        }
             Ok(Value::Int((data.len() - 1) as i64))
         }
         Some(Value::List(items)) => {
             let flat: Vec<f32> = items.iter().filter_map(|v| v.to_f64().map(|x| x as f32)).collect();
+            if flat.is_empty() {
+                return Err(runtime_error("choice: empty probability list"));
+            }
             let mut cumsum = 0.0f32;
             for (i, &p) in flat.iter().enumerate() {
                 cumsum += p;
                 if u < cumsum {
                     return Ok(Value::Int(i as i64));
-                }
             }
+        }
             Ok(Value::Int((flat.len() - 1) as i64))
         }
         None => {

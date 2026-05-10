@@ -41,12 +41,28 @@ pub fn register_builtins(env: &mut Env) {
 
 /// Resolve a potentially negative index against a dimension length.
 /// Negative indices wrap from the end: -1 -> len-1, -2 -> len-2, etc.
-pub(self) fn resolve_idx(f: f64, len: usize) -> usize {
-    if f < 0.0 {
-        (len as i64 + f as i64) as usize
+/// Returns an error if the resolved index is out of bounds or if the input is NaN.
+pub(self) fn resolve_idx(f: f64, len: usize) -> Result<usize, crate::core::error::SheafError> {
+    if f.is_nan() {
+        return Err(runtime_error("index cannot be NaN"));
+    }
+    let idx = if f < 0.0 {
+        let resolved = len as i64 + f as i64;
+        if resolved < 0 {
+            return Err(runtime_error(format!(
+                "index {} out of bounds for length {}", f, len
+            )));
+        }
+        resolved as usize
     } else {
         f as usize
+    };
+    if idx >= len {
+        return Err(runtime_error(format!(
+            "index {} out of bounds for length {}", f, len
+        )));
     }
+    Ok(idx)
 }
 
 pub(self) fn to_array(val: &Value) -> Result<(ArrayD<f32>, Dtype), crate::core::error::SheafError> {
@@ -143,8 +159,8 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
                     let out_shape = broadcast_shape(acc.shape(), b.shape()).ok_or_else(|| {
                         runtime_error(format!("Cannot broadcast shapes {:?} and {:?}", acc.shape(), b.shape()))
                     })?;
-                    let a_bc = acc.broadcast(&out_shape[..]).unwrap();
-                    let b_bc = b.broadcast(&out_shape[..]).unwrap();
+                    let a_bc = acc.broadcast(&out_shape[..]).ok_or_else(|| runtime_error("broadcast failed"))?;
+                    let b_bc = b.broadcast(&out_shape[..]).ok_or_else(|| runtime_error("broadcast failed"))?;
                     acc = ndarray::Zip::from(&a_bc).and(&b_bc).map_collect(|&a, &b| op(a, b));
                 }
             }
@@ -227,8 +243,8 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
             let out_shape = broadcast_shape(ad.shape(), bd.shape()).ok_or_else(|| {
                 runtime_error(format!("Cannot broadcast shapes {:?} and {:?}", ad.shape(), bd.shape()))
             })?;
-            let a_bc = ad.broadcast(&out_shape[..]).unwrap();
-            let b_bc = bd.broadcast(&out_shape[..]).unwrap();
+            let a_bc = ad.broadcast(&out_shape[..]).ok_or_else(|| runtime_error("broadcast failed"))?;
+            let b_bc = bd.broadcast(&out_shape[..]).ok_or_else(|| runtime_error("broadcast failed"))?;
             ndarray::Zip::from(&a_bc).and(&b_bc).map_collect(|&a, &b| op(a, b))
         };
         return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });

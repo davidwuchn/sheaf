@@ -91,8 +91,8 @@ fn builtin_neq(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         _ => {}
     }
     if let (Value::Int(_) | Value::Float(_) | Value::Bool(_), Value::Int(_) | Value::Float(_) | Value::Bool(_)) = (&args[0], &args[1]) {
-        let a = args[0].to_f64().unwrap();
-        let b = args[1].to_f64().unwrap();
+        let a = args[0].to_f64().ok_or_else(|| runtime_error(format!("!=: expected number, got {}", args[0].type_name())))?;
+        let b = args[1].to_f64().ok_or_else(|| runtime_error(format!("!=: expected number, got {}", args[1].type_name())))?;
         return Ok(Value::Bool((a - b).abs() > 1e-10));
     }
     cmp_op(args, |a, b| if (a - b).abs() > 1e-10 { 1.0 } else { 0.0 }, Dtype::I32)
@@ -129,21 +129,23 @@ fn builtin_shape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::Tensor { data, .. } => {
             if args.len() >= 2 {
-                let axis = resolve_idx(args[1].to_f64().unwrap(), data.ndim());
+                let axis_f = args[1].to_f64().ok_or_else(|| runtime_error(format!("shape: axis must be a number, got {}", args[1].type_name())))?;
+                let axis = resolve_idx(axis_f, data.ndim())?;
                 Ok(Value::Int(data.shape()[axis] as i64))
             } else {
                 let shape: Vec<f32> = data.shape().iter().map(|&s| s as f32).collect();
                 Ok(Value::tensor_f32(ArrayD::from_shape_vec(IxDyn(&[shape.len()]), shape).unwrap()))
-            }
+        }
         }
         Value::DeviceBuffer(db) => {
             if args.len() >= 2 {
-                let axis = resolve_idx(args[1].to_f64().unwrap(), db.shape.len());
+                let axis_f = args[1].to_f64().ok_or_else(|| runtime_error(format!("shape: axis must be a number, got {}", args[1].type_name())))?;
+                let axis = resolve_idx(axis_f, db.shape.len())?;
                 Ok(Value::Int(db.shape[axis] as i64))
             } else {
                 let shape: Vec<f32> = db.shape.iter().map(|&s| s as f32).collect();
                 Ok(Value::tensor_f32(ArrayD::from_shape_vec(IxDyn(&[shape.len()]), shape).unwrap()))
-            }
+        }
         }
         Value::List(items) => Ok(Value::Int(items.len() as i64)),
         _ => Err(runtime_error(format!("shape: expected tensor, got {}", args[0].type_name()))),
