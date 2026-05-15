@@ -157,10 +157,21 @@ pub fn reverse_grad(
     wrt: &[String],
     shapes: &HashMap<String, Vec<i64>>,
 ) -> (Vec<(String, CompiledExpr)>, HashMap<String, String>) {
-    // Map: variable name -> name of its current adjoint accumulator symbol.
-    // When a new contribution arrives, we emit a new binding that adds it.
     let mut adj_names: HashMap<String, String> = HashMap::new();
     let mut backward_bindings: Vec<(String, CompiledExpr)> = Vec::new();
+
+    let fwd_lookup: HashMap<String, String> = anf_bindings.iter()
+        .filter_map(|(name, expr)| {
+            match expr {
+                CompiledExpr::FunctionCall { name: fn_name, .. }
+                    if matches!(fn_name.as_str(), "mean" | "softmax" | "tanh" | "sigmoid" | "exp" | "log" | "sqrt") =>
+                {
+                    Some((format!("{:?}", expr), name.clone()))
+                }
+                _ => None,
+            }
+        })
+        .collect();
 
     if let CompiledExpr::Symbol(s) = anf_body {
         let seed_name = fresh_grad_name();
@@ -175,7 +186,7 @@ pub fn reverse_grad(
             None => continue,
         };
 
-        distribute_adjoint_named(value, &adj_sym, &mut adj_names, &mut backward_bindings, shapes);
+        distribute_adjoint_named(value, &adj_sym, &mut adj_names, &mut backward_bindings, shapes, name, &fwd_lookup);
     }
 
     // Build grad_map: wrt name -> adjoint symbol name
@@ -294,6 +305,8 @@ fn distribute_adjoint_named(
     adj_names: &mut HashMap<String, String>,
     bindings: &mut Vec<(String, CompiledExpr)>,
     shapes: &HashMap<String, Vec<i64>>,
+    fwd_name: &str,
+    fwd_lookup: &HashMap<String, String>,
 ) {
     match expr {
         CompiledExpr::Symbol(s) => {
@@ -305,7 +318,7 @@ fn distribute_adjoint_named(
         }
 
         CompiledExpr::FunctionCall { name, args, .. } => {
-            distribute_fn_adjoint_named(name, args, adj_sym, adj_names, bindings, shapes);
+            distribute_fn_adjoint_named(name, args, adj_sym, adj_names, bindings, shapes, fwd_name, fwd_lookup);
         }
 
         _ => {}
@@ -319,6 +332,8 @@ fn distribute_fn_adjoint_named(
     adj_names: &mut HashMap<String, String>,
     bindings: &mut Vec<(String, CompiledExpr)>,
     shapes: &HashMap<String, Vec<i64>>,
+    fwd_name: &str,
+    fwd_lookup: &HashMap<String, String>,
 ) {
     match name {
         "+" => {
@@ -538,8 +553,7 @@ fn distribute_fn_adjoint_named(
 
         "softmax" => {
             let axis = parse_keyword_int(args, "axis").unwrap_or(-1);
-            let fwd_args: Vec<CompiledExpr> = args.to_vec();
-            let sm = emit_binding(bindings, call("softmax", fwd_args));
+            let sm = fwd_name.to_string();
             let prod = emit_binding(bindings, call("*", vec![adj.clone(), sym(&sm)]));
             let s = emit_binding(bindings, call("sum", vec![
                 sym(&prod),
@@ -607,15 +621,20 @@ fn distribute_fn_adjoint_named(
             // d_input = adj * 2 * (x - mean(x, axis)) / n
             if let Some(input_shape) = arg_shape(&args[0], shapes) {
                 let axis = parse_keyword_int(args, "axis");
-                // Forward: mean(x, axis, keepdims=true)
                 let mut mean_args = vec![args[0].clone()];
                 if let Some(ax) = axis {
                     mean_args.push(CompiledExpr::Keyword("axis".to_string()));
                     mean_args.push(CompiledExpr::Integer(ax));
                 }
                 mean_args.push(CompiledExpr::Keyword("keepdims".to_string()));
-                mean_args.push(CompiledExpr::Boolean(true));
-                let m = emit_binding(bindings, call("mean", mean_args));
+        let lookup_key = format!("{:?}", call("mean", mean_args.clone()));
+        let m = match fwd_lookup.get(&lookup_key) {
+                    Some(sym_name) => sym_name.clone(),
+                    None => {
+                        mean_args.push(CompiledExpr::Boolean(true));
+                        emit_binding(bindings, call("mean", mean_args))
+                    }
+                };
                 let diff = emit_binding(bindings, call("-", vec![args[0].clone(), sym(&m)]));
                 let ndim = input_shape.len();
                 let n: i64 = if let Some(ax) = axis {
@@ -626,7 +645,6 @@ fn distribute_fn_adjoint_named(
                 };
                 let scaled = emit_binding(bindings, call("*", vec![float(2.0 / n as f64), sym(&diff)]));
                 let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&scaled)]));
-                // Unbroadcast adj to input shape since var reduces dimensions
                 let ub = maybe_unbroadcast(sym(&contrib), &args[0], shapes, bindings);
                 acc_arg(&args[0], ub, adj_names, bindings);
             } else {
@@ -659,7 +677,11 @@ fn distribute_fn_adjoint_named(
         }
 
         "sigmoid" => {
-            let sig = emit_binding(bindings, call("sigmoid", vec![args[0].clone()]));
+            let fwd_key = format!("{:?}", call("sigmoid", vec![args[0].clone()]));
+            let sig = match fwd_lookup.get(&fwd_key) {
+                Some(fwd_sym) => fwd_sym.clone(),
+                None => emit_binding(bindings, call("sigmoid", vec![args[0].clone()])),
+            };
             let one_minus_sig = emit_binding(bindings, call("-", vec![float(1.0), sym(&sig)]));
             let local = emit_binding(bindings, call("*", vec![sym(&sig), sym(&one_minus_sig)]));
             let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&local)]));
@@ -667,7 +689,11 @@ fn distribute_fn_adjoint_named(
         }
 
         "exp" => {
-            let ex = emit_binding(bindings, call("exp", vec![args[0].clone()]));
+            let fwd_key = format!("{:?}", call("exp", vec![args[0].clone()]));
+            let ex = match fwd_lookup.get(&fwd_key) {
+                Some(fwd_sym) => fwd_sym.clone(),
+                None => emit_binding(bindings, call("exp", vec![args[0].clone()])),
+            };
             let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&ex)]));
             acc_arg(&args[0], sym(&contrib), adj_names, bindings);
         }
@@ -687,7 +713,11 @@ fn distribute_fn_adjoint_named(
         }
 
         "tanh" => {
-            let t = emit_binding(bindings, call("tanh", vec![args[0].clone()]));
+            let fwd_key = format!("{:?}", call("tanh", vec![args[0].clone()]));
+            let t = match fwd_lookup.get(&fwd_key) {
+                Some(fwd_sym) => fwd_sym.clone(),
+                None => emit_binding(bindings, call("tanh", vec![args[0].clone()])),
+            };
             let t2 = emit_binding(bindings, call("*", vec![sym(&t), sym(&t)]));
             let local = emit_binding(bindings, call("-", vec![float(1.0), sym(&t2)]));
             let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&local)]));

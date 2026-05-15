@@ -56,8 +56,11 @@ MICRO = [
 ]
 
 MACRO = [
-    ("GPT-2 124M forward", "bench_forward.shf"),
-    ("GPT-2 124M value-and-grad", "bench_value_and_grad.shf"),
+  ("GPT-2 124M forward", "bench_forward.shf"),
+]
+
+MACRO_SELF_TIMED = [
+  ("GPT-2 124M value-and-grad", "bench_vag_sheaf.shf"),
 ]
 
 
@@ -128,8 +131,31 @@ def bench_macro_one(name: str, script: str, device: str, runs: int) -> float:
     if not script_path.exists():
         return None
     cmd = [SHEAF, str(script_path), "--device", device, "--blame"]
-    run_blame(cmd, discard_stdout=True)  # warmup
+    run_blame(cmd, discard_stdout=True) # warmup
     times = [parse_wall(run_blame(cmd, discard_stdout=True)) for _ in range(runs)]
+    return statistics.median(times)
+
+
+def parse_per_step_ms(stdout: str) -> float:
+    m = re.search(r"per-step:\s+([\d.]+)\s+ms", stdout)
+    if not m:
+        print(f"No per-step timing in output:\n{stdout[:300]}", file=sys.stderr)
+        sys.exit(1)
+    return float(m.group(1))
+
+
+def bench_self_timed(name: str, script: str, device: str, runs: int) -> float:
+    script_path = SCRIPT_DIR / script
+    if not script_path.exists():
+        return None
+    cmd = [SHEAF, str(script_path), "--device", device]
+    times = []
+    for _ in range(runs):
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=600)
+        if r.returncode != 0:
+            print(f"FAIL: {r.stderr[:200] if r.stderr else 'no stderr'}", file=sys.stderr)
+            sys.exit(1)
+        times.append(parse_per_step_ms(r.stdout))
     return statistics.median(times)
 
 
@@ -189,6 +215,14 @@ def main():
     for name, script in MACRO:
         macro_runs = min(args.runs, MACRO_RUNS)
         ms = bench_macro_one(name, script, args.device, macro_runs)
+        if ms is not None:
+            print(f"  {name:<40} {ms:>10.3f} ms", flush=True)
+            results[name] = ms
+
+    print("\nMacro (self-timed):")
+    for name, script in MACRO_SELF_TIMED:
+        macro_runs = min(args.runs, MACRO_RUNS)
+        ms = bench_self_timed(name, script, args.device, macro_runs)
         if ms is not None:
             print(f"  {name:<40} {ms:>10.3f} ms", flush=True)
             results[name] = ms
