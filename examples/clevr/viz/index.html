@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>CLEVR Neuro-Symbolic Visualizer</title>
+        <style>
+            body {
+                font-family: -apple-system, system-ui, sans-serif;
+                margin: 0;
+                background: #f5f5f7;
+                color: #222;
+            }
+            header {
+                background: #fff;
+                border-bottom: 1px solid #ddd;
+                padding: 12px 20px;
+            }
+            header h1 {
+                margin: 0;
+                font-size: 18px;
+                font-weight: 600;
+            }
+            .tabs {
+                display: flex;
+                gap: 4px;
+                padding: 0 20px;
+                background: #fff;
+                border-bottom: 1px solid #ddd;
+            }
+            .tab {
+                padding: 10px 18px;
+                cursor: pointer;
+                border: none;
+                background: transparent;
+                font-size: 14px;
+                border-bottom: 2px solid transparent;
+            }
+            .tab.active {
+                border-bottom-color: #0066cc;
+                color: #0066cc;
+                font-weight: 600;
+            }
+            .tab:hover:not(.active) {
+                background: #f0f0f0;
+            }
+            main {
+                padding: 20px;
+                max-width: 900px;
+                margin: 0 auto;
+            }
+            .panel {
+                display: none;
+            }
+            .panel.active {
+                display: block;
+            }
+            .card {
+                background: #fff;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                padding: 16px;
+                margin-bottom: 16px;
+            }
+            .card h2 {
+                margin: 0 0 12px 0;
+                font-size: 15px;
+                font-weight: 600;
+            }
+            button {
+                padding: 8px 16px;
+                border-radius: 4px;
+                border: 1px solid #ccc;
+                background: #fff;
+                cursor: pointer;
+                font-size: 14px;
+            }
+            button:hover {
+                background: #f0f0f0;
+            }
+            button.primary {
+                background: #0066cc;
+                color: #fff;
+                border-color: #0066cc;
+            }
+            button.primary:hover {
+                background: #0052a3;
+            }
+            button.danger {
+                background: #d9534f;
+                color: #fff;
+                border-color: #d9534f;
+            }
+            button.danger:hover {
+                background: #c9302c;
+            }
+            button:disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+            }
+            .btn-row {
+                display: flex;
+                gap: 8px;
+                margin-bottom: 12px;
+            }
+            pre {
+                background: #fffff0;
+                color: #555;
+                padding: 12px;
+                border-radius: 4px;
+                border: 1px solid #ddd;
+                font-size: 12px;
+                overflow: auto;
+                max-height: 300px;
+                margin: 0;
+                white-space: pre-wrap;
+            }
+            canvas {
+                display: block;
+                background: #fff;
+            }
+            .legend {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 12px;
+                margin-top: 8px;
+                font-size: 12px;
+            }
+            .legend-item {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
+            .legend-swatch {
+                width: 14px;
+                height: 3px;
+                border-radius: 2px;
+            }
+        </style>
+    </head>
+    <body>
+        <header><h1>CLEVR Neuro-Symbolic Visualizer</h1></header>
+        <nav class="tabs">
+            <button class="tab active" data-tab="training">Training</button>
+            <button class="tab" data-tab="query">Query</button>
+        </nav>
+        <main>
+            <section id="training" class="panel active">
+                <div class="card">
+                    <h2>Training</h2>
+                    <div class="btn-row">
+                        <button id="btn-start" class="primary">
+                            Start Training
+                        </button>
+                        <button id="btn-stop" class="danger" disabled>
+                            Stop
+                        </button>
+                        <button id="btn-clear">Clear</button>
+                    </div>
+                    <pre id="train-log">
+Click "Start Training" to run `train.shf`.</pre
+                    >
+                </div>
+
+                <div class="card">
+                    <h2>Loss per task</h2>
+                    <canvas id="loss-canvas" width="860" height="320"></canvas>
+                    <div class="legend" id="loss-legend"></div>
+                </div>
+            </section>
+
+            <section id="query" class="panel">
+                <div class="card">
+                    <h2>Scene display</h2>
+                    <div class="btn-row">
+                        <button id="btn-run" class="primary">New Run</button>
+                    </div>
+                    <canvas
+                        id="scene-canvas"
+                        width="800"
+                        height="400"
+                        style="margin: 0 auto"
+                    ></canvas>
+                </div>
+
+                <div class="card">
+                    <h2>Model output</h2>
+                    <pre id="run-log">Click "New Run" to run `run.shf`.</pre>
+                </div>
+            </section>
+        </main>
+
+        <script>
+            // Tabs
+            for (const btn of document.querySelectorAll(".tab")) {
+                btn.addEventListener("click", () => {
+                    for (const t of document.querySelectorAll(".tab"))
+                        t.classList.remove("active");
+                    for (const p of document.querySelectorAll(".panel"))
+                        p.classList.remove("active");
+                    btn.classList.add("active");
+                    document
+                        .getElementById(btn.dataset.tab)
+                        .classList.add("active");
+                });
+            }
+
+            // --- Training ---
+            const TASKS = [
+                "exists-color",
+                "exists-shape",
+                "query-color",
+                "query-shape",
+            ];
+            const TASK_COLORS = {
+                "exists-color": "#e74c3c",
+                "exists-shape": "#3498db",
+                "query-color": "#2ecc71",
+                "query-shape": "#f39c12",
+            };
+            const series = Object.fromEntries(TASKS.map((t) => [t, []]));
+            let eventSource = null;
+
+            const trainLog = document.getElementById("train-log");
+            const btnStart = document.getElementById("btn-start");
+            const btnStop = document.getElementById("btn-stop");
+            const btnClear = document.getElementById("btn-clear");
+            const lossCanvas = document.getElementById("loss-canvas");
+            const lossCtx = lossCanvas.getContext("2d");
+            const legendEl = document.getElementById("loss-legend");
+
+            function renderLegend() {
+                legendEl.innerHTML = TASKS.map(
+                    (t) =>
+                        `<div class="legend-item"><div class="legend-swatch" style="background:${TASK_COLORS[t]}"></div>${t}</div>`,
+                ).join("");
+            }
+            renderLegend();
+
+            function appendLog(line) {
+                trainLog.textContent += "\n" + line;
+                trainLog.scrollTop = trainLog.scrollHeight;
+            }
+
+            const STEP_RE =
+                /^Step\s+(\d+)\s+\|\s+Loss:\s+([-\d.]+)\s+\|\s+Temp:\s+[\d.]+\s+\|\s+(\S+)/;
+
+            function parseStepLine(line) {
+                const m = line.match(STEP_RE);
+                if (!m) return null;
+                return {
+                    step: parseInt(m[1], 10),
+                    loss: parseFloat(m[2]),
+                    task: m[3],
+                };
+            }
+
+            function drawLosses() {
+                const ctx = lossCtx;
+                const W = lossCanvas.width,
+                    H = lossCanvas.height;
+                const PAD_L = 48,
+                    PAD_R = 12,
+                    PAD_T = 12,
+                    PAD_B = 28;
+                const plotW = W - PAD_L - PAD_R;
+                const plotH = H - PAD_T - PAD_B;
+
+                ctx.clearRect(0, 0, W, H);
+
+                // Compute maxStep from raw data, maxLoss from EMA-smoothed data
+                let maxStep = 0;
+                for (const t of TASKS)
+                    for (const p of series[t])
+                        if (p.step > maxStep) maxStep = p.step;
+                if (maxStep === 0) maxStep = 100;
+                // Pre-compute EMA to find Y scale from smoothed values
+                const EMA_ALPHA = 0.4;
+                let maxLoss = 0;
+                const smoothed = {};
+                for (const t of TASKS) {
+                    const raw = series[t];
+                    smoothed[t] = [];
+                    if (raw.length === 0) continue;
+                    let ema = raw[0].loss;
+                    for (let i = 0; i < raw.length; i++) {
+                        ema = EMA_ALPHA * raw[i].loss + (1 - EMA_ALPHA) * ema;
+                        smoothed[t].push({ step: raw[i].step, ema });
+                        if (ema > maxLoss) maxLoss = ema;
+                    }
+                }
+                if (maxLoss === 0) maxLoss = 1;
+                maxLoss = Math.ceil(maxLoss * 1.1 * 10) / 10;
+
+                // Grid + axis
+                ctx.strokeStyle = "#e0e0e0";
+                ctx.fillStyle = "#888";
+                ctx.font = "11px system-ui";
+                ctx.lineWidth = 1;
+                const ySteps = 5;
+                for (let i = 0; i <= ySteps; i++) {
+                    const y = PAD_T + plotH - (i / ySteps) * plotH;
+                    ctx.beginPath();
+                    ctx.moveTo(PAD_L, y);
+                    ctx.lineTo(W - PAD_R, y);
+                    ctx.stroke();
+                    const val = ((maxLoss * i) / ySteps).toFixed(2);
+                    ctx.textAlign = "right";
+                    ctx.fillText(val, PAD_L - 6, y + 4);
+                }
+                const xSteps = 6;
+                for (let i = 0; i <= xSteps; i++) {
+                    const x = PAD_L + (i / xSteps) * plotW;
+                    const val = Math.round((maxStep * i) / xSteps);
+                    ctx.textAlign = "center";
+                    ctx.fillText(val.toString(), x, H - PAD_B + 16);
+                }
+
+                ctx.strokeStyle = "#999";
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(PAD_L, PAD_T);
+                ctx.lineTo(PAD_L, PAD_T + plotH);
+                ctx.lineTo(W - PAD_R, PAD_T + plotH);
+                ctx.stroke();
+
+                // Series (EMA-smoothed, bezier-interpolated)
+                ctx.lineWidth = 2;
+                for (const task of TASKS) {
+                    const sm = smoothed[task];
+                    if (!sm || sm.length < 2) continue;
+                    const pts = sm.map((s) => ({
+                        x: PAD_L + (s.step / maxStep) * plotW,
+                        y: PAD_T + plotH - (s.ema / maxLoss) * plotH,
+                    }));
+                    // Draw with quadratic bezier through midpoints
+                    ctx.strokeStyle = TASK_COLORS[task];
+                    ctx.beginPath();
+                    ctx.moveTo(pts[0].x, pts[0].y);
+                    for (let i = 1; i < pts.length - 1; i++) {
+                        const mx = (pts[i].x + pts[i + 1].x) / 2;
+                        const my = (pts[i].y + pts[i + 1].y) / 2;
+                        ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+                    }
+                    const last = pts[pts.length - 1];
+                    ctx.lineTo(last.x, last.y);
+                    ctx.stroke();
+                }
+            }
+
+            btnStart.addEventListener("click", () => {
+                for (const t of TASKS) series[t] = [];
+                trainLog.textContent = "Starting training...";
+                drawLosses();
+                btnStart.disabled = true;
+                btnStop.disabled = false;
+
+                fetch("/train", { method: "POST" }).then((res) => {
+                    const reader = res.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buf = "";
+                    function pump() {
+                        reader.read().then(({ done, value }) => {
+                            if (done) {
+                                btnStart.disabled = false;
+                                btnStop.disabled = true;
+                                return;
+                            }
+                            buf += decoder.decode(value, { stream: true });
+                            const events = buf.split("\n\n");
+                            buf = events.pop();
+                            for (const ev of events) {
+                                const line = ev.replace(/^data:\s?/, "").trim();
+                                if (!line || ev.startsWith("event: done"))
+                                    continue;
+                                appendLog(line);
+                                const parsed = parseStepLine(line);
+                                if (parsed && series[parsed.task]) {
+                                    series[parsed.task].push({
+                                        step: parsed.step,
+                                        loss: parsed.loss,
+                                    });
+                                    drawLosses();
+                                }
+                            }
+                            pump();
+                        });
+                    }
+                    pump();
+                });
+            });
+
+            btnStop.addEventListener("click", () => {
+                fetch("/train/stop", { method: "POST" });
+                btnStart.disabled = false;
+                btnStop.disabled = true;
+            });
+
+            btnClear.addEventListener("click", () => {
+                for (const t of TASKS) series[t] = [];
+                trainLog.textContent = "Idle.";
+                drawLosses();
+            });
+
+            drawLosses();
+
+            // --- Query ---
+            const COLOR_HEX = {
+                red: "#ff4c3c",
+                green: "#33ff66",
+                blue: "#1e90ff",
+                yellow: "#fff44f",
+                orange: "#ffa500",
+                purple: "#800080",
+                cyan: "#00ffff",
+                pink: "#ffb6c1",
+            };
+
+            const sceneCanvas = document.getElementById("scene-canvas");
+            const sceneCtx = sceneCanvas.getContext("2d");
+            const runLog = document.getElementById("run-log");
+            const btnRun = document.getElementById("btn-run");
+
+            function drawScene(objects) {
+                const ctx = sceneCtx;
+                const W = sceneCanvas.width,
+                    H = sceneCanvas.height;
+                ctx.clearRect(0, 0, W, H);
+
+                // Grid
+                ctx.strokeStyle = "#eee";
+                ctx.lineWidth = 1;
+                for (let i = 0; i <= 10; i++) {
+                    const p = (i / 10) * W;
+                    ctx.beginPath();
+                    ctx.moveTo(p, 0);
+                    ctx.lineTo(p, H);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(0, p);
+                    ctx.lineTo(W, p);
+                    ctx.stroke();
+                }
+
+                const R = 24;
+                for (const o of objects) {
+                    const x = o.x * W;
+                    const y = o.y * H;
+                    const color = COLOR_HEX[o.color] || "#888";
+                    ctx.fillStyle = color;
+                    ctx.strokeStyle = "#333";
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    if (o.shape === "circle") {
+                        ctx.arc(x, y, R, 0, Math.PI * 2);
+                    } else if (o.shape === "square") {
+                        ctx.rect(x - R, y - R, 2 * R, 2 * R);
+                    } else if (o.shape === "triangle") {
+                        ctx.moveTo(x, y - R);
+                        ctx.lineTo(x + R, y + R);
+                        ctx.lineTo(x - R, y + R);
+                        ctx.closePath();
+                    }
+                    ctx.fill();
+                    ctx.stroke();
+                }
+            }
+
+            const OBJ_RE = /^\s*-\s+(\w+)\s+(\w+)\s+x=([\d.]+)\s+y=([\d.]+)/gm;
+
+            function parseObjects(text) {
+                const objects = [];
+                let m;
+                OBJ_RE.lastIndex = 0;
+                while ((m = OBJ_RE.exec(text)) !== null) {
+                    objects.push({
+                        color: m[1],
+                        shape: m[2],
+                        x: parseFloat(m[3]),
+                        y: parseFloat(m[4]),
+                    });
+                }
+                return objects;
+            }
+
+            btnRun.addEventListener("click", () => {
+                runLog.textContent = "Running...";
+                btnRun.disabled = true;
+                fetch("/run", { method: "POST" })
+                    .then((res) => res.text())
+                    .then((text) => {
+                        runLog.textContent = text;
+                        runLog.scrollTop = 0;
+                        const objects = parseObjects(text);
+                        drawScene(objects);
+                        btnRun.disabled = false;
+                    })
+                    .catch((e) => {
+                        runLog.textContent = "Error: " + e.message;
+                        btnRun.disabled = false;
+                    });
+            });
+
+            drawScene([]);
+        </script>
+    </body>
+</html>

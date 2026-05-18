@@ -5,17 +5,28 @@
 
 (use utils)
 
+;; Scene layout
+(def n-colors 8)
+(def n-shapes 3)
+(def n-objects 4)
+(def color-mask [1 1 1 1 1 1 1 1 0 0 0 0 0])
+(def shape-mask [0 0 0 0 0 0 0 0 1 1 1 0 0])
+
 ;; Pre-computed optimal parameters
 
 (defn init-clevr-params [key]
   ; Initialize with optimized embeddings and temperatures
-  {:color_embeddings [[1 0 0 0 0 0 0 0 0]    ;; red
-                      [0 1 0 0 0 0 0 0 0]    ;; green
-                      [0 0 1 0 0 0 0 0 0]    ;; blue
-                      [0 0 0 1 0 0 0 0 0]]   ;; yellow
-   :shape_embeddings [[0 0 0 0 1 0 0 0 0]    ;; circle
-                      [0 0 0 0 0 1 0 0 0]    ;; square
-                      [0 0 0 0 0 0 1 0 0]]   ;; triangle
+  {:color_embeddings [[1 0 0 0 0 0 0 0 0 0 0 0 0]    ;; red
+                      [0 1 0 0 0 0 0 0 0 0 0 0 0]    ;; green
+                      [0 0 1 0 0 0 0 0 0 0 0 0 0]    ;; blue
+                      [0 0 0 1 0 0 0 0 0 0 0 0 0]    ;; yellow
+                      [0 0 0 0 1 0 0 0 0 0 0 0 0]    ;; orange
+                      [0 0 0 0 0 1 0 0 0 0 0 0 0]    ;; purple
+                      [0 0 0 0 0 0 1 0 0 0 0 0 0]    ;; cyan
+                      [0 0 0 0 0 0 0 1 0 0 0 0 0]]   ;; pink
+   :shape_embeddings [[0 0 0 0 0 0 0 0 1 0 0 0 0]    ;; circle
+                      [0 0 0 0 0 0 0 0 0 1 0 0 0]    ;; square
+                      [0 0 0 0 0 0 0 0 0 0 1 0 0]]   ;; triangle
    :temps {:filter 0.05 :unique 0.1 :leftmost 0.1 :spatial 0.05}
    :thresholds {:spatial 0.0 :exists 1.72}})
 
@@ -25,6 +36,7 @@
 (defn attr-idx [name]
   (case name
     "red" 0 "green" 1 "blue" 2 "yellow" 3
+    "orange" 4 "purple" 5 "cyan" 6 "pink" 7
     "circle" 0 "square" 1 "triangle" 2
     0))
 
@@ -33,12 +45,12 @@
 
 (defn filter-color [scene color-kw params]
   (let [idx (attr-idx (slice (str color-kw) 1))
-        query (get (get params :color_embeddings) idx)]
+        query (* (get (get params :color_embeddings) idx) color-mask)]
     (soft-filter scene query (get-in params [:temps :filter]))))
 
 (defn filter-shape [scene shape-kw params]
   (let [idx (attr-idx (slice (str shape-kw) 1))
-        query (get (get params :shape_embeddings) idx)]
+        query (* (get (get params :shape_embeddings) idx) shape-mask)]
     (soft-filter scene query (get-in params [:temps :filter]))))
 
 
@@ -75,9 +87,19 @@
 (defn intersect [scene1 scene2]
   (intersect-scenes scene1 scene2))
 
-(defn query-color [obj]    (query-attribute obj 0 4))
-(defn query-shape [obj]    (query-attribute obj 4 7))
-(defn query-position [obj] (query-attribute obj 7 9))
+;; Query attributes via embedding templates (matches training loss).
+;; Classifier restricted to relevant slots to prevent embedding collapse.
+(defn query-color [obj params]
+  (let [aggregated (if (== (ndim obj) 3) (sum obj :axis -2) obj)
+        sel-c (slice aggregated 0 8 :axis -1)
+        emb-c (slice (get params :color_embeddings) 0 8 :axis -1)]
+    (einsum "...d,kd->...k" sel-c emb-c)))
+(defn query-shape [obj params]
+  (let [aggregated (if (== (ndim obj) 3) (sum obj :axis -2) obj)
+        sel-s (slice aggregated 8 11 :axis -1)
+        emb-s (slice (get params :shape_embeddings) 8 11 :axis -1)]
+    (einsum "...d,kd->...k" sel-s emb-s)))
+(defn query-position [obj] (query-attribute obj 11 13))
 
 
 
@@ -100,8 +122,8 @@
       "below"        (below scene (rec arg1) params)
       "exists?"      (exists? (rec arg1) params)
       "intersect"    (intersect (rec arg1) (rec (nth q 2)))
-      "query-color"    (query-color (rec arg1))
-      "query-shape"    (query-shape (rec arg1))
+      "query-color"    (query-color (rec arg1) params)
+      "query-shape"    (query-shape (rec arg1) params)
       "query-position" (query-position (rec arg1))
       scene)))
 
@@ -155,12 +177,12 @@
 
       "query-color"
       (let [sub (execute-query-with-steps scene arg1 params)
-            result (query-color (get sub :result))]
+            result (query-color (get sub :result) params)]
         {:result result :steps (append (get sub :steps) result)})
 
       "query-shape"
       (let [sub (execute-query-with-steps scene arg1 params)
-            result (query-shape (get sub :result))]
+            result (query-shape (get sub :result) params)]
         {:result result :steps (append (get sub :steps) result)})
 
       "exists?"

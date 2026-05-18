@@ -1,4 +1,4 @@
-;; CLEVR Utility Functions: Soft Differentiable Operations
+;; CLEVR Utility Functions - Soft Differentiable Operations
 ;;
 ;; Key insight: SIGMOID for filters (independent probabilities),
 ;; SOFTMAX for selection (mutual exclusion).
@@ -23,22 +23,22 @@
 
 ;; Select leftmost object (smallest x) via softmax.
 (defn soft-leftmost [scene temperature]
-  (let [x-coords (get scene ... 7)
+  (let [x-coords (get scene ... 11)
         objectness (sum (abs scene) :axis -1)
-        is-present (> objectness 1e-3)
-        scores (/ (* x-coords -1.0) temperature)
-        masked-scores (where is-present scores -1e10)
-        attention (softmax masked-scores :axis -1)]
+        ;; Combine x position (want small x) and presence (want high objectness).
+        ;; log(objectness) biases strongly against masked-out objects.
+        scores (+ (/ (* x-coords -1.0) temperature)
+                  (log (+ objectness 1e-7)))
+        attention (softmax scores :axis -1)]
     (einsum "...n,...nd->...d" attention scene)))
 
 ;; Select rightmost object (largest x) via softmax.
 (defn soft-rightmost [scene temperature]
-  (let [x-coords (get scene ... 7)
+  (let [x-coords (get scene ... 11)
         objectness (sum (abs scene) :axis -1)
-        is-present (> objectness 1e-3)
-        scores (/ x-coords temperature)
-        masked-scores (where is-present scores -1e10)
-        attention (softmax masked-scores :axis -1)]
+        scores (+ (/ x-coords temperature)
+                  (log (+ objectness 1e-7)))
+        attention (softmax scores :axis -1)]
     (einsum "...n,...nd->...d" attention scene)))
 
 
@@ -60,10 +60,10 @@
            scores (sigmoid (/ score-input temp))]
        (* scene scores))))
 
-(defspatial spatial-left-of 7 -1)
-(defspatial spatial-right-of 7 1)
-(defspatial spatial-above 8 1)
-(defspatial spatial-below 8 -1)
+(defspatial spatial-left-of 11 -1)
+(defspatial spatial-right-of 11 1)
+(defspatial spatial-above 12 1)
+(defspatial spatial-below 12 -1)
 
 
 ;; Logic operations
@@ -83,6 +83,5 @@
 
 ;; Extract attribute slice as logits (not normalized).
 (defn query-attribute [obj start end]
-  (let [aggregated (if (== (ndim obj) 3) (sum obj :axis -2) obj)
-        attribute (get aggregated ... (range start end))]
-    attribute))
+  (let [aggregated (if (== (ndim obj) 3) (sum obj :axis -2) obj)]
+    (slice aggregated start end :axis -1)))

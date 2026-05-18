@@ -1,25 +1,20 @@
 ;; -*- mode: clojure -*-
-;; CLEVR Neuro-Symbolic Reasoning
-;; Run with: cd examples/clevr && sheaf run.shf
 
 (use model)
 (use data)
-
 
 ;; --- Helpers ---
 
 ;; Decode model output into predicted label + success flag.
 (defn score-prediction [prediction query answer]
   (let [op (first query)]
-    (if (== op "query-color")
-      (let [pred (nth (colors) (int (argmax (get prediction 0))))]
-        {:predicted pred :success (== pred answer)})
-      (if (== op "query-shape")
-        (let [pred (nth (shapes) (int (argmax (get prediction 0))))]
-          {:predicted pred :success (== pred answer)})
-        ;; exists?
-        (let [pred (> (float (get prediction 0)) 0.5)]
-          {:predicted pred :success (== pred answer)})))))
+    (case op
+      "query-color" (let [pred (nth (colors) (argmax (get prediction 0)))]
+                      {:predicted pred :success (== pred answer)})
+      "query-shape" (let [pred (nth (shapes) (argmax (get prediction 0)))]
+                      {:predicted pred :success (== pred answer)})
+      (let [pred (> (float (get prediction 0)) 0.5)]
+        {:predicted pred :success (== pred answer)}))))
 
 
 ;; Extract op names from a query tree in depth-first order (leaves first).
@@ -27,19 +22,19 @@
 (defn is-subquery [arg]
   (!= (slice (str arg) 0 1) ":"))
 
-(defn extract-op-names [q]
-  (let [op   (first q)
+(defn extract-op-names [query]
+  (let [op   (first query)
         subs (reduce (fn [acc arg]
                        (if (is-subquery arg)
                          (concat acc (extract-op-names arg))
                          acc))
                      '[]
-                     (rest q))]
+                     (rest query))]
     (concat subs (cons op '[]))))
 
 
 ;; Format attention weights as "label: val, ..." string.
-(defn format-attention [att-flat objects]
+(defn format-attention [attention objects]
   (concat
     (reduce (fn [acc j]
               (let [obj   (nth objects j)
@@ -47,92 +42,166 @@
                 (concat acc
                         (if (> j 0) ", " "")
                         label ": "
-                        (str-call "format" "{:.2f}" (float (get att-flat j))))))
+                        (str-call "format" "{:.2f}" (float (get attention j))))))
             "["
             (range (count objects)))
     "]"))
 
 
-;; Format logits as "name: val, ..." string.
-(defn format-logits [att-flat attr-names]
-  (concat
-    (reduce (fn [acc j]
-              (concat acc
-                      (if (> j 0) ", " "")
-                      (nth attr-names j) ": "
-                      (str-call "format" "{:.2f}" (float (get att-flat j)))))
-            "["
-            (range (len att-flat)))
-    "]"))
+;; Format logits as softmax probabilities (percentages).
+(defn format-logits [logits attr-names]
+  (let [probs (softmax logits :axis -1)]
+    (concat
+      (reduce (fn [acc j]
+                (concat acc
+                        (if (> j 0) ", " "")
+                        (nth attr-names j) ": "
+                        (str-call "format" "{:.0f}%" (* 100.0 (float (get probs j))))))
+              "["
+              (range (len probs)))
+      "]")))
 
 
 ;; --- Main ---
 
-(let [params (init-clevr-params (random-key 0))
+;; Load parameters
+(let [params (if (io "exists" "params.pkl")
+                (io "load" "params.pkl")
+                ;; No trained params: use random embeddings (demo will fail).
+                (let [[ck sk] (random-split (random-key 0))]
+                  {:color_embeddings (* (random-normal ck '[8 13]) 0.3)
+                   :shape_embeddings (* (random-normal sk '[3 13]) 0.3)
+                   :temps {:filter 0.1 :unique 0.1 :leftmost 0.1 :spatial 0.05}
+                   :thresholds {:spatial 0.0 :exists 1.72}}))
 
-      ;; Demo scene: retry until we get at least one square (we need one for the demo)
+      ;; Demo scene: retry until we get at least one square (needed for the detailed query)
       demo-seed (io "entropy")
       demo
         (while (== (get state :found) false)
           [state {:key (random-key demo-seed) :scene nil :found false}]
-          (let [s  (generate-scene (get state :key) 5)
-                ok (> (count (filter (fn [o] (== (get o :shape) "square"))
-                                     (get s :objects)))
-                      0)
+          (let [scene (generate-scene (get state :key) 5)
+                has-square (> (count (filter (fn [o] (== (get o :shape) "square"))
+                                            (get scene :objects)))
+                              0)
                 [k1 k2] (random-split (get state :key))]
-            {:key k2 :scene s :found ok}))
+            {:key k2 :scene scene :found has-square}))
       demo-scene   (get demo :scene)
       demo-tensor  (scene-to-tensor demo-scene)
-      demo-batch   (reshape demo-tensor '[1 5 9])]
+      demo-batch   (reshape demo-tensor '[1 5 13])]
 
   ;; --- Display scene ---
   (do
     (print "CLEVR Neuro-Symbolic Reasoning\n")
     (print "Input tensor:")
-    (print "  Shape: [5, 9]  (5 objects x 9 features)")
-    (print "  Features: [red, green, blue, yellow, circle, square, triangle, x, y]\n")
-    (print "  Raw tensor values:")
-    (map (fn [i]
-           (print "    Object {}: {}" (+ i 1) (get demo-tensor i)))
-         (range 5))
+    (print demo-tensor)
+    (print "Shape: [5, 13]")
     (print "\nDecoded input:")
     (map (fn [o]
-           (print "  - {:7} {:8}   x={:.2f}    y={:.2f}"
+           (print "- {:7} {:8}    x={:.2f}    y={:.2f}"
                  (get o :color) (get o :shape) (get o :x) (get o :y)))
          (get demo-scene :objects))
     (print ""))
 
-  (print "Running 10 random tests:")
-  (print "----------------------------------------------------------")
-  (let [result
-          (while (< (get state :i) 10)
-            [state {:key (random-key 42) :i 0 :passed 0}]
-            (let [[k1 k2 k3] (random-split (get state :key) 3)
-                  scene      (generate-scene k2 4)
-                  qr         (generate-query scene k3)
-                  query      (get qr :query)
-                  answer     (get qr :answer)
-                  scene-b    (reshape (scene-to-tensor scene) '[1 5 9])
-                  prediction (execute-query scene-b query params)
-                  scored     (score-prediction prediction query answer)
-                  status     (if (get scored :success) "PASS" "FAIL")]
+  ;; Build a test suite covering all query patterns with values from the scene.
+  (let [objects (get demo-scene :objects)
+        obj0 (nth objects 0)
+        obj1 (nth objects 1)
+        obj2 (nth objects 2)
 
-              (do
-                (print "[{}] {} -> {} (expected: {})"
-                      status query (get scored :predicted) answer)
-                {:key    k1
-                 :i      (+ (get state :i) 1)
-                 :passed (+ (get state :passed) (if (get scored :success) 1 0))})))
+        ;; Find an absent color for negative exists test
+        present-colors (map (fn [o] (get o :color)) objects)
+        absent-color (first (filter (fn [c] (not (find (fn [pc] (== pc c)) present-colors))) (colors)))
 
-        passed (get result :passed)]
+        ;; Find a valid spatial ref: unique color + exactly one object to its left
+        spatial-colors
+          (filter (fn [c]
+                    (let [matches (filter (fn [o] (== (get o :color) c)) objects)]
+                      (if (!= (count matches) 1) false
+                        (let [ref (first matches)
+                              left (filter (fn [o] (< (get o :x) (- (get ref :x) 0.1))) objects)]
+                          (== (count left) 1)))))
+                  (colors))
 
-    (print "\nAccuracy: {}/10 ({:.1f}%)" passed (* 10.0 passed))
+        queries
+          [;; 1. exists? filter-color (present)
+           {:query ["exists?" ["filter-color" (concat ":" (get obj0 :color))]]
+            :answer true}
+           ;; 2. exists? filter-color (absent)
+           {:query ["exists?" ["filter-color" (concat ":" absent-color)]]
+            :answer false}
+           ;; 3. query-color leftmost filter-shape
+           {:query ["query-color" ["leftmost" ["filter-shape" (concat ":" (get obj0 :shape))]]]
+            :answer (get (reduce (fn [best o] (if (and (== (get o :shape) (get obj0 :shape))
+                                                       (< (get o :x) (get best :x))) o best))
+                                 obj0
+                                 (filter (fn [o] (== (get o :shape) (get obj0 :shape))) objects))
+                         :color)}
+           ;; 4. query-color rightmost filter-shape
+           {:query ["query-color" ["rightmost" ["filter-shape" (concat ":" (get obj1 :shape))]]]
+            :answer (get (reduce (fn [best o] (if (and (== (get o :shape) (get obj1 :shape))
+                                                       (> (get o :x) (get best :x))) o best))
+                                 obj1
+                                 (filter (fn [o] (== (get o :shape) (get obj1 :shape))) objects))
+                         :color)}
+           ;; 5. exists? intersect filter-color filter-shape (positive)
+           {:query ["exists?" ["intersect" ["filter-color" (concat ":" (get obj0 :color))]
+                                           ["filter-shape" (concat ":" (get obj0 :shape))]]]
+            :answer true}
+           ;; 6. exists? intersect filter-color filter-shape (negative)
+           {:query ["exists?" ["intersect" ["filter-color" (concat ":" absent-color)]
+                                           ["filter-shape" (concat ":" (get obj0 :shape))]]]
+            :answer false}
+           ;; 7. query-shape leftmost filter-color
+           {:query ["query-shape" ["leftmost" ["filter-color" (concat ":" (get obj2 :color))]]]
+            :answer (get (reduce (fn [best o] (if (and (== (get o :color) (get obj2 :color))
+                                                       (< (get o :x) (get best :x))) o best))
+                                 obj2
+                                 (filter (fn [o] (== (get o :color) (get obj2 :color))) objects))
+                         :shape)}]]
+
+    (print "Running queries on this scene:")
+    (print "----------------------------------------------------------")
+    (let [result
+            (reduce (fn [acc query-result]
+                      (let [query      (get query-result :query)
+                            answer     (get query-result :answer)
+                            prediction (execute-query demo-batch query params)
+                            scored     (score-prediction prediction query answer)
+                            status     (if (get scored :success) "PASS" "FAIL")]
+                        (do
+                          (print "[{}] {} -> {} (expected: {})"
+                                status query (get scored :predicted) answer)
+                          {:passed (+ (get acc :passed) (if (get scored :success) 1 0))
+                           :total  (+ (get acc :total) 1)})))
+                    {:passed 0 :total 0}
+                    queries)
+
+          ;; 8. spatial left-of (if valid scene exists)
+          result (if (> (count spatial-colors) 0)
+                   (let [ref-color      (first spatial-colors)
+                         ref            (first (filter (fn [o] (== (get o :color) ref-color)) objects))
+                         target         (first (filter (fn [o] (< (get o :x) (- (get ref :x) 0.1))) objects))
+                         query          ["query-shape" ["unique" ["left-of" ["unique" ["filter-color" (concat ":" ref-color)]]]]]
+                         prediction     (execute-query demo-batch query params)
+                         predicted-shape (nth (shapes) (argmax (get prediction 0)))
+                         correct?       (== predicted-shape (get target :shape))]
+                     (do
+                       (print "[{}] {} -> {} (expected: {})"
+                             (if correct? "PASS" "FAIL") query predicted-shape (get target :shape))
+                       {:passed (+ (get result :passed) (if correct? 1 0))
+                        :total  (+ (get result :total) 1)}))
+                   result)
+
+          passed (get result :passed)
+          total  (get result :total)]
+
+      (print "\nAccuracy: {}/{} ({:.1f}%)" passed total (* (/ (float passed) (float total)) 100.0)))
 
     ;; --- Detailed pipeline for "color of rightmost square" ---
     (let [custom-query ["query-color" ["rightmost" ["filter-shape" ":square"]]]
-          qr           (execute-query-with-steps demo-batch custom-query params)
-          steps        (get qr :steps)
-          predicted    (nth (colors) (int (argmax (get (get qr :result) 0))))
+          query-result (execute-query-with-steps demo-batch custom-query params)
+          steps        (get query-result :steps)
+          predicted    (nth (colors) (argmax (get (get query-result :result) 0)))
           op-names     (extract-op-names custom-query)
           n-steps      (len steps)]
 
@@ -145,18 +214,16 @@
         (print "    |")
 
         (map (fn [i]
-               (let [op-name  (nth op-names i)
-                     att-flat (let [att (get steps i)]
-                                (if (== (ndim att) 2) (get att 0) att))
-                     is-last  (== i (- n-steps 1))]
+               (let [op-name     (nth op-names i)
+                     step-values (let [raw (get steps i)]
+                                   (if (== (ndim raw) 2) (get raw 0) raw))
+                     is-last     (== i (- n-steps 1))]
                  (do
                    (print "[{}] {}" op-name op-name)
                    (if is-last
-                     ;; last step = logits
                      (let [attr-names (if (== op-name "query-color") (colors) (shapes))]
-                       (print "  Logits: {}" (format-logits att-flat attr-names)))
-                     ;; other steps = attention per object
-                     (print "  Attention: {}" (format-attention att-flat (get demo-scene :objects))))
+                       (print "  Probabilities: {}" (format-logits step-values attr-names)))
+                     (print "  Attention: {}" (format-attention step-values (get demo-scene :objects))))
                    (print "    |"))))
              (range n-steps))
 

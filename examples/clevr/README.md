@@ -46,10 +46,27 @@ Each symbolic operation (like "filter-shape") computes a mask that narrows the n
     Answer (Argmax)
    ```
 
-Note: While CLEVR is fully differentiable, it uses hard-coded one-hot embeddings and works out-of-the-box without further training. Learning embeddings from scratch would add no practical benefit for this demonstration.
+Note: CLEVR is fully differentiable. Queries can be trained with `train.shf`.
 
-### Sheaf's Role in the Architecture
+### Sheaf’s Role in the Architecture
 
-In a Lisp, code and data share the same structure. A Sheaf query is not
-translated into a call stack: it is one. The same recursion that walks
-a list executes the neural pipeline.
+In PyTorch or JAX, the symbolic query is one data structure, the neural modules are Python objects, and a dispatcher sits between them to translate one into the other.
+
+In Sheaf, code and data are the same. For this reason, a symbolic query such as `["query-color" ["leftmost" ["filter-shape" ":circle"]]]` is a list, and that list also directly is the neural pipeline.
+
+Since the query vocabulary and the function vocabulary are one and the same, adding a new operation is just a matter of defining a function, which automatically extends the query language.
+
+The computation graph is also represented as data in the source language. This allows macros to generate and modify neural architectures at compile time. For example, the `defspatial` macro in `utils.shf` creates four spatial-attention functions from a single template, which can be traced and inspected.
+
+Also specific to Sheaf: the entire neuro-symbolic pipeline (query execution, soft attention, and embedding lookup) is differentiable with a single call to `value-and-grad`. Homoiconicity makes the function the graph, and differentiating the function differentiates the graph.
+
+### Visualizer
+
+GUI: Start the training and query dashboard with `viz/run.sh`.
+
+CLI:
+
+```bash
+sheaf train.shf # Optional, trained weights are already included.
+sheaf run.shf
+```
