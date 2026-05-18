@@ -17,12 +17,6 @@ These are the planned features for the next releases of Sheaf.
 
 - **`inc` / `dec`**: Small convenience to increment and decrement, as in Clojure. Currently `(+ var 1)` and `(- var 1)`.
 
-- **`argmax` returns integers**: `argmax` and `argmin` currently return floats. They will return integer tensors for direct use as indices.
-
-### Macros
-
-- **Enriched `defmacro`**: `range` and `reduce` available at compile time, enabling macros that generate architecture variants from a single template.
-
 ### Operations
 
 - **Convolution primitives**: `conv1d` and `conv2d` via `stablehlo.convolution`, exposed through the standard library.
@@ -32,8 +26,6 @@ These are the planned features for the next releases of Sheaf.
 ### Autodiff
 
 - **Gradient checkpointing**: Recompute forward activations during the backward pass instead of storing them all. This will reduce memory usage for deep models (the GPT-2 124M training currently uses 13 GB).
-
-- **Scalar parameters in `value-and-grad`**: Float scalars in parameter dictionaries (e.g., `{:w 5.0}`) will produce correct gradients. Currently requires wrapping in a 1-element tensor.
 
 ### Performance
 
