@@ -290,7 +290,7 @@ fn current_rss() -> usize {
                         // "VmRSS:    12345 kB"
                         l.split_whitespace()
                             .nth(1)
-                            .and_then(|v| v.parse::<u64>().ok())
+                            .and_then(|v| v.parse::<usize>().ok())
                     })
             })
             .map(|kb| kb * 1024)

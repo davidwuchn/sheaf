@@ -18,12 +18,17 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 serde_json = "1.0"
-ndarray = { version = "0.16", features = ["blas"] }
 getrandom = "0.2"
 rustyline = "14"
 nvml-wrapper = "0.10"
 libc = "0.2"
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+ndarray = { version = "0.16", features = ["blas"] }
 blas-src = { version = "0.10", features = ["accelerate"] }
+
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
+ndarray = { version = "0.16" }
 
 [package.metadata]
 iree-version = "3.10.0"
