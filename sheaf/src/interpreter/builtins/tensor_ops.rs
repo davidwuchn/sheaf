@@ -14,6 +14,7 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("swapaxes", builtin_swapaxes);
     env.set_builtin("dynamic-slice", builtin_dynamic_slice);
     env.set_builtin("tensor-split", builtin_tensor_split);
+    env.set_builtin("flip", builtin_flip);
 }
 
 fn builtin_reshape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
@@ -421,4 +422,45 @@ fn builtin_dynamic_slice(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     }
     let sliced = arr.slice_axis(ndarray::Axis(0), ndarray::Slice::from(start..=end));
     Ok(Value::tensor_i32(sliced.to_owned()))
+}
+
+fn builtin_flip(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
+    if let Value::List(items) = &args[0] {
+        let mut reversed = items.clone();
+        reversed.reverse();
+        return Ok(Value::List(reversed));
+    }
+    let (arr, dt) = to_array(&args[0])?;
+    if arr.is_empty() {
+        return Ok(Value::Tensor { data: Arc::new(arr), dtype: dt });
+    }
+    let axis = if let Some(ax) = get_axis(kw) {
+        let ndim = arr.ndim();
+        if ndim == 0 {
+            return Err(runtime_error("flip: cannot flip a 0-dimensional tensor along an axis"));
+        }
+        resolve_idx(ax as f64, ndim)?
+    } else {
+        0
+    };
+    if arr.ndim() == 0 {
+        return Ok(Value::Tensor { data: Arc::new(arr), dtype: dt });
+    }
+    let dim = arr.shape()[axis];
+    let data: Vec<f32> = arr.iter().copied().collect();
+    let shape: Vec<usize> = arr.shape().to_vec();
+    let _ndim = shape.len();
+    let axis_stride: usize = shape[axis + 1..].iter().product::<usize>().max(1);
+    let axis_stride_outer: usize = shape[..axis].iter().product::<usize>().max(1);
+    let mut result = vec![0.0f32; data.len()];
+    for outer in 0..axis_stride_outer {
+        for i in 0..dim {
+            let src_offset = outer * dim * axis_stride + i * axis_stride;
+            let dst_offset = outer * dim * axis_stride + (dim - 1 - i) * axis_stride;
+            let src_slice = &data[src_offset..src_offset + axis_stride];
+            result[dst_offset..dst_offset + axis_stride].copy_from_slice(src_slice);
+        }
+    }
+    let result_arr = ArrayD::from_shape_vec(IxDyn(&shape), result).unwrap();
+    Ok(Value::Tensor { data: Arc::new(result_arr), dtype: dt })
 }

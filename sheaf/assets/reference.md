@@ -735,8 +735,23 @@ Extracts a continuous sub-section of a tensor along its first axis, starting fro
 Rolls tensor elements along the specified axis. Elements that roll off one end are reintroduced at the other. If no axis is provided, the tensor is flattened, rolled, and restored to its original shape.
 
 ```sheaf
-(roll [1 2 3] 1)           ; => [3. 1. 2.]
-(roll [1 2 3] -1)          ; => [2. 3. 1.]
+(roll [1 2 3] 1) ; => [3. 1. 2.]
+(roll [1 2 3] -1) ; => [2. 3. 1.]
+```
+
+---
+
+### flip
+
+**Type:** function
+**Signature:** `(flip x [:axis axis])`
+
+Reverses the order of elements along the specified axis. For tensors, defaults to axis 0. For lists, reverses the entire list.
+
+```sheaf
+(flip [1 2 3 4 5]) ; => [5. 4. 3. 2. 1.]
+(flip '[1 2 3]) ; => [3, 2, 1]
+(flip [[1 2 3] [4 5 6]] :axis 1) ; => [[3. 2. 1.] [6. 5. 4.]]
 ```
 
 ---

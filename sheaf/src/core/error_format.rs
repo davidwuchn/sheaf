@@ -188,7 +188,7 @@ fn known_mistake_hint(symbol: &str) -> Option<&'static str> {
         "while!" | "loop!" => Some("Use 'while' for conditional loops: (while [state init] cond body)"),
         "type" | "typeof" | "type-of" => Some("Use (shape x) for tensor shape, (ndim x) for rank."),
         "append!" | "push" | "push!" => Some("Use 'append' (functional): (append lst item)"),
-        "reverse" | "flip" => Some("Use (get tensor [N-1 ... 1 0]) to reverse. A built-in 'reverse' is planned."),
+        "reverse" | "flip" => Some("Use (flip x) to reverse a tensor or list along axis 0, or (flip x :axis N) for a specific axis."),
         _ => None,
     }
 }

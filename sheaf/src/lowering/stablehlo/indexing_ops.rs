@@ -200,6 +200,31 @@ impl StableHLOEmitter {
         self.emit_concatenate(&[tail, head], &[tail_ty.clone(), input_ty.clone()], 0)
     }
 
+    /// Emit reverse (flip): (flip tensor [:axis N])
+    /// Reverses elements along the specified axis using stablehlo.reverse.
+    pub fn emit_reverse(
+        &mut self,
+        input: &Register,
+        input_ty: &StableHLOType,
+        axis: i64,
+    ) -> (Register, StableHLOType) {
+        let shape = input_ty.shape();
+        let ndim = shape.len() as i64;
+        let ax = if axis < 0 { (ndim + axis) as usize } else { axis as usize };
+
+        let reg = self.fresh_register();
+        let dims_str = format!("{}", ax);
+        self.body.push(format!(
+            " {} = stablehlo.reverse {}, dims = [{}] : ({}) -> {}",
+            reg.to_mlir(),
+            input.to_mlir(),
+            dims_str,
+            input_ty.to_mlir(),
+            input_ty.to_mlir(),
+        ));
+        (reg, input_ty.clone())
+    }
+
     /// Emit index-update: (index-update tensor idx new-value)
     /// Returns a new tensor with tensor[idx] replaced by new-value.
     /// Uses stablehlo.dynamic_update_slice.

@@ -35,6 +35,7 @@ impl CodeGenerator {
             "dynamic-slice" if args.len() == 3 => Some(self.gen_dynamic_slice(args)),
             "tensor-split" if args.len() == 2 => Some(self.gen_tensor_split(args)),
             "roll" if args.len() == 2 => Some(self.gen_roll(args)),
+        "flip" if args.len() == 1 => Some(self.gen_flip(args)),
             "index-update" if args.len() == 3 => Some(self.gen_index_update(args)),
             "append-and-roll" if args.len() == 2 => Some(self.gen_append_and_roll(args)),
             "random-key" if args.len() == 1 => Some(self.gen_random_key(args)),
@@ -454,6 +455,13 @@ impl CodeGenerator {
             }
         };
         let (reg, ty) = self.emitter.emit_roll(&operand_reg, &operand_ty, shift);
+        Ok((reg, ty))
+    }
+
+    fn gen_flip(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
+        let (operand_reg, operand_ty) = self.generate(&args[0])?;
+        let axis = 0;
+        let (reg, ty) = self.emitter.emit_reverse(&operand_reg, &operand_ty, axis);
         Ok((reg, ty))
     }
 

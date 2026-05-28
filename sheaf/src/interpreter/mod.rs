@@ -425,13 +425,13 @@ fn eval_call(name: &str, args: &[CompiledExpr], env: &mut Env) -> Result<Value, 
 
     // Only functions that declare keyword params consume :kw val pairs.
     // All others treat keywords as positional values (Clojure semantics).
-    let has_kwargs = matches!(name,
-        "softmax" | "log-softmax" | "sum" | "mean" | "product"
-        | "min" | "max" | "argmax" | "argmin" | "concat"
-        | "leaky-relu" | "celu" | "var" | "normalize" | "range"
-        | "tensor-split" | "slice" | "sort"
-        | "print" | "choice"
-    );
+let has_kwargs = matches!(name,
+            "softmax" | "log-softmax" | "sum" | "mean" | "product"
+            | "min" | "max" | "argmax" | "argmin" | "concat"
+            | "leaky-relu" | "celu" | "var" | "normalize"
+            | "range" | "tensor-split" | "slice" | "sort"
+            | "print" | "choice" | "flip"
+        );
 
     // Evaluate args, splitting kwargs only for functions that use them
     let (pos_args, kwargs) = if has_kwargs {
