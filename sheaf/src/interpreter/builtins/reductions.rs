@@ -74,7 +74,7 @@ fn builtin_product(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         let ax = resolve_axis(axis, arr.ndim())?;
         let result = reduce_along_axis(&arr, ax, |v| v.iter().product());
         if result.shape().is_empty() {
-            Ok(Value::Float(*result.first().unwrap()))
+            Ok(Value::Float(as_scalar(&result)))
         } else {
             Ok(Value::tensor(result, dt))
         }

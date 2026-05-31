@@ -202,7 +202,7 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                         Ok(Value::tensor_f32(sliced))
                     }
                     Value::Tensor { data: range_t, .. } if range_t.ndim() == 1 && range_t.len() > 0 => {
-                        let start = *range_t.first().unwrap() as usize;
+                        let start = as_scalar(range_t) as usize;
                         let end = *range_t.iter().last().unwrap() as usize + 1;
                         let last_dim = data.shape()[data.ndim() - 1];
                         if end > last_dim {
@@ -219,7 +219,7 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                 let idx = resolve_idx(f, data.shape()[0])?;
                 let sliced = data.index_axis(ndarray::Axis(0), idx).to_owned();
                 return if sliced.shape().is_empty() {
-                    Ok(Value::Float(*sliced.first().unwrap()))
+                    Ok(Value::Float(as_scalar(&sliced)))
                 } else {
                     Ok(Value::tensor_f32(sliced))
                 };

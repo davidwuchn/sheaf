@@ -230,7 +230,7 @@ fn builtin_top_k(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let k = match &args[1] {
         Value::Int(n) => *n as usize,
         Value::Float(f) => *f as usize,
-        Value::Tensor { data, .. } if data.ndim() == 0 => *data.first().unwrap() as usize,
+        Value::Tensor { data, .. } if data.ndim() == 0 => as_scalar(data) as usize,
         _ => return Err(runtime_error("top_k: k must be integer")),
     };
     let flat: Vec<f32> = arr.iter().copied().collect();

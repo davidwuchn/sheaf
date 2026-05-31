@@ -79,6 +79,10 @@ pub(self) fn to_array(val: &Value) -> Result<(ArrayD<f32>, Dtype), crate::core::
     }
 }
 
+pub(self) fn as_scalar(arr: &ArrayD<f32>) -> f32 {
+    arr.first().copied().unwrap()
+}
+
 fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
     let max_ndim = a.len().max(b.len());
     let mut result = Vec::with_capacity(max_ndim);
@@ -122,7 +126,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
                 let s = *n as f32;
                 dt = result_dtype(dt, Dtype::I32);
                 if acc.ndim() == 0 {
-                    acc = ArrayD::from_elem(IxDyn(&[]), op(*acc.first().unwrap(), s));
+                    acc = ArrayD::from_elem(IxDyn(&[]), op(as_scalar(&acc), s));
                 } else {
                     acc = acc.mapv(|x| op(x, s));
                 }
@@ -131,7 +135,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
                 let s = *f as f32;
                 dt = result_dtype(dt, Dtype::F32);
                 if acc.ndim() == 0 {
-                    acc = ArrayD::from_elem(IxDyn(&[]), op(*acc.first().unwrap(), s));
+                    acc = ArrayD::from_elem(IxDyn(&[]), op(as_scalar(&acc), s));
                 } else {
                     acc = acc.mapv(|x| op(x, s));
                 }
@@ -140,7 +144,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
                 let s = if *b { 1.0 } else { 0.0 };
                 dt = result_dtype(dt, Dtype::I32);
                 if acc.ndim() == 0 {
-                    acc = ArrayD::from_elem(IxDyn(&[]), op(*acc.first().unwrap(), s));
+                    acc = ArrayD::from_elem(IxDyn(&[]), op(as_scalar(&acc), s));
                 } else {
                     acc = acc.mapv(|x| op(x, s));
                 }
@@ -148,10 +152,10 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
             Value::Tensor { data: b, dtype: bdt } => {
                 dt = result_dtype(dt, *bdt);
                 if acc.ndim() == 0 && b.ndim() != 0 {
-                    let scalar = *acc.first().unwrap();
+                    let scalar = as_scalar(&acc);
                     acc = b.mapv(|x| op(scalar, x));
                 } else if b.ndim() == 0 && acc.ndim() != 0 {
-                    let scalar = *b.first().unwrap();
+                        let scalar = as_scalar(&b);
                     acc = acc.mapv(|x| op(x, scalar));
                 } else if acc.shape() == b.shape() {
                     acc = ndarray::Zip::from(&acc).and(b.as_ref()).map_collect(|&a, &b| op(a, b));
@@ -168,7 +172,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
         }
     }
     if acc.ndim() == 0 {
-        let x = *acc.first().unwrap();
+        let x = as_scalar(&acc);
         if dt == Dtype::I32 && x == x.floor() {
             Ok(Value::Int(x as i64))
         } else {
@@ -207,7 +211,7 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
     // scalar op tensor
     if let (Some(s), Value::Tensor { data, .. }) = (a_scalar, b) {
         let result = if data.ndim() == 0 {
-            let x = op(s, *data.first().unwrap());
+            let x = op(s, as_scalar(data));
             return Ok(Value::Float(x));
         } else {
             data.mapv(|x| op(s, x))
@@ -218,7 +222,7 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
     // tensor op scalar
     if let (Value::Tensor { data, .. }, Some(s)) = (a, b_scalar) {
         let result = if data.ndim() == 0 {
-            let x = op(*data.first().unwrap(), s);
+            let x = op(as_scalar(data), s);
             return Ok(Value::Float(x));
         } else {
             data.mapv(|x| op(x, s))
@@ -229,13 +233,13 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
     // tensor op tensor
     if let (Value::Tensor { data: ad, .. }, Value::Tensor { data: bd, .. }) = (a, b) {
         let result = if ad.ndim() == 0 {
-            let s = *ad.first().unwrap();
+            let s = as_scalar(&ad);
             if bd.ndim() == 0 {
-                return Ok(Value::Float(op(s, *bd.first().unwrap())));
+                return Ok(Value::Float(op(s, as_scalar(&bd))));
             }
             bd.mapv(|x| op(s, x))
         } else if bd.ndim() == 0 {
-            let s = *bd.first().unwrap();
+            let s = as_scalar(&bd);
             ad.mapv(|x| op(x, s))
         } else if ad.shape() == bd.shape() {
             ndarray::Zip::from(ad.as_ref()).and(bd.as_ref()).map_collect(|&a, &b| op(a, b))
@@ -277,7 +281,7 @@ pub(self) fn unary_op(args: &[Value], op: fn(f32) -> f32) -> R {
     let (arr, _dt) = to_array(&args[0])?;
     let result = arr.mapv(op);
     if result.ndim() == 0 {
-        Ok(Value::Float(*result.first().unwrap()))
+        Ok(Value::Float(as_scalar(&result)))
     } else {
         Ok(Value::Tensor { data: Arc::new(result), dtype: Dtype::F32 })
     }
@@ -290,7 +294,7 @@ pub(self) fn unary_op_f32(args: &[Value], op: fn(f32) -> f32) -> R {
     let (arr, _dt) = to_array(&args[0])?;
     let result = arr.mapv(op);
     if result.ndim() == 0 {
-        Ok(Value::Float(*result.first().unwrap()))
+        Ok(Value::Float(as_scalar(&result)))
     } else {
         Ok(Value::Tensor { data: Arc::new(result), dtype: Dtype::F32 })
     }
@@ -443,17 +447,17 @@ pub(self) fn cmp_op(args: &[Value], op: fn(f32, f32) -> f32, _dt: Dtype) -> R {
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
     if a.ndim() == 0 && b.ndim() != 0 {
-        let scalar = *a.first().unwrap();
+        let scalar = as_scalar(&a);
         let result = b.mapv(|x| op(scalar, x));
         return Ok(bool_tensor(result));
     }
     if b.ndim() == 0 && a.ndim() != 0 {
-        let scalar = *b.first().unwrap();
+        let scalar = as_scalar(&b);
         let result = a.mapv(|x| op(x, scalar));
         return Ok(bool_tensor(result));
     }
     if a.ndim() == 0 && b.ndim() == 0 {
-        let r = op(*a.first().unwrap(), *b.first().unwrap());
+        let r = op(as_scalar(&a), as_scalar(&b));
         return Ok(Value::Bool(r != 0.0));
     }
     let result = ndarray::Zip::from(&a).and(&b).map_collect(|&a, &b| op(a, b));

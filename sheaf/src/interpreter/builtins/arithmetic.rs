@@ -37,7 +37,7 @@ fn builtin_sub(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         let (arr, dt) = to_array(&args[0])?;
         let result = arr.mapv(|x| -x);
         if result.ndim() == 0 {
-            let x = *result.first().unwrap();
+            let x = as_scalar(&result);
             if dt == Dtype::I32 { return Ok(Value::Int(x as i64)); }
             return Ok(Value::Float(x));
         }
@@ -723,12 +723,12 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
     // Broadcast scalar operands to expected shape from subscript
     if a.ndim() == 0 && !idx_a.is_empty() {
-        let scalar = *a.first().unwrap();
+        let scalar = as_scalar(&a);
         let shape: Vec<usize> = idx_a.iter().map(|c| sizes.get(c).copied().unwrap_or(1)).collect();
         a = ArrayD::from_elem(IxDyn(&shape), scalar);
     }
     if b.ndim() == 0 && !idx_b.is_empty() {
-        let scalar = *b.first().unwrap();
+        let scalar = as_scalar(&b);
         let shape: Vec<usize> = idx_b.iter().map(|c| sizes.get(c).copied().unwrap_or(1)).collect();
         b = ArrayD::from_elem(IxDyn(&shape), scalar);
     }
@@ -738,7 +738,7 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         .unwrap_or_else(|| einsum_naive(&idx_a, &idx_b, &idx_out, &a, &b, &sizes));
 
     if arr.ndim() == 0 {
-        Ok(Value::Float(*arr.first().unwrap()))
+        Ok(Value::Float(as_scalar(&arr)))
     } else {
         Ok(Value::tensor_f32(arr))
     }

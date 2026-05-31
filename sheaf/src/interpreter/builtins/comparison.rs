@@ -190,7 +190,7 @@ fn builtin_int(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::DeviceBuffer(db) => {
             let data = db.to_host().map_err(|e| runtime_error(format!("int: {}", e)))?;
             if data.ndim() == 0 {
-                Ok(Value::Int(*data.first().unwrap() as i64))
+                Ok(Value::Int(as_scalar(&data) as i64))
             } else {
                 Ok(Value::tensor_i32(data.mapv(|x| x.floor())))
             }

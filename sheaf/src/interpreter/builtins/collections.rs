@@ -29,7 +29,7 @@ fn builtin_first(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                 return Err(runtime_error("first: empty tensor"));
         }
             let sliced = data.index_axis(ndarray::Axis(0), 0).to_owned();
-            if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
+            if sliced.shape().is_empty() { Ok(Value::Float(as_scalar(&sliced))) }
             else { Ok(Value::tensor_f32(sliced)) }
         }
         Value::DeviceBuffer(_) => {
@@ -48,7 +48,7 @@ fn builtin_second(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                 return Err(runtime_error("second: tensor too short (need at least 2 elements on axis 0)"));
         }
             let sliced = data.index_axis(ndarray::Axis(0), 1).to_owned();
-            if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
+            if sliced.shape().is_empty() { Ok(Value::Float(as_scalar(&sliced))) }
             else { Ok(Value::tensor_f32(sliced)) }
         }
         Value::DeviceBuffer(_) => {
@@ -68,7 +68,7 @@ fn builtin_last(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                 return Err(runtime_error("last: empty tensor"));
         }
             let sliced = data.index_axis(ndarray::Axis(0), n - 1).to_owned();
-            if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
+            if sliced.shape().is_empty() { Ok(Value::Float(as_scalar(&sliced))) }
             else { Ok(Value::tensor_f32(sliced)) }
         }
         Value::DeviceBuffer(_) => {
@@ -100,7 +100,7 @@ fn builtin_nth(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                 let dim0 = data.shape()[0];
                 let idx = resolve_idx(f, dim0)?;
                 let sliced = data.index_axis(ndarray::Axis(0), idx).to_owned();
-            if sliced.shape().is_empty() { Ok(Value::Float(*sliced.first().unwrap())) }
+            if sliced.shape().is_empty() { Ok(Value::Float(as_scalar(&sliced))) }
             else { Ok(Value::tensor_f32(sliced)) }
         }
         Value::DeviceBuffer(_) => {
@@ -178,7 +178,7 @@ fn builtin_get_in(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                     return Ok(default.unwrap_or(Value::Nil));
             }
                 let sliced = data.index_axis(ndarray::Axis(0), idx_u).to_owned();
-                if sliced.shape().is_empty() { Value::Float(*sliced.first().unwrap()) }
+                if sliced.shape().is_empty() { Value::Float(as_scalar(&sliced)) }
                 else { Value::tensor_f32(sliced) }
             }
             (Value::List(items), Value::Int(idx)) => {
