@@ -50,7 +50,7 @@ fn builtin_transpose(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if arr.ndim() == 2 {
         Ok(Value::tensor_f32(arr.t().to_owned()))
     } else if arr.ndim() == 1 {
-        Ok(Value::tensor_f32(arr))
+        Ok(Value::tensor_f32(arr.into_owned()))
     } else {
         let mut axes: Vec<usize> = (0..arr.ndim()).rev().collect();
         if args.len() > 1 {
@@ -67,7 +67,7 @@ fn builtin_transpose(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             axes = resolved_axes;
         }
         }
-        Ok(Value::tensor_f32(arr.permuted_axes(IxDyn(&axes))))
+        Ok(Value::tensor_f32(arr.into_owned().permuted_axes(IxDyn(&axes))))
     }
 }
 
@@ -111,7 +111,7 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     }
 
     let arrays: Vec<ArrayD<f32>> = args.iter().map(|a| {
-        to_array(a).map(|(arr, _)| arr)
+        to_array(a).map(|(arr, _)| arr.into_owned())
     }).collect::<Result<Vec<_>, _>>()?;
     let views: Vec<ndarray::ArrayViewD<f32>> = arrays.iter().map(|a| a.view()).collect();
     let result = ndarray::concatenate(ndarray::Axis(axis), &views)
@@ -325,7 +325,7 @@ fn builtin_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (arr, _dt) = to_array(&args[0])?;
     let shift = args[1].to_f64().ok_or_else(|| runtime_error("roll: shift must be a number"))? as i64;
     if arr.is_empty() {
-        return Ok(Value::tensor_f32(arr.clone()));
+        return Ok(Value::tensor_f32(arr.into_owned()));
     }
     let data: Vec<f32> = arr.iter().copied().collect();
     let n = data.len() as i64;
@@ -339,7 +339,8 @@ fn builtin_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_index_update(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    let (mut arr, _dt) = to_array(&args[0])?;
+    let (cow, _dt) = to_array(&args[0])?;
+    let mut arr = cow.into_owned();
     let idx = args[1].to_f64().ok_or_else(|| runtime_error("index-update: index must be a number"))? as usize;
     let dim = arr.shape()[0];
     if idx >= dim {
@@ -378,7 +379,7 @@ fn builtin_swapaxes(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let mut axes: Vec<usize> = (0..arr.ndim()).collect();
     axes[ax0] = ax1;
     axes[ax1] = ax0;
-    Ok(Value::tensor_f32(arr.permuted_axes(IxDyn(&axes))))
+    Ok(Value::tensor_f32(arr.into_owned().permuted_axes(IxDyn(&axes))))
 }
 
 fn builtin_tensor_split(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
@@ -432,7 +433,7 @@ fn builtin_flip(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     }
     let (arr, dt) = to_array(&args[0])?;
     if arr.is_empty() {
-        return Ok(Value::Tensor { data: Arc::new(arr), dtype: dt });
+        return Ok(Value::Tensor { data: Arc::new(arr.into_owned()), dtype: dt });
     }
     let axis = if let Some(ax) = get_axis(kw) {
         let ndim = arr.ndim();
@@ -444,7 +445,7 @@ fn builtin_flip(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         0
     };
     if arr.ndim() == 0 {
-        return Ok(Value::Tensor { data: Arc::new(arr), dtype: dt });
+        return Ok(Value::Tensor { data: Arc::new(arr.into_owned()), dtype: dt });
     }
     let dim = arr.shape()[axis];
     let data: Vec<f32> = arr.iter().copied().collect();

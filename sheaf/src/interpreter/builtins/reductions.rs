@@ -164,7 +164,7 @@ fn builtin_var(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         let ax = resolve_axis(axis, arr.ndim())?;
         let mean_arr = reduce_along_axis(&arr, ax, |v| v.iter().sum::<f32>() / v.len() as f32);
         let mean_bc = mean_arr.insert_axis(ndarray::Axis(ax));
-        let diff = &arr - &mean_bc;
+        let diff = &*arr - &mean_bc;
         let sq = &diff * &diff;
         let result = reduce_along_axis(&sq, ax, |v| v.iter().sum::<f32>() / v.len() as f32);
         if keepdims(kw) {
@@ -187,7 +187,7 @@ fn builtin_normalize(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         let ax = resolve_axis(axis, arr.ndim())?;
         let sum_arr = reduce_along_axis(&arr, ax, |v| v.iter().sum());
         let sum_bc = sum_arr.insert_axis(ndarray::Axis(ax));
-        Ok(Value::tensor(&arr / &sum_bc, dt))
+        Ok(Value::tensor(&*arr / &sum_bc, dt))
     } else {
         let total: f32 = arr.iter().sum();
         Ok(Value::tensor(arr.mapv(|x| x / total), dt))

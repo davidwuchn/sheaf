@@ -108,7 +108,7 @@ fn builtin_tril(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if arr.ndim() != 2 { return Err(runtime_error(format!("tril: input must be 2D (matrix), got {}D", arr.ndim()))); }
     let shape = arr.shape();
     let (n, m) = (shape[0], shape[1]);
-    let mut result = arr.clone();
+    let mut result = arr.into_owned();
     for i in 0..n {
         for j in (i + 1)..m {
             result[IxDyn(&[i, j])] = 0.0;

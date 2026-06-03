@@ -19,6 +19,7 @@ mod losses;
 use crate::interpreter::env::{arity_error, runtime_error, Env};
 use crate::interpreter::value::{Dtype, Value};
 use ndarray::{ArrayD, Dimension, IxDyn};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -65,15 +66,15 @@ pub(self) fn resolve_idx(f: f64, len: usize) -> Result<usize, crate::core::error
     Ok(idx)
 }
 
-pub(self) fn to_array(val: &Value) -> Result<(ArrayD<f32>, Dtype), crate::core::error::SheafError> {
+pub(self) fn to_array(val: &Value) -> Result<(Cow<'_, ArrayD<f32>>, Dtype), crate::core::error::SheafError> {
     match val {
-        Value::Int(n) => Ok((ArrayD::from_elem(IxDyn(&[]), *n as f32), Dtype::I32)),
-        Value::Float(f) => Ok((ArrayD::from_elem(IxDyn(&[]), *f), Dtype::F32)),
-        Value::Bool(b) => Ok((ArrayD::from_elem(IxDyn(&[]), if *b { 1.0f32 } else { 0.0f32 }), Dtype::I32)),
-        Value::Tensor { data, dtype } => Ok(((**data).clone(), *dtype)),
+        Value::Int(n) => Ok((Cow::Owned(ArrayD::from_elem(IxDyn(&[]), *n as f32)), Dtype::I32)),
+        Value::Float(f) => Ok((Cow::Owned(ArrayD::from_elem(IxDyn(&[]), *f)), Dtype::F32)),
+        Value::Bool(b) => Ok((Cow::Owned(ArrayD::from_elem(IxDyn(&[]), if *b { 1.0f32 } else { 0.0f32 })), Dtype::I32)),
+        Value::Tensor { data, dtype } => Ok((Cow::Borrowed(&**data), *dtype)),
         Value::DeviceBuffer(db) => {
             let data = db.to_host().map_err(|e| runtime_error(format!("materialize: {}", e)))?;
-            Ok((data, db.dtype))
+            Ok((Cow::Owned(data), db.dtype))
         }
         _ => Err(runtime_error(format!("Expected a number, got {}", val.short_desc()))),
     }
@@ -118,9 +119,9 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
     if args.len() == 2 {
         return binary_op_two(&args[0], &args[1], op);
     }
-    let (mut acc, mut dt) = to_array(&args[0])?;
+    let (cow, mut dt) = to_array(&args[0])?;
+    let mut acc = cow.into_owned();
     for arg in &args[1..] {
-        // Borrow RHS from Arc when possible, avoiding clone
         match arg {
             Value::Int(n) => {
                 let s = *n as f32;
@@ -155,7 +156,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
                     let scalar = as_scalar(&acc);
                     acc = b.mapv(|x| op(scalar, x));
                 } else if b.ndim() == 0 && acc.ndim() != 0 {
-                        let scalar = as_scalar(&b);
+                    let scalar = as_scalar(&b);
                     acc = acc.mapv(|x| op(x, scalar));
                 } else if acc.shape() == b.shape() {
                     acc = ndarray::Zip::from(&acc).and(b.as_ref()).map_collect(|&a, &b| op(a, b));
@@ -460,7 +461,7 @@ pub(self) fn cmp_op(args: &[Value], op: fn(f32, f32) -> f32, _dt: Dtype) -> R {
         let r = op(as_scalar(&a), as_scalar(&b));
         return Ok(Value::Bool(r != 0.0));
     }
-    let result = ndarray::Zip::from(&a).and(&b).map_collect(|&a, &b| op(a, b));
+    let result = ndarray::Zip::from(&*a).and(&*b).map_collect(|&a, &b| op(a, b));
     Ok(bool_tensor(result))
 }
 

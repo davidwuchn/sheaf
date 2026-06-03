@@ -169,6 +169,8 @@ fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     }
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
+    let a = a.into_owned();
+    let b = b.into_owned();
 
     check_matmul_shapes(&a, &b)?;
 
@@ -551,6 +553,9 @@ fn builtin_matmul_grad_lhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
     let (adj_raw, _) = to_array(&args[2])?;
+    let a = a.into_owned();
+    let b = b.into_owned();
+    let adj_raw = adj_raw.into_owned();
     let result_shape = matmul_result_shape(&a, &b);
     let adj = broadcast_adj(adj_raw, &result_shape);
     let a_ndim = a.ndim();
@@ -617,6 +622,9 @@ fn builtin_matmul_grad_rhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
     let (adj_raw, _) = to_array(&args[2])?;
+    let a = a.into_owned();
+    let b = b.into_owned();
+    let adj_raw = adj_raw.into_owned();
     let result_shape = matmul_result_shape(&a, &b);
     let adj = broadcast_adj(adj_raw, &result_shape);
     let a_ndim = a.ndim();
@@ -681,8 +689,10 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::String(s) => s.as_str(),
         _ => return Err(runtime_error("einsum: first argument must be a subscript string")),
     };
-    let (mut a, _) = to_array(&args[1])?;
-    let (mut b, _) = to_array(&args[2])?;
+    let (cow_a, _) = to_array(&args[1])?;
+    let (cow_b, _) = to_array(&args[2])?;
+    let mut a = cow_a.into_owned();
+    let mut b = cow_b.into_owned();
     let subscript = subscript.replace(' ', "");
     let subscript = expand_einsum_ellipsis(&subscript, a.shape(), b.shape());
 
