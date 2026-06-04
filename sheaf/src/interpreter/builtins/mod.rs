@@ -80,7 +80,7 @@ pub(self) fn to_array(val: &Value) -> Result<(Cow<'_, ArrayD<f32>>, Dtype), crat
     }
 }
 
-pub(self) fn as_scalar(arr: &ArrayD<f32>) -> f32 {
+pub(crate) fn as_scalar(arr: &ArrayD<f32>) -> f32 {
     arr.first().copied().unwrap()
 }
 

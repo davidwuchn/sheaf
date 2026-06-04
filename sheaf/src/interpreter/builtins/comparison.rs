@@ -182,7 +182,7 @@ fn builtin_int(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::Tensor { data, .. } => {
             if data.ndim() == 0 {
                 // Scalar tensor: extract as integer
-                Ok(Value::Int(*data.first().unwrap() as i64))
+                Ok(Value::Int(as_scalar(data) as i64))
             } else {
                 Ok(Value::tensor_i32(data.mapv(|x| x.floor())))
             }

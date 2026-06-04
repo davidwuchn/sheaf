@@ -217,7 +217,7 @@ fn unpack_vag_result(result: &Value, original_params: &Value) -> Option<Value> {
     // First element: loss (scalar tensor -> Float)
     let loss = match &elems[0] {
         Value::Tensor { data, .. } if data.len() == 1 => {
-            Value::Float(*data.iter().next().unwrap())
+            Value::Float(crate::interpreter::builtins::as_scalar(data))
         }
         Value::DeviceBuffer(db) if db.shape.is_empty() || db.shape.iter().product::<usize>() == 1 => {
             match db.to_host() {
