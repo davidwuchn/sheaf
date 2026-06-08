@@ -228,8 +228,8 @@ pub(crate) fn slice_dict(
     let mut result = std::collections::BTreeMap::new();
     for (key, val) in map {
         // Materialize DeviceBuffer to host tensor before slicing
-        let host_val = val.ensure_host()?;
-        let sliced = match &host_val {
+        let host_val = val.ensure_host_cow()?;
+        let sliced = match &*host_val {
             Value::Tensor { data, .. } => {
                 if data.ndim() == 1 {
                     Value::Float(data[[i]])

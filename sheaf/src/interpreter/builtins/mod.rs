@@ -190,8 +190,8 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
     // Materialize DeviceBuffers to host for arithmetic
     let a_host;
     let b_host;
-    let a = if matches!(a, Value::DeviceBuffer(_)) { a_host = a.ensure_host()?; &a_host } else { a };
-    let b = if matches!(b, Value::DeviceBuffer(_)) { b_host = b.ensure_host()?; &b_host } else { b };
+    let a = if matches!(a, Value::DeviceBuffer(_)) { a_host = a.ensure_host_cow()?; &*a_host } else { a };
+    let b = if matches!(b, Value::DeviceBuffer(_)) { b_host = b.ensure_host_cow()?; &*b_host } else { b };
 
     let a_scalar = scalar_of(a);
     let b_scalar = scalar_of(b);

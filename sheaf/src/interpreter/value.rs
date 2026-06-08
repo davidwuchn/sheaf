@@ -7,6 +7,7 @@ use crate::core::expr::CompiledExpr;
 use crate::core::error::SheafError;
 use crate::runtime::iree_session::DeviceBufferInner;
 use ndarray::{ArrayD, IxDyn};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
@@ -151,7 +152,18 @@ impl Value {
         }
     }
 
-    /// Materialize a DeviceBuffer to a host Tensor, or return self if already host.
+    /// Materialize a DeviceBuffer to a host Tensor, or borrow self if already host.
+    pub fn ensure_host_cow(&self) -> Result<Cow<'_, Value>, SheafError> {
+        match self {
+            Value::DeviceBuffer(db) => {
+                let data = db.to_host()?;
+                Ok(Cow::Owned(Value::Tensor { data: Arc::new(data), dtype: db.dtype }))
+            }
+            other => Ok(Cow::Borrowed(other)),
+        }
+    }
+
+    /// Materialize a DeviceBuffer to a host Tensor, or clone self if already host.
     pub fn ensure_host(&self) -> Result<Value, SheafError> {
         match self {
             Value::DeviceBuffer(db) => {

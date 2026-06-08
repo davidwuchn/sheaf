@@ -8,6 +8,7 @@ use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::Value;
 use ndarray::{ArrayD, IxDyn};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -183,8 +184,8 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
 }
 
 fn scalar_from_value(val: &Value) -> Result<f32, SheafError> {
-    let val = val.ensure_host()?;
-    match &val {
+    let val = val.ensure_host_cow()?;
+    match &*val {
         Value::Float(x) => Ok(*x),
         Value::Int(n) => Ok(*n as f32),
         Value::Tensor { data, .. } => data.first().copied()
@@ -213,10 +214,10 @@ fn build_grad_from_leaves(
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
-    let a_host = a.ensure_host().ok();
-    let b_host = b.ensure_host().ok();
-    let a = a_host.as_ref().unwrap_or(a);
-    let b = b_host.as_ref().unwrap_or(b);
+    let a_cow = a.ensure_host_cow().ok();
+    let b_cow = b.ensure_host_cow().ok();
+    let a = a_cow.as_ref().map(|c| &**c).unwrap_or(a);
+    let b = b_cow.as_ref().map(|c| &**c).unwrap_or(b);
     match (a, b) {
         (Value::Tensor { data: da, .. }, Value::Tensor { data: db, .. }) => {
             da.shape() == db.shape() && da.iter().zip(db.iter()).all(|(x, y)| x.to_bits() == y.to_bits())
@@ -234,7 +235,7 @@ fn build_grad_tree_by_value(
 ) -> Result<Value, SheafError> {
     match params {
         Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::DeviceBuffer(_) => {
-            let params_host = params.ensure_host().unwrap_or_else(|_| params.clone());
+            let params_host = params.ensure_host_cow().unwrap_or_else(|_| Cow::Borrowed(params));
             for (sym, leaf_val) in leaves {
                 if values_equal(&params_host, leaf_val) {
                     if let Some(grad_val) = leaf_grads.get(sym) {

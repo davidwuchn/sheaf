@@ -33,8 +33,8 @@ fn builtin_first(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             else { Ok(Value::tensor_f32(sliced)) }
         }
         Value::DeviceBuffer(_) => {
-            let host = args[0].ensure_host()?;
-            builtin_first(std::slice::from_ref(&host), kw)
+            let host = args[0].ensure_host_cow()?;
+            builtin_first(std::slice::from_ref(&*host), kw)
         }
         other => Err(runtime_error(format!("first: expected a list or a tensor, got {}", other.type_name()))),
     }
@@ -52,8 +52,8 @@ fn builtin_second(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             else { Ok(Value::tensor_f32(sliced)) }
         }
         Value::DeviceBuffer(_) => {
-            let host = args[0].ensure_host()?;
-            builtin_second(std::slice::from_ref(&host), kw)
+            let host = args[0].ensure_host_cow()?;
+            builtin_second(std::slice::from_ref(&*host), kw)
         }
         other => Err(runtime_error(format!("second: expected a list or a tensor, got {}", other.type_name()))),
     }
@@ -72,8 +72,8 @@ fn builtin_last(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             else { Ok(Value::tensor_f32(sliced)) }
         }
         Value::DeviceBuffer(_) => {
-            let host = args[0].ensure_host()?;
-            builtin_last(std::slice::from_ref(&host), kw)
+            let host = args[0].ensure_host_cow()?;
+            builtin_last(std::slice::from_ref(&*host), kw)
         }
         other => Err(runtime_error(format!("last: expected a list or a tensor, got {}", other.type_name()))),
     }
@@ -104,7 +104,7 @@ fn builtin_nth(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             else { Ok(Value::tensor_f32(sliced)) }
         }
         Value::DeviceBuffer(_) => {
-            let host = args[0].ensure_host()?;
+            let host = args[0].ensure_host_cow()?.into_owned();
             builtin_nth(&[host, args[1].clone()], kw)
         }
         other => Err(runtime_error(format!("nth: expected a list or a tensor, got {}", other.type_name()))),
