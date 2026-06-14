@@ -373,7 +373,6 @@ fn run_repl() {
 
 fn run_init_ai() {
     const CONTEXT: &str = include_str!("../../../assets/sheaf-context.md");
-    const REFERENCE: &str = include_str!("../../../assets/reference.md");
 
     let output = std::path::Path::new("sheaf-context.md");
     if output.exists() {
@@ -385,12 +384,11 @@ fn run_init_ai() {
         }
     }
 
-    let combined = format!("{}\n\n---\n\n## REFERENCE\n\n{}", CONTEXT, REFERENCE);
-    std::fs::write(output, &combined).unwrap_or_else(|e| {
+    std::fs::write(output, CONTEXT).unwrap_or_else(|e| {
         sheaf_msg!("sheaf: cannot write '{}': {}", output.display(), e);
         exit(1);
     });
 
-    sheaf_msg!("Wrote sheaf-context.md ({} bytes)", combined.len());
+    sheaf_msg!("Wrote sheaf-context.md ({} bytes)", CONTEXT.len());
     sheaf_msg!("Add this file to your AI assistant context (e.g. CLAUDE.md, .cursorrules, etc.)");
 }
