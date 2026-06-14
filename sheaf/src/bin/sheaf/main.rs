@@ -8,6 +8,7 @@
 //!   sheaf file.shf                      Interpret a Sheaf file
 //!   sheaf -c '(+ 1 2)'                 Evaluate an expression
 
+mod doc;
 mod repl;
 
 use sheaf_compiler::sheaf_msg;

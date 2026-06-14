@@ -890,4 +890,29 @@ First return element becomes next iteration's state, second is accumulated. See 
 
 ---
 
-**End of AI Context Reference** • Complete function signatures follow in the REFERENCE section below.
+**End of AI Context Reference** • For function signatures, use the REPL (see below).
+
+---
+
+## Function Reference
+
+The complete function reference is built into the Sheaf binary and accessible via the REPL.
+
+**List all functions by category:**
+
+```bash
+echo ':list' | sheaf 2>/dev/null
+```
+
+**Show signature, description, and examples for a function:**
+
+```bash
+echo ':h <name>' | sheaf 2>/dev/null
+```
+
+**Tip for AI agents:** Run `:list` once to get the full index. Then use `:h` for any function whose signature you need. Redirect stderr to get clean output:
+
+```bash
+echo ':list' | sheaf 2>/dev/null > /tmp/sheaf-functions.txt
+echo ':h adam-step' | sheaf 2>/dev/null >> /tmp/sheaf-functions.txt
+```

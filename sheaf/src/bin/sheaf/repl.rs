@@ -16,10 +16,11 @@ use sheaf_compiler::interpreter::value::Value;
 use std::borrow::Cow;
 use std::collections::HashSet;
 
-const REFERENCE: &str = include_str!("../../../assets/reference.md");
+use crate::doc;
 
-const REPL_COMMANDS: &[&str] = &[
+  const REPL_COMMANDS: &[&str] = &[
     ":help", ":h", ":?",
+    ":list",
     ":quit", ":q",
     ":env",
     ":registry", ":reg",
@@ -177,7 +178,7 @@ fn is_silent_result(val: &Value) -> bool {
 }
 
 pub fn run() {
-    println!("Sheaf {} (:h for help)", env!("CARGO_PKG_VERSION"));
+    eprintln!("Sheaf {} (:h for help)", env!("CARGO_PKG_VERSION"));
 
     let history_file = std::env::var_os("HOME")
         .map(|h| std::path::PathBuf::from(h).join(".sheaf_history"));
@@ -282,7 +283,7 @@ pub fn run() {
                 continue;
             }
             Err(ReadlineError::Eof) => {
-                println!("\nBye!");
+                eprintln!("\nBye!");
                 break;
             }
             Err(e) => {
@@ -309,17 +310,21 @@ fn handle_command(input: &str, interp: &mut Interpreter) -> bool {
         ":help" | ":h" => {
             if arg.is_empty() {
                 print_general_help();
-            } else {
-                print_symbol_help(arg);
+            } else if !doc::doc_show(arg) {
+                eprintln!("No help found for '{}'.", arg);
             }
         }
 
         ":?" => {
             if arg.is_empty() {
                 println!("Usage: :? <symbol>");
-            } else {
-                print_symbol_help(arg);
+            } else if !doc::doc_show(arg) {
+                eprintln!("No help found for '{}'.", arg);
             }
+        }
+
+        ":list" => {
+            doc::doc_list();
         }
 
         ":env" => {
@@ -409,90 +414,10 @@ fn print_general_help() {
     println!("Sheaf console usage:
   :help, :h              Show this help
   :help, :h <name>       Help for a specific function or form
+  :list                  List all built-in functions by category
   :env                   List all functions and variables
   :registry, :reg        List user-defined functions
   :show <name>           Show a variable's value
   :clear                 Clear screen
   :quit, :q              Exit");
-}
-
-fn print_symbol_help(name: &str) {
-    // Search for ### or #### <name> in embedded reference
-    let header_h4 = format!("#### {}", name);
-    let header_h3 = format!("### {}", name);
-    let (start, header_len) = match REFERENCE.find(&header_h4) {
-        Some(pos) => (pos, header_h4.len()),
-        None => match REFERENCE.find(&header_h3) {
-            Some(pos) => {
-                // Make sure it's actually ### and not a substring of ####
-                if pos > 0 && REFERENCE.as_bytes()[pos - 1] == b'#' {
-                    eprintln!("No help found for '{}'.", name);
-                    return;
-                }
-                (pos, header_h3.len())
-            }
-            None => {
-                eprintln!("No help found for '{}'.", name);
-                return;
-            }
-        },
-    };
-
-    // Extract until next heading at any level (##, ###, or ####)
-    let content = &REFERENCE[start + header_len..];
-    let end = [
-        content.find("\n## "),
-        content.find("\n### "),
-        content.find("\n#### "),
-    ]
-    .into_iter()
-    .flatten()
-    .min()
-    .unwrap_or(content.len());
-    let section = content[..end].trim();
-
-    // Parse and display
-    println!("\n  {}", name);
-    println!("  {}", "-".repeat(name.len()));
-
-    let mut example_count = 0;
-    let mut in_code = false;
-
-    for line in section.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("```") {
-            if in_code {
-                in_code = false;
-                println!();
-            } else {
-                in_code = true;
-                example_count += 1;
-                if example_count > 3 {
-                    continue;
-                }
-            }
-            continue;
-        }
-
-        if example_count > 3 {
-            continue;
-        }
-
-        if in_code {
-            println!("    {}", line);
-        } else if trimmed.starts_with("**Type:**") {
-            println!("  {}", trimmed.replace("**", ""));
-        } else if trimmed.starts_with("**Signature:**") {
-            println!("  {}", trimmed.replace("**", "").replace('`', ""));
-        } else if trimmed == "---" {
-            // Skip separators
-        } else if !trimmed.is_empty() {
-            // Description text, strip markdown
-            let clean = trimmed
-                .replace("**", "")
-                .replace('`', "");
-            println!("  {}", clean);
-        }
-    }
-    println!();
 }
