@@ -785,8 +785,9 @@ Concatenate sequences (lists or arrays). Returns a list for list inputs, tensor 
 Returns the lower triangular part of a matrix or a stack of matrices. Elements above the main diagonal are set to zero.
 
 ```sheaf
-(tril [[1 2] [3 4]]) ; => [[1. 0.]
- [3. 4.]]
+(tril [[1 2 3] [4 5 6] [7 8 9]]) ; => [[1. 0. 0.]
+ [4. 5. 0.]
+ [7. 8. 9.]]
 ```
 
 ---
