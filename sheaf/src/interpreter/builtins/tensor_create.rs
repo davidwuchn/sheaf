@@ -104,6 +104,9 @@ fn builtin_one_hot(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_tril(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    if args.is_empty() {
+        return Err(runtime_error("tril: missing argument, expected a 2D tensor"));
+    }
     let (arr, _dt) = to_array(&args[0])?;
     if arr.ndim() != 2 { return Err(runtime_error(format!("tril: input must be 2D (matrix), got {}D", arr.ndim()))); }
     let shape = arr.shape();
