@@ -80,7 +80,7 @@ fn builtin_pow(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             match n {
                 0 => return unary_op(&args[..1], |_| 1.0),
                 1 => return Ok(args[0].clone()),
-                2 => return binary_op(&[args[0].clone(), args[0].clone()], |a, b| a * b),
+                2 => return unary_op(&args[..1], |a| a * a),
                 3 => return unary_op(&args[..1], |a| a * a * a),
                 _ => {
                     let exp = n as f32;
@@ -221,15 +221,13 @@ fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                     .map_err(|e| runtime_error(e.to_string()))?)
             } else { None };
 
-            // Ensure contiguous layout (swapaxes/permute may produce non-contiguous views)
-            let a_c = if a.ndim() > 2 { a.as_standard_layout().into_owned() } else { a.clone() };
-            let b_c = if b.ndim() > 2 { b.as_standard_layout().into_owned() } else { b.clone() };
-            let a_flat = if a_c.ndim() > 2 {
-                Some(a_c.into_shape_with_order((batch_size, m, k))
+            // Ensure contiguous layout for batched reshape (>2D only)
+            let a_flat = if a.ndim() > 2 {
+                Some(a.as_standard_layout().into_owned().into_shape_with_order((batch_size, m, k))
                     .map_err(|e| runtime_error(format!("@: reshape a: {}", e)))?)
             } else { None };
-            let b_flat = if b_c.ndim() > 2 {
-                Some(b_c.into_shape_with_order((batch_size, k, n))
+            let b_flat = if b.ndim() > 2 {
+                Some(b.as_standard_layout().into_owned().into_shape_with_order((batch_size, k, n))
                     .map_err(|e| runtime_error(format!("@: reshape b: {}", e)))?)
             } else { None };
 
@@ -469,10 +467,10 @@ fn compute_broadcast_shape(shapes: &[&[usize]]) -> Result<Vec<usize>, crate::cor
 }
 
 
-fn transpose_last_two(arr: &ArrayD<f32>) -> ArrayD<f32> {
+fn transpose_last_two(arr: ArrayD<f32>) -> ArrayD<f32> {
     let ndim = arr.ndim();
     if ndim < 2 {
-        return arr.clone();
+        return arr;
     }
     let mut axes: Vec<usize> = (0..ndim).collect();
     axes.swap(ndim - 1, ndim - 2);
@@ -595,7 +593,7 @@ fn builtin_matmul_grad_lhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             let adj_batch = &adj_sh[..adj_sh.len().saturating_sub(2)];
             let b_batch = &b.shape()[..b.shape().len().saturating_sub(2)];
             let batch_shape = compute_broadcast_shape(&[adj_batch, b_batch])?;
-            let b_t = transpose_last_two(&b);
+            let b_t = transpose_last_two(b);
             let result = batched_matmul_core(&adj, &b_t, &batch_shape)?;
 
             if a.ndim() == 2 {
@@ -661,7 +659,7 @@ fn builtin_matmul_grad_rhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             let a_batch = &a_sh[..a_sh.len().saturating_sub(2)];
             let adj_batch = &adj_sh[..adj_sh.len().saturating_sub(2)];
             let batch_shape = compute_broadcast_shape(&[a_batch, adj_batch])?;
-            let a_t = transpose_last_two(&a);
+            let a_t = transpose_last_two(a);
             let result = batched_matmul_core(&a_t, &adj, &batch_shape)?;
 
             if b.ndim() == 2 {

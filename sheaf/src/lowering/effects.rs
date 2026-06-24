@@ -7,15 +7,14 @@
 //! random number generation, or any other operation that is not a pure
 //! mathematical transformation.
 //!
-//! `sheaf build` refuses to compile functions that have side effects; the
+//! The Sheaf compiler refuses to compile functions that have side effects; the
 //! interpreter can use this analysis to suggest compilation for pure files.
 
 use crate::core::expr::CompiledExpr;
 
 /// Names of builtins that have side effects.
 ///
-/// These are calls that cannot be emitted as StableHLO:
-/// - I/O: `print`, `io`
+/// These are calls that cannot be emitted as StableHLO: `print`, `io`
 ///
 /// Random functions (random-split, choice, etc.) are NOT listed here:
 /// they use JAX-style functional PRNG (key in, deterministic result out)
