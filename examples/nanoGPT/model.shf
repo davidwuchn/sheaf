@@ -36,10 +36,10 @@
 
 
 (defn mlp-block [x mlp-p]
-  (as-> x h
-    (@ h (transpose (get-in mlp-p [:c_fc :weight])))
-    (gelu h)
-    (@ h (transpose (get-in mlp-p [:c_proj :weight])))))
+  (-> x
+    (@ (transpose (get-in mlp-p [:c_fc :weight])))
+    (gelu)
+    (@ (transpose (get-in mlp-p [:c_proj :weight])))))
 
 
 (defn transformer-block [x block-p config]

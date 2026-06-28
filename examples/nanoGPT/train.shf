@@ -52,8 +52,8 @@
 
       ;; Optimizer state: zero-initialized moment estimates
       state    {:params params
-                :m (tree-map (fn [x] (zeros (shape x))) params)
-                :v (tree-map (fn [x] (zeros (shape x))) params)
+                :m (tree-map-zeros params)
+                :v (tree-map-zeros params)
                 :t 0 :key (random-key (io "entropy"))}
 
       B  (get config :block_size)
