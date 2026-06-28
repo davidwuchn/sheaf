@@ -1394,9 +1394,9 @@ Reduces all leaves of a PyTree to a single value by applying a binary function c
 ### reduce
 
 **Type:** function
-**Signature:** `(reduce func init seq)`
+**Signature:** `(reduce func [init] seq)`
 
-Reduces a collection to a single value by applying a binary function func cumulatively to the elements of seq, from left to right, starting with the init value. Each step takes the current accumulator and the next element to produce the new accumulator.
+Reduces a collection to a single value by applying a binary function func cumulatively to the elements of seq, from left to right. If `init` is provided, it is used as the starting accumulator; otherwise, the first element of `seq` is used. Each step takes the current accumulator and the next element to produce the new accumulator.
 
 ```sheaf
 ;; Simple sum: 1 + 2 + 3 + 4
@@ -1901,7 +1901,7 @@ Threads the expression `x` through the provided forms. It inserts `x` as the fir
 
 ;; Practical tensor pipeline
 (-> (arange 12)
-  (reshape 3 4)     ; Reshape to [3, 4]
+  (reshape '[3 4])  ; Reshape to [3, 4]
   (sum :axis 0)     ; Sum columns => [12 13 14 15]
   (+ 10))           ; Add bias => [22 23 24 25]
 
@@ -2048,13 +2048,15 @@ For RNNs, state is the hidden vector. Each step processes `(h_prev, x_t) -> (h_n
 **Example 3: Multiple state components (like LSTM)**
 
 ```sheaf
-;; State is a dict: {:h hidden :c cell}
+;; State is a dict: (dict :h hidden :c cell)
 ;; Output is a vector (just the hidden state)
-(fn [{:keys [h c]} x_t]
-  (let [h_new (tanh (+ (@ W_hh h) (@ W_xh x_t)))
+(fn [state x_t]
+  (let [h (get state :h)
+        c (get state :c)
+        h_new (tanh (+ (@ W_hh h) (@ W_xh x_t)))
         c_new (+ (* f_t c) (* i_t (tanh (+ ...))))]
-    [{:h h_new :c c_new}   ; new_state: dict with both h and c
-     h_new]))              ; output: emit only h
+    [(dict :h h_new :c c_new)   ; new_state: dict with both h and c
+     h_new]))                     ; output: emit only h
 ```
 
 **Notes:**

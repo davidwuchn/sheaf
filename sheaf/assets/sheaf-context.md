@@ -209,7 +209,7 @@ wrapper needed.
 
 ```sheaf
 (map func coll)                      ; Apply function to each element
-(reduce func acc coll)               ; Reduce collection with accumulator
+(reduce func [acc] coll)             ; Reduce collection with optional accumulator
 (apply func args-list)               ; Apply function to list of arguments
 (vmap func)                          ; Vectorized map — auto-batch over axis 0
 (vmap func axis)                     ; Vectorized map over specified axis
