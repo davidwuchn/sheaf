@@ -184,7 +184,6 @@ nil              ; None
 (repeat [i n] [acc init] body)       ; Loop with accumulator
 (while cond [acc init] body)         ; Conditional loop
 (scan fn init xs)                    ; Fold with intermediate results
-(static expr)                        ; Force static evaluation
 ```
 
 **Macros**

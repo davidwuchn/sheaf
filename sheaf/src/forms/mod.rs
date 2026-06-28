@@ -10,7 +10,7 @@
 //! - `control`: if, do, case, while, repeat, guard (control flow)
 //! - `flow`: ->, as-> (threading macros)
 //! - `utils`: get, dict, last, use, quote (utilities)
-//! - `ml`: vmap, scan, with-params, static (ML-specific, future)
+//! - `ml`: vmap, scan, with-params (ML-specific)
 
 pub mod base;
 pub mod binding;
