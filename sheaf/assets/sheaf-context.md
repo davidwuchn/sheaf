@@ -163,15 +163,17 @@ nil              ; None
 **Function Definition**
 
 ```sheaf
-(defn name [args] body)              ; Standard function
-(fn [args] body)                     ; Anonymous function (preferred)
+(defn name [args] body ...)           ; Standard function (implicit do)
+(fn [args] body ...)                  ; Anonymous function (implicit do)
 ```
+
+**Implicit do:** `defn`, `fn`, and `let` accept multiple body expressions. All are evaluated in order; the last value is returned. No explicit `(do ...)` wrapper needed.
 
 **Binding & Scope**
 
 ```sheaf
 (def name value)                     ; Global immutable constant
-(let [x val y val2] body)            ; Sequential local bindings
+(let [x val y val2] body ...)        ; Sequential local bindings (implicit do)
 (with-params params body)            ; Auto-destructure dict (:W, :b, etc.)
 ```
 
@@ -361,7 +363,7 @@ The essential training pattern in Sheaf:
 **If training doesn't converge:**
 
 - Loss is NaN → use proper initialization (`xavier-normal` for tanh/sigmoid, `kaiming-normal` for relu/gelu), reduce learning rate
-- Loss is constant → run with `--guard no-nan` to catch NaN/Inf in any function return value:
+- Loss is constant → run with `--guard` to catch NaN/Inf in function return values (no code changes):
   ```bash
   sheaf train.shf --guard no-nan              # check all functions
   sheaf train.shf --guard forward:no-nan      # check specific function
@@ -677,7 +679,7 @@ sheaf file.shf                     # Run a Sheaf file
 sheaf -c '(+ 1 2)'                # Evaluate an expression
 sheaf file.shf --trace             # With call tracing (--trace fn1,fn2 for specific functions)
 sheaf file.shf --blame             # With profiling (wall time per function)
-sheaf file.shf --guard no-nan      # Halt on NaN/Inf
+sheaf file.shf --guard no-nan      # CLI guard: halt if any function returns NaN/Inf
 sheaf file.shf --device metal      # Target specific device (cpu, metal, cuda, vulkan)
 sheaf file.shf -v                  # JIT verbose output
 sheaf init-ai                      # Generate sheaf-context.md for AI assistants
@@ -720,12 +722,22 @@ Output shows call tree with shapes, making it easy to spot shape mismatches or u
 
 ### Use Guards for Runtime Validation
 
-Guards are runtime assertions that validate values without breaking the flow:
+Sheaf has two guard mechanisms. **Inline guards** are written in source code and are always active; **CLI guards** are specified on the command line and check function return values without modifying code.
+
+**Inline guards** (permanent, in source):
 
 ```sheaf
 (guard :no-nan x)                    ; Fail if x contains NaN/Inf
 (guard :range [-1.0 1.0] x)         ; Fail if x outside range
 (guard :shape [32 128] x)           ; Fail if x doesn't match shape
+```
+
+**CLI guards** (temporary, no code changes):
+
+```bash
+sheaf train.shf --guard no-nan              # Check all function returns for NaN/Inf
+sheaf train.shf --guard forward:no-nan       # Check only `forward` return value
+sheaf train.shf --guard loss:range:0:20     # Check `loss` return stays in [0, 20]
 ```
 
 **Practical debugging example:**

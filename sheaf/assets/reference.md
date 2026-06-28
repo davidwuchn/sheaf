@@ -1762,15 +1762,20 @@ Use `while` when the stopping condition depends on runtime values (e.g. loss con
 ### let
 
 **Type:** special-form  
-**Signature:** `(let [var1 val1 var2 val2 ...] body)`
+**Signature:** `(let [var1 val1 var2 val2 ...] body ...)`
 
-Evaluates expressions in a local scope where each variable name is bound to its corresponding value sequentially. Each binding can reference previously defined variables within the same block before returning the result of the body.
+Evaluates expressions in a local scope where each variable name is bound to its corresponding value sequentially. Each binding can reference previously defined variables within the same block. Multiple body expressions are supported (implicit `do`): all are evaluated in order, and the last value is returned.
 
 ```sheaf
 (let [x 1] x)         ; => 1
 
 (let [x 1 y 2]
   (+ x y))            ; => 3
+
+;; Multiple body expressions: side effect then return value
+(let [key (random-key 0)]
+  (print "initializing")
+  key)                ; => key (prints "initializing", returns key)
 ```
 
 ---
@@ -1822,14 +1827,19 @@ Binds a global name to a function. Multiple body expressions are allowed (implic
 ### fn
 
 **Type:** special-form  
-**Signature:** `(fn [params] body)`
+**Signature:** `(fn [params] body ...)`
 
-Defines an anonymous function (lambda) that captures no external state (pure function). It is primarily used for short-lived transformations, mapping operations, or as arguments to higher-order functions like `map` or `vmap`.
+Defines an anonymous function (lambda) that captures no external state (pure function). It is primarily used for short-lived transformations, mapping operations, or as arguments to higher-order functions like `map` or `vmap`. Multiple body expressions are supported (implicit `do`).
 
 ```sheaf
 ((fn [x] (+ x 1)) 10)         ; => 11
 
 (map (fn [x] (* x 2)) [1 2])  ; => [2 4]
+
+;; Multiple body expressions
+(fn [x]
+  (print x)
+  (* x 2))                    ; prints x, returns x*2
 
 ;; Binding an anonymous function to a local name
 (let [double (fn [n] (* n 2))]
