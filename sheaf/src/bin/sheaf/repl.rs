@@ -15,8 +15,160 @@ use sheaf_compiler::core::color;
 use sheaf_compiler::interpreter::value::Value;
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::cell::Cell;
 
 use crate::doc;
+
+struct MatchingBracketHighlighter {
+    bracket: Cell<Option<(u8, usize)>>,
+}
+
+impl MatchingBracketHighlighter {
+    fn new() -> Self {
+        Self { bracket: Cell::new(None) }
+    }
+}
+
+impl Highlighter for MatchingBracketHighlighter {
+    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
+        if line.len() <= 1 {
+            return Cow::Borrowed(line);
+        }
+        if let Some((bracket, pos)) = self.bracket.get() {
+            if let Some((matching, idx)) = find_matching_bracket(line, pos, bracket) {
+                let mut copy = line.to_owned();
+                copy.replace_range(idx..=idx, &format!("\x1b[7m{}\x1b[0m", matching as char));
+                return Cow::Owned(copy);
+            }
+        }
+        Cow::Borrowed(line)
+    }
+
+    fn highlight_char(&self, line: &str, pos: usize, forced: bool) -> bool {
+        if forced {
+            self.bracket.set(None);
+            return false;
+        }
+        self.bracket.set(check_bracket(line, pos));
+        self.bracket.get().is_some()
+    }
+}
+
+fn find_matching_bracket(line: &str, pos: usize, bracket: u8) -> Option<(u8, usize)> {
+    let matching = matching_bracket(bracket);
+    let bytes = line.as_bytes();
+    if is_open_bracket(bracket) {
+        let mut unmatched = 1i32;
+        let mut idx = pos + 1;
+        while idx < bytes.len() {
+            if !(in_string_or_comment(bytes, idx)) {
+                let b = bytes[idx];
+                if b == matching {
+                    unmatched -= 1;
+                    if unmatched == 0 {
+                        return Some((matching, idx));
+                    }
+                } else if b == bracket {
+                    unmatched += 1;
+                }
+            }
+            idx += 1;
+        }
+    } else {
+        let mut unmatched = 1i32;
+        let mut idx = pos as i64 - 1;
+        while idx >= 0 {
+            let i = idx as usize;
+            if !(in_string_or_comment(bytes, i)) {
+                let b = bytes[i];
+                if b == matching {
+                    unmatched -= 1;
+                    if unmatched == 0 {
+                        return Some((matching, i));
+                    }
+                } else if b == bracket {
+                    unmatched += 1;
+                }
+            }
+            idx -= 1;
+        }
+    }
+    None
+}
+
+fn in_string_or_comment(bytes: &[u8], pos: usize) -> bool {
+    let mut in_string = false;
+    let mut i = 0;
+    while i < pos {
+        let b = bytes[i];
+        if in_string {
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == b'"' {
+                in_string = false;
+            }
+        } else {
+            if b == b'"' {
+                in_string = true;
+            } else if b == b';' {
+                while i < pos {
+                    if bytes[i] == b'\n' {
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        i += 1;
+    }
+    in_string
+}
+
+fn check_bracket(line: &str, pos: usize) -> Option<(u8, usize)> {
+    if line.is_empty() { return None; }
+    let mut pos = pos;
+    let bytes = line.as_bytes();
+    if pos >= line.len() {
+        pos = line.len() - 1;
+        let b = bytes[pos];
+        if is_close_bracket(b) && !in_string_or_comment(bytes, pos) {
+            return Some((b, pos));
+        }
+        return None;
+    }
+    let mut under_cursor = true;
+    loop {
+        if in_string_or_comment(bytes, pos) {
+            return None;
+        }
+        let b = bytes[pos];
+        if is_close_bracket(b) {
+            return if pos == 0 { None } else { Some((b, pos)) };
+        } else if is_open_bracket(b) {
+            return if pos + 1 == line.len() { None } else { Some((b, pos)) };
+        } else if under_cursor && pos > 0 {
+            under_cursor = false;
+            pos -= 1;
+        } else {
+            return None;
+        }
+    }
+}
+
+const fn matching_bracket(bracket: u8) -> u8 {
+    match bracket {
+        b'{' => b'}', b'}' => b'{',
+        b'[' => b']', b']' => b'[',
+        b'(' => b')', b')' => b'(',
+        b => b,
+    }
+}
+
+const fn is_open_bracket(b: u8) -> bool { matches!(b, b'{' | b'[' | b'(') }
+const fn is_close_bracket(b: u8) -> bool { matches!(b, b'}' | b']' | b')') }
 
   const REPL_COMMANDS: &[&str] = &[
     ":help", ":h", ":?",
@@ -32,6 +184,7 @@ struct SheafHelper {
     names: Vec<String>,
     term_cols: usize,
     last_was_empty_tab: std::cell::Cell<bool>,
+    bracket_hl: MatchingBracketHighlighter,
 }
 
 impl SheafHelper {
@@ -41,7 +194,7 @@ impl SheafHelper {
             .map(|k| k.to_string())
             .collect();
         names.sort();
-        Self { names, term_cols: 80, last_was_empty_tab: std::cell::Cell::new(false) }
+        Self { names, term_cols: 80, last_was_empty_tab: std::cell::Cell::new(false), bracket_hl: MatchingBracketHighlighter::new() }
     }
 
     fn refresh(&mut self, interp: &Interpreter) {
@@ -117,6 +270,14 @@ impl Hinter for SheafHelper {
 }
 
 impl Highlighter for SheafHelper {
+    fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
+        self.bracket_hl.highlight(line, pos)
+    }
+
+    fn highlight_char(&self, line: &str, pos: usize, forced: bool) -> bool {
+        self.bracket_hl.highlight_char(line, pos, forced)
+    }
+
     fn highlight_prompt<'b, 's: 'b, 'p: 'b>(&'s self, prompt: &'p str, default: bool) -> Cow<'b, str> {
         if default {
             Cow::Owned(format!("{}{}{}", color::color(), prompt, color::reset()))
