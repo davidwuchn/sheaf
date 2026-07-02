@@ -150,10 +150,15 @@ impl SpecialForm for DefnForm {
             SheafValue::List(do_forms, loc.clone())
         };
 
-        // Add parameters to local scope temporarily
+        // Add parameters to local scope temporarily as Symbol placeholders so
+        // they resolve to CompiledExpr::Symbol nodes (not the body itself,
+        // which would cause infinite recompilation). Mirrors FnForm.
         let saved_locals = compiler.local_vars.clone();
         for param in &params {
-            compiler.local_vars.insert(param.clone(), body_ast.clone()); // Placeholder
+            compiler.local_vars.insert(
+                param.clone(),
+                SheafValue::Symbol(param.clone(), loc.clone()),
+            );
         }
 
         // Register type annotations as __type__<param> in local_vars
@@ -367,9 +372,19 @@ impl SpecialForm for LetForm {
                             SheafValue::Symbol(n.clone(), inner_loc.clone()),
                         );
                     }
-                    // Encode the pattern as "[a b c]" -- interpreter decodes it
-                    let pattern_key = format!("[{}]", sym_names.join(" "));
-                    compiled_bindings.push((pattern_key, compiled_value));
+                    // Inline vector literals directly; fall back to string encoding for
+                    // non-literal expressions (the JIT desugaring pass handles those).
+                    match &compiled_value {
+                        CompiledExpr::Vector(elements) => {
+                            for (name, elem) in sym_names.iter().zip(elements.iter()) {
+                                compiled_bindings.push((name.clone(), elem.clone()));
+                            }
+                        }
+                        _ => {
+                            let pattern_key = format!("[{}]", sym_names.join(" "));
+                            compiled_bindings.push((pattern_key, compiled_value));
+                        }
+                    }
                 }
                 other => {
                     return Err(SheafError::Compile {
