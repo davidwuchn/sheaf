@@ -48,7 +48,7 @@ fn parse_test_yaml(path: &Path) -> Vec<TestCase> {
             entry_line = i + 1;
         } else if l.starts_with("test:") {
             let val = l.trim_start_matches("test:").trim();
-            if val == ">" || val == "|" {
+            if val == ">" || val == "|" || val.is_empty() {
                 // Multi-line YAML scalar follows
                 expr.clear();
             } else {
@@ -57,7 +57,7 @@ fn parse_test_yaml(path: &Path) -> Vec<TestCase> {
         } else if l.starts_with("expected:") {
             let val = l.trim_start_matches("expected:").trim().trim_matches('\'').trim_matches('"').to_string();
             expected = val;
-        } else if expr.is_empty() || !expected.is_empty() {
+        } else if !expected.is_empty() {
             // Continuation line for expected (rare)
         } else {
             // Continuation line for multi-line test expr
