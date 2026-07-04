@@ -4,7 +4,7 @@
 //! Type inference for function signatures
 
 use crate::lowering::stablehlo::StableHLOType;
-use crate::core::expr::{CompiledExpr, CompilerContext};
+use crate::core::expr::{BindingPattern, CompiledExpr, CompilerContext};
 use crate::core::error::SheafResult;
 
 /// Recursive value structure layout for reconstructing dicts/lists from flat tuples.
@@ -373,7 +373,7 @@ fn infer_symbol_types(
 }
 
 /// Infer type with a symbol context
-fn infer_type_with_context(
+pub(crate) fn infer_type_with_context(
     expr: &CompiledExpr,
     symbol_types: &std::collections::HashMap<String, StableHLOType>,
 ) -> SheafResult<StableHLOType> {
@@ -433,7 +433,10 @@ fn infer_type_with_context(
             let mut extended = symbol_types.clone();
             for (name, val) in bindings {
                 let ty = infer_type_with_context(val, &extended)?;
-                extended.insert(name.clone(), ty);
+                if let BindingPattern::Simple(name_str) = &name {
+                    extended.insert(name_str.clone(), ty);
+                }
+                // Destructure patterns do not introduce a single symbol; skip.
             }
             infer_type_with_context(body, &extended)
         }
@@ -681,6 +684,18 @@ fn infer_function_call_type(name: &str, args: &[CompiledExpr]) -> SheafResult<St
 
         // Unknown function: assume scalar
         _ => Ok(StableHLOType::scalar_f32()),
+    }
+}
+
+/// Helper to check if an expression resolves to a non-scalar type (tensor or tuple)
+/// in a given symbol context. Used by classify_vectors.
+pub fn expr_is_tensor(
+    expr: &CompiledExpr,
+    symbol_types: &std::collections::HashMap<String, StableHLOType>,
+) -> bool {
+    match infer_type_with_context(expr, symbol_types) {
+        Ok(ty) => !ty.shape().is_empty(),
+        Err(_) => false,
     }
 }
 

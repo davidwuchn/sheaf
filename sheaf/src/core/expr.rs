@@ -513,6 +513,38 @@ impl CompilerContext {
     }
 }
 
+/// Binding pattern for let bindings (simple or destructuring).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BindingPattern {
+    Simple(String),
+    Destructure(Vec<BindingPattern>),
+}
+
+impl BindingPattern {
+    pub fn as_simple(&self) -> Option<&str> {
+        match self {
+            BindingPattern::Simple(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for BindingPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BindingPattern::Simple(s) => write!(f, "{}", s),
+            BindingPattern::Destructure(names) => {
+                write!(f, "[")?;
+                for (i, name) in names.iter().enumerate() {
+                    if i > 0 { write!(f, " ")?; }
+                    write!(f, "{}", name)?;
+                }
+                write!(f, "]")
+            }
+        }
+    }
+}
+
 /// Compiled expression - intermediate representation
 #[derive(Clone)]
 pub enum CompiledExpr {
@@ -523,6 +555,7 @@ pub enum CompiledExpr {
     String(String),
     Keyword(String),
     Vector(Vec<CompiledExpr>),
+    Tuple(Vec<CompiledExpr>),
     Dict(Vec<(CompiledExpr, CompiledExpr)>),
     Quoted(Box<SheafValue>),
     FunctionRef(String),
@@ -532,7 +565,7 @@ pub enum CompiledExpr {
         loc: Option<crate::core::error::SourceLocation>,
     },
     Let {
-        bindings: Vec<(String, CompiledExpr)>,
+        bindings: Vec<(BindingPattern, CompiledExpr)>,
         body: Box<CompiledExpr>,
     },
     If {
@@ -625,6 +658,7 @@ impl CompiledExpr {
             | CompiledExpr::Quoted(_)
             | CompiledExpr::ValueAndGrad { .. } => self.clone(),
             CompiledExpr::Vector(elems) => CompiledExpr::Vector(elems.iter().map(&mut f).collect()),
+            CompiledExpr::Tuple(elems) => CompiledExpr::Tuple(elems.iter().map(&mut f).collect()),
             CompiledExpr::Dict(pairs) => CompiledExpr::Dict(
                 pairs.iter().map(|(k, v)| (f(k), f(v))).collect(),
             ),
@@ -687,6 +721,7 @@ impl std::fmt::Debug for CompiledExpr {
             Self::String(s) => write!(f, "String({:?})", s),
             Self::Keyword(s) => write!(f, "Keyword({:?})", s),
             Self::Vector(v) => f.debug_tuple("Vector").field(v).finish(),
+            Self::Tuple(v) => f.debug_tuple("Tuple").field(v).finish(),
             Self::Dict(v) => f.debug_tuple("Dict").field(v).finish(),
             Self::Quoted(v) => f.debug_tuple("Quoted").field(v).finish(),
             Self::FunctionRef(s) => write!(f, "FunctionRef({:?})", s),
@@ -825,8 +860,8 @@ mod tests {
         match result {
             CompiledExpr::Let { bindings, body } => {
                 assert_eq!(bindings.len(), 2);
-                assert_eq!(bindings[0].0, "x");
-                assert_eq!(bindings[1].0, "y");
+                assert_eq!(bindings[0].0, BindingPattern::Simple("x".to_string()));
+                assert_eq!(bindings[1].0, BindingPattern::Simple("y".to_string()));
                 assert!(matches!(bindings[0].1, CompiledExpr::Integer(1)));
                 assert!(matches!(bindings[1].1, CompiledExpr::Integer(2)));
                 assert!(matches!(*body, CompiledExpr::FunctionCall { .. }));

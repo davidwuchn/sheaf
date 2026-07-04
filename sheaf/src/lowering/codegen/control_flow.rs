@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use crate::autodiff::reverse::{to_anf, reverse_grad};
 use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::lowering::transforms::try_infer_shape;
-use crate::core::expr::CompiledExpr;
+use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::{SheafError, SheafResult};
 use super::CodeGenerator;
 
@@ -710,8 +710,10 @@ impl CodeGenerator {
 
         // Propagate shapes through body bindings
         for (name, val) in &body_bindings {
-            if let Some(sh) = try_infer_shape(val, &body_shapes) {
-                body_shapes.insert(name.clone(), sh);
+            if let BindingPattern::Simple(name_str) = name {
+                if let Some(sh) = try_infer_shape(val, &body_shapes) {
+                    body_shapes.insert(name_str.clone(), sh);
+                }
             }
         }
 
@@ -723,7 +725,9 @@ impl CodeGenerator {
                 .filter_map(|(name, val)| {
                     if let CompiledExpr::GetTupleElement { param, indices } = val {
                         if param == &elem_param && indices.len() == 1 {
-                            return Some((name.clone(), indices[0]));
+                            if let BindingPattern::Simple(name_str) = name {
+                                return Some((name_str.clone(), indices[0]));
+                            }
                         }
                     }
                     None
@@ -737,9 +741,21 @@ impl CodeGenerator {
             wrt.push(name.clone());
         }
 
+        // Convert body_bindings to string keys for reverse_grad
+        let body_bindings_str: Vec<(String, CompiledExpr)> = body_bindings
+            .iter()
+            .filter_map(|(pat, expr)| {
+                if let BindingPattern::Simple(s) = pat {
+                    Some((s.clone(), expr.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         // Run reverse_grad on body
         let (mut body_bwd, body_grad_map) = reverse_grad(
-            &body_bindings, &carry_result, &wrt, &body_shapes,
+            &body_bindings_str, &carry_result, &wrt, &body_shapes,
         );
 
         // Replace seed (Float(1.0)) with Symbol("__scan_adj_carry")
@@ -768,7 +784,9 @@ impl CodeGenerator {
 
             // Re-generate forward body bindings (re-materialization)
             for (name, val) in &body_bindings {
-                self.generate_binding(name, val)?;
+                if let BindingPattern::Simple(name_str) = name {
+                    self.generate_binding(name_str, val)?;
+                }
             }
 
             // Bind adjoint seed

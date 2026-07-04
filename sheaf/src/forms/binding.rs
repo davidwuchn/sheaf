@@ -4,7 +4,7 @@
 //! Binding special forms: defn, let, fn
 
 use crate::core::ast::SheafValue;
-use crate::core::expr::{CompiledExpr, CompilerContext, FunctionDef};
+use crate::core::expr::{BindingPattern, CompiledExpr, CompilerContext, FunctionDef};
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 use crate::core::macro_engine::MacroDef;
 use crate::forms::base::{SpecialForm, check_min_arity, expect_symbol, expect_vector};
@@ -354,7 +354,7 @@ impl SpecialForm for LetForm {
                 // Simple symbol binding: [x expr]
                 SheafValue::Symbol(name, _) => {
                     compiler.local_vars.insert(name.clone(), value.clone());
-                    compiled_bindings.push((name.clone(), compiled_value));
+                    compiled_bindings.push((BindingPattern::Simple(name.clone()), compiled_value));
                 }
                 // Vector destructuring: [[a b] expr]
                 SheafValue::Vector(names, inner_loc) => {
@@ -372,19 +372,10 @@ impl SpecialForm for LetForm {
                             SheafValue::Symbol(n.clone(), inner_loc.clone()),
                         );
                     }
-                    // Inline vector literals directly; fall back to string encoding for
-                    // non-literal expressions (the JIT desugaring pass handles those).
-                    match &compiled_value {
-                        CompiledExpr::Vector(elements) => {
-                            for (name, elem) in sym_names.iter().zip(elements.iter()) {
-                                compiled_bindings.push((name.clone(), elem.clone()));
-                            }
-                        }
-                        _ => {
-                            let pattern_key = format!("[{}]", sym_names.join(" "));
-                            compiled_bindings.push((pattern_key, compiled_value));
-                        }
-                    }
+                    let pattern = BindingPattern::Destructure(
+                        sym_names.iter().map(|n| BindingPattern::Simple(n.clone())).collect()
+                    );
+                    compiled_bindings.push((pattern, compiled_value));
                 }
                 other => {
                     return Err(SheafError::Compile {

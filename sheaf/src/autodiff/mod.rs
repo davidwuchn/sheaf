@@ -15,7 +15,7 @@ pub use transforms::{cse, fold_dict_gets, inline_function_calls};
 // `grad(expr, wrt)` returns a new `CompiledExpr` representing dL/d(wrt),
 // assuming `expr` is the scalar loss (so the incoming gradient is 1.0).
 
-use crate::core::expr::CompiledExpr;
+use crate::core::expr::{BindingPattern, CompiledExpr};
 
 // helpers
 fn call(name: &str, args: Vec<CompiledExpr>) -> CompiledExpr {
@@ -78,7 +78,7 @@ pub(crate) fn replace_symbol(expr: &CompiledExpr, name: &str, replacement: &Comp
                     replace_symbol(v, name, replacement)
                 };
                 new_bindings.push((k.clone(), new_v));
-                if k == name {
+                if k.as_simple() == Some(name) {
                     shadowed = true;
                 }
             }
@@ -219,19 +219,23 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
 
             // Handle self-referencing bindings: h = f(h) where h comes from
             // outer scope. Rename the outer reference to __pre_h.
-            let mut all_bindings: Vec<(String, CompiledExpr)> = Vec::new();
+            let mut all_bindings: Vec<(BindingPattern, CompiledExpr)> = Vec::new();
             let effective_bindings: Vec<(String, CompiledExpr)> = bindings
                 .iter()
+                .filter_map(|(name, value)| {
+                    let name_str = name.as_simple()?;
+                    Some((name_str.to_string(), value.clone()))
+                })
                 .map(|(name, value)| {
-                    if expr_contains_symbol(value, name) {
+                    if expr_contains_symbol(&value, &name) {
                         let alias = format!("__pre_{}", name);
-                        all_bindings.push((alias.clone(), CompiledExpr::Symbol(name.clone())));
-                        let renamed = replace_symbol(value, name, &CompiledExpr::Symbol(alias));
-                        all_bindings.push((name.clone(), renamed.clone()));
-                        (name.clone(), renamed)
+                        all_bindings.push((BindingPattern::Simple(alias.clone()), CompiledExpr::Symbol(name.clone())));
+                        let renamed = replace_symbol(&value, &name, &CompiledExpr::Symbol(alias));
+                        all_bindings.push((BindingPattern::Simple(name.clone()), renamed.clone()));
+                        (name, renamed)
                     } else {
-                        all_bindings.push((name.clone(), value.clone()));
-                        (name.clone(), value.clone())
+                        all_bindings.push((BindingPattern::Simple(name.clone()), value.clone()));
+                        (name, value)
                     }
                 })
                 .collect();
@@ -287,8 +291,11 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
 
             // Propagate gradient through aliases back to outer scope
             for j in 0..n {
-                if expr_contains_symbol(&bindings[j].1, &bindings[j].0) {
-                    let alias = format!("__pre_{}", bindings[j].0);
+                let outer_name = bindings[j].0.as_simple();
+                if outer_name.is_none() { continue; }
+                let outer_name = outer_name.unwrap();
+                if expr_contains_symbol(&bindings[j].1, outer_name) {
+                    let alias = format!("__pre_{}", outer_name);
                     let contrib = grad_with(
                         &effective_bindings[j].1,
                         &alias,
@@ -297,22 +304,22 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
                     if !is_zero(&contrib) {
                         // __pre_h = Symbol(h_outer). Propagate: if wrt matches
                         // the outer name, the gradient flows through.
-                        if bindings[j].0 == wrt {
+                        if outer_name == wrt {
                             total = add(total, contrib);
                         } else {
                             // For other wrt, propagate through the alias source
                             let outer_contrib = grad_with(
-                                &CompiledExpr::Symbol(bindings[j].0.clone()),
+                                &CompiledExpr::Symbol(outer_name.to_string()),
                                 wrt,
                                 contrib,
                             );
                             if !is_zero(&outer_contrib) {
                                 all_bindings.push((
-                                    format!("__d_alias_{}", bindings[j].0),
+                                    BindingPattern::Simple(format!("__d_alias_{}", outer_name)),
                                     simplify(outer_contrib.clone()),
                                 ));
                                 total = add(total, CompiledExpr::Symbol(
-                                    format!("__d_alias_{}", bindings[j].0),
+                                    format!("__d_alias_{}", outer_name),
                                 ));
                             }
                         }
@@ -340,23 +347,31 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
 }
 
 /// Check if a Let has duplicate binding names (e.g. from as-> threading).
-fn has_shadowed_bindings(bindings: &[(String, CompiledExpr)]) -> bool {
+fn has_shadowed_bindings(bindings: &[(BindingPattern, CompiledExpr)]) -> bool {
     let mut seen = std::collections::HashSet::new();
-    bindings.iter().any(|(name, _)| !seen.insert(name.as_str()))
+    bindings.iter().any(|(name, _)| {
+        if let BindingPattern::Simple(n) = name {
+            !seen.insert(n.as_str())
+        } else {
+            false
+        }
+    })
 }
 
 /// Convert a flat Let with shadowed bindings into nested Lets.
 /// Splits at the first duplicate: [a=e1, a=e2, b=e3] -> Let{a=e1, Let{a=e2, b=e3, body}}
-fn unshadow_let(bindings: &[(String, CompiledExpr)], body: &CompiledExpr) -> CompiledExpr {
+fn unshadow_let(bindings: &[(BindingPattern, CompiledExpr)], body: &CompiledExpr) -> CompiledExpr {
     let mut seen = std::collections::HashSet::new();
     for (i, (name, _)) in bindings.iter().enumerate() {
-        if !seen.insert(name.as_str()) {
-            let outer = bindings[..i].to_vec();
-            let inner = unshadow_let(&bindings[i..], body);
-            return CompiledExpr::Let {
-                bindings: outer,
-                body: Box::new(inner),
-            };
+        if let BindingPattern::Simple(n) = name {
+            if !seen.insert(n.as_str()) {
+                let outer = bindings[..i].to_vec();
+                let inner = unshadow_let(&bindings[i..], body);
+                return CompiledExpr::Let {
+                    bindings: outer,
+                    body: Box::new(inner),
+                };
+            }
         }
     }
     CompiledExpr::Let {
@@ -377,7 +392,7 @@ fn expr_contains_symbol(expr: &CompiledExpr, name: &str) -> bool {
                 if expr_contains_symbol(v, name) {
                     return true;
                 }
-                if k == name {
+                if k.as_simple() == Some(name) {
                     return false; // shadowed from here on
                 }
             }

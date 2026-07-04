@@ -969,7 +969,8 @@ impl JitCompiler {
                 // Generate forward bindings (flat scope, no Let scoping).
                 // Use generate_binding to handle Lambda, destructuring, layouts.
                 for (name, value_expr) in &anf_bindings {
-                    codegen.generate_binding(name, value_expr)?;
+                    let name_str = name.as_simple().expect("Expected simple binding pattern in ANF");
+                    codegen.generate_binding(name_str, value_expr)?;
                 }
 
                 // Generate the ANF body (loss value)
@@ -978,9 +979,14 @@ impl JitCompiler {
                 // Build shape map from forward codegen for reverse-mode AD
                 let shape_map: HashMap<String, Vec<i64>> = codegen.binding_shapes();
 
+                // Convert anf_bindings to use String names for reverse_grad
+                let anf_bindings_str: Vec<(String, CompiledExpr)> = anf_bindings
+                    .iter()
+                    .map(|(name, expr)| (name.as_simple().expect("Expected simple binding pattern in ANF").to_string(), expr.clone()))
+                    .collect();
                 // Run reverse-mode AD on ANF with shape info
                 let (backward_bindings, grad_sym_map) =
-                    reverse_grad(&anf_bindings, &anf_body, &all_wrt_symbols, &shape_map);
+                    reverse_grad(&anf_bindings_str, &anf_body, &all_wrt_symbols, &shape_map);
 
                 // Apply AST-level optimizations to backward bindings
                 let backward_bindings: Vec<(String, CompiledExpr)> = backward_bindings
@@ -995,7 +1001,7 @@ impl JitCompiler {
 
                 if std::env::var("SHEAF_DEBUG_GRAD").is_ok() {
                     eprintln!("--- Forward ANF bindings ---");
-                    for (name, val) in &anf_bindings {
+                    for (name, val) in &anf_bindings_str {
                         eprintln!("  {} = {:?}  [shape: {:?}]", name, val, shape_map.get(name));
                     }
                     eprintln!("  body = {:?}", anf_body);

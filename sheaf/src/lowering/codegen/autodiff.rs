@@ -5,7 +5,7 @@
 //! Used by the VAG (value-and-grad) trace-based path in jit.rs.
 
 use crate::lowering::stablehlo::{Register, StableHLOType};
-use crate::core::expr::CompiledExpr;
+use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::{SheafError, SheafResult};
 use crate::lowering::config::lower_get_calls;
 use super::helpers::TupleLeaf;
@@ -28,10 +28,18 @@ fn collect_param_aliases(expr: &CompiledExpr, param_name: &str, aliases: &mut Ve
             for (name, value) in bindings {
                 match value {
                     CompiledExpr::Symbol(s) if s == param_name => {
-                        if !aliases.contains(name) { aliases.push(name.clone()); }
+                        if let BindingPattern::Simple(name_str) = &name {
+                            if !aliases.contains(name_str) {
+                                aliases.push(name_str.clone());
+                            }
+                        }
                     }
                     CompiledExpr::GetTupleElement { param, .. } if param == param_name => {
-                        if !aliases.contains(name) { aliases.push(name.clone()); }
+                        if let BindingPattern::Simple(name_str) = &name {
+                            if !aliases.contains(name_str) {
+                                aliases.push(name_str.clone());
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -254,15 +262,28 @@ impl CodeGenerator {
     };
 
         for (name, value_expr) in &anf_bindings {
-            self.generate_binding(name, value_expr)?;
+            if let BindingPattern::Simple(name_str) = name {
+                self.generate_binding(name_str, value_expr)?;
+            }
         }
+
+        let anf_bindings_str: Vec<(String, CompiledExpr)> = anf_bindings
+            .iter()
+            .filter_map(|(pat, expr)| {
+                if let BindingPattern::Simple(s) = pat {
+                    Some((s.clone(), expr.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         let (loss_reg, loss_ty) = self.generate(&anf_body)?;
 
         let shape_map: HashMap<String, Vec<i64>> = self.binding_shapes();
 
     let (backward_bindings, grad_sym_map) =
-        crate::autodiff::reverse::reverse_grad(&anf_bindings, &anf_body, &all_wrt_symbols, &shape_map);
+        crate::autodiff::reverse::reverse_grad(&anf_bindings_str, &anf_body, &all_wrt_symbols, &shape_map);
 
     let backward_bindings: Vec<(String, CompiledExpr)> = backward_bindings
             .into_iter()

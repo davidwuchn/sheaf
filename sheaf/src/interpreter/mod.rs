@@ -16,7 +16,7 @@ pub mod tracer;
 pub mod value;
 
 use crate::core::ast::SheafValue;
-use crate::core::expr::{CompiledExpr, CompilerContext};
+use crate::core::expr::{BindingPattern, CompiledExpr, CompilerContext};
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::Value;
@@ -100,9 +100,9 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
 
         CompiledExpr::Let { bindings, body } => {
             env.push_scope();
-            for (name, expr) in bindings {
+            for (pattern, expr) in bindings {
                 let val = eval(expr, env)?;
-                bind_pattern(name, val, env)?;
+                bind_pattern(pattern, val, env)?;
             }
             let result = eval(body, env);
             env.pop_scope();
@@ -193,6 +193,13 @@ pub fn eval(expr: &CompiledExpr, env: &mut Env) -> Result<Value, SheafError> {
             Ok(acc)
         }
 
+        CompiledExpr::Tuple(elements) => {
+            let mut evaled = Vec::new();
+            for elem in elements {
+                evaled.push(eval(elem, env)?);
+            }
+            Ok(Value::Tuple(evaled))
+        }
         CompiledExpr::Guard { check, expr } => {
             let val = eval(expr, env)?;
             if let Err(msg) = apply_guard_check(check, &val) {
@@ -292,44 +299,45 @@ fn format_value_brief(val: &Value) -> String {
 ///
 /// Patterns:
 ///   - Simple: `"x"` -> env["x"] = val
-///   - Destructuring: `"[a b]"` (encoded by compiler as "[a b]") -> env["a"] = val[0], env["b"] = val[1]
-///
-/// The compiler encodes vector destructuring patterns as a string like `"[k1 k2]"`.
-/// We detect this by the leading `[` and parse the names out.
-fn bind_pattern(name: &str, val: Value, env: &mut Env) -> Result<(), SheafError> {
-    if name.starts_with('[') && name.ends_with(']') {
-        // Destructuring pattern: extract symbol names
-        let inner = &name[1..name.len() - 1];
-        let names: Vec<&str> = inner.split_whitespace().collect();
-        let items = match val {
-            Value::List(items) | Value::Tuple(items) => items,
-            Value::Tensor { ref data, .. } => {
-                if data.ndim() == 1 {
-                    data.iter().map(|&x| Value::Float(x)).collect()
-                } else {
-                    return Err(runtime_error(format!(
-                        "let destructuring: expected a list or tuple, got tensor with shape {:?}", data.shape()
-                    )));
+fn bind_pattern(pattern: &BindingPattern, val: Value, env: &mut Env) -> Result<(), SheafError> {
+    match pattern {
+        BindingPattern::Simple(name) => {
+            env.set(name, val);
+        }
+        BindingPattern::Destructure(names) => {
+            let items = match val {
+                Value::List(items) | Value::Tuple(items) => items,
+                Value::Tensor { ref data, .. } => {
+                    if data.ndim() == 1 {
+                        data.iter().map(|&x| Value::Float(x)).collect()
+                    } else {
+                        return Err(runtime_error(format!(
+                            "let destructuring: expected a list or tuple, got tensor with shape {:?}", data.shape()
+                        )));
+                    }
+                }
+                other => return Err(runtime_error(format!(
+                    "let destructuring: expected a list or tuple, got {}", other.type_name()
+                ))),
+            };
+            let mut items_iter = items.into_iter();
+            for name in names {
+                match items_iter.next() {
+                    Some(v) => bind_pattern(name, v, env)?,
+                    None => return Err(runtime_error("let destructuring: arity mismatch".to_string())),
                 }
             }
-            other => return Err(runtime_error(format!(
-                "let destructuring: expected a list or tuple, got {}", other.type_name()
-            ))),
-        };
-        let mut items_iter = items.into_iter();
-        for n in &names {
-            match items_iter.next() {
-                Some(v) => env.set(n, v),
-                None => env.set(n, Value::Nil),
-            }
         }
-    } else {
-        env.set(name, val);
     }
     Ok(())
 }
 
 fn eval_vector(elements: &[CompiledExpr], env: &mut Env) -> Result<Value, SheafError> {
+    // Mirror of classify_vectors in lowering/transforms.rs.
+    // Stacking rule (Decision D1, revisited):
+    //   - All numeric scalars -> 1-D Tensor (matches classify rule 1/2).
+    //   - All Tensors of the same inner shape (i.e. nested literal like [[1 2] [3 4]]) -> stack.
+    //   - Heterogeneous or runtime expressions -> Value::List (classify rule 3).
     let vals: Result<Vec<Value>, _> = elements.iter().map(|e| eval(e, env)).collect();
     let vals = vals?;
 
@@ -337,15 +345,19 @@ fn eval_vector(elements: &[CompiledExpr], env: &mut Env) -> Result<Value, SheafE
         return Ok(Value::List(vec![]));
     }
 
-    // Check if all elements are numeric -> produce a Tensor (always F32 by default)
-    let all_numeric = vals.iter().all(|v| matches!(v, Value::Int(_) | Value::Float(_)));
-    if all_numeric {
+    // Rule 1 (mirror of classify rule 2): all scalar -> 1-D tensor.
+    let all_scalar = vals.iter().all(|v| matches!(v, Value::Int(_) | Value::Float(_)));
+    if all_scalar {
         let data: Vec<f32> = vals.iter().map(|v| v.to_f64().unwrap() as f32).collect();
         let arr = ArrayD::from_shape_vec(IxDyn(&[data.len()]), data).unwrap();
         return Ok(Value::tensor_f32(arr));
     }
 
-    // Check if all elements are vectors/tensors of same shape -> produce a 2D+ tensor
+    // Rule 2 (literal stacking only): all tensors of the same inner shape -> stack.
+    // This preserves the interpréteur sémantique for `[[1 2] [3 4]]` literals.
+    // classify_vectors only converts to Tuple when the elements are *runtime*
+    // expressions (FunctionCall/Symbol referencing a tuple). Pure literal
+    // nested vectors stay as Vector -> still passéd through here.
     let all_tensors = vals.iter().all(|v| matches!(v, Value::Tensor { .. }));
     if all_tensors {
         let shapes: Vec<_> = vals.iter().map(|v| match v {
@@ -367,7 +379,8 @@ fn eval_vector(elements: &[CompiledExpr], env: &mut Env) -> Result<Value, SheafE
         }
     }
 
-    // Otherwise, a heterogeneous list
+    // Otherwise: heterogeneous list (1+ tensor or tuple) -> List.
+    // rule 3 of classify: at least one non-scalar -> List, not stacked tensor.
     Ok(Value::List(vals))
 }
 

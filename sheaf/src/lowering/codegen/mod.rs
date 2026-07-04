@@ -15,10 +15,9 @@ mod tensor_builtins;
 mod tests;
 
 use crate::lowering::stablehlo::{Register, StableHLOEmitter, StableHLOType};
-use crate::core::expr::CompiledExpr;
+use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::{SheafError, SheafResult};
-pub(crate) use helpers::{TupleLeaf, collect_tuple_leaves, expand_tuple_to_symbols};
-use helpers::try_flatten_to_constant;
+pub(crate) use helpers::{try_flatten_to_constant, TupleLeaf, collect_tuple_leaves, expand_tuple_to_symbols};
 use std::collections::HashMap;
 
 /// Recursively flatten tuple types into leaf tensor types.
@@ -317,6 +316,8 @@ impl CodeGenerator {
                     }
                     None => {
                         // Non-constant vector: emit as tuple (e.g. [new-p new-m new-v new-t])
+                        // Note: classify_vectors should normally have converted
+                        // these to a Tuple node; this is the fallback.
                         let mut regs = Vec::new();
                         let mut tys = Vec::new();
                         for elem in elements {
@@ -327,6 +328,19 @@ impl CodeGenerator {
                         Ok(self.emitter.emit_tuple(&regs, &tys))
                     }
                 }
+            }
+
+            // Tuple after classify_vectors: heterogeneous group of values
+            // (e.g. [new-h new-c] from an LSTM cell).
+            CompiledExpr::Tuple(elements) => {
+                let mut regs = Vec::new();
+                let mut tys = Vec::new();
+                for elem in elements {
+                    let (reg, ty) = self.generate(elem)?;
+                    regs.push(reg);
+                    tys.push(ty);
+                }
+                Ok(self.emitter.emit_tuple(&regs, &tys))
             }
 
             CompiledExpr::Symbol(name) => {
@@ -398,78 +412,57 @@ impl CodeGenerator {
     CompiledExpr::Let { bindings, body } => {
         let saved_bindings = self.bindings.clone();
         let saved_lambda_bindings = self.lambda_bindings.clone();
-        for (name, value_expr) in bindings {
+        for (pattern, value_expr) in bindings {
             if matches!(value_expr, CompiledExpr::Lambda { .. }) {
-                self.lambda_bindings
-                    .insert(name.clone(), value_expr.clone());
-            } else if name.starts_with('[') && name.ends_with(']') {
-                        // Destructuring bind: [a b c] = tuple -> get_tuple_element
-                        let names: Vec<&str> =
-                            name[1..name.len() - 1].split_whitespace().collect();
-                        let (tuple_reg, tuple_ty) = self.generate(value_expr)?;
-                        let element_types = match &tuple_ty {
-                            StableHLOType::Tuple(tys, _) => tys.clone(),
-                            other => {
-                                return Err(SheafError::Compile {
-                                    message: format!(
-                                        "Let destructuring requires a tuple, got: {}",
-                                        other.to_mlir()
-                                    ),
-                                    location: crate::core::error::SourceLocation::unknown(),
-                                })
-                            }
-                        };
-                        for (i, n) in names.iter().enumerate() {
-                            let elem_reg = self.emitter.emit_get_tuple_element(
-                                &tuple_reg,
-                                &tuple_ty,
-                                i,
-                                &element_types[i],
-                            );
-                            self.bindings
-                                .insert(n.to_string(), (elem_reg, element_types[i].clone()));
-                        }
-                    } else {
-                        let (reg, ty) = self.generate(value_expr)?;
-                        // Propagate sub-layout for Let-bound tuples
-                        if matches!(&ty, StableHLOType::Tuple(..)) {
-                            if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args, .. } = value_expr {
-                                if fn_name == "get" && fn_args.len() >= 2 {
-                                    // Use the last keyword arg as the layout key
-                                    if let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last() {
-                                        if let Some(sub_layout) = self.tuple_key_layouts.get(k).cloned() {
-                                            self.tuple_key_layouts.insert(name.clone(), sub_layout);
-                                        }
-                                    }
-                                }
-                            }
-                            // GetTupleElement: walk idx_to_key chain to resolve layout
-                            // (needed when inlined functions have lowered get calls)
-                            else if let CompiledExpr::GetTupleElement { param, indices } = value_expr {
-                                let mut cur = param.clone();
-                                let mut resolved = true;
-                                for &idx in indices {
-                                    if let Some(key) = self.idx_to_key.get(&(cur.clone(), idx)) {
-                                        cur = key.clone();
-                                    } else {
-                                        resolved = false;
-                                        break;
-                                    }
-                                }
-                                if resolved {
-                                    if let Some(sub_layout) = self.tuple_key_layouts.get(&cur).cloned() {
-                                        self.tuple_key_layouts.insert(name.clone(), sub_layout);
-                                    }
-                                }
-                            }
-                            // Symbol alias: (let [x y]) where y has a layout
-                            else if let CompiledExpr::Symbol(src) = value_expr {
-                                if let Some(layout) = self.tuple_key_layouts.get(src).cloned() {
-                                    self.tuple_key_layouts.insert(name.clone(), layout);
+                if let BindingPattern::Simple(name) = pattern {
+                    self.lambda_bindings.insert(name.clone(), value_expr.clone());
+                }
+            } else if let BindingPattern::Destructure(_) = pattern {
+                return Err(SheafError::Compile {
+                    message: "Destructuring patterns should have been desugared".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                });
+            } else if let BindingPattern::Simple(name) = pattern {
+                let (reg, ty) = self.generate(value_expr)?;
+                // Propagate sub-layout for Let-bound tuples
+                if matches!(&ty, StableHLOType::Tuple(..)) {
+                    if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args, .. } = value_expr {
+                        if fn_name == "get" && fn_args.len() >= 2 {
+                            // Use the last keyword arg as the layout key
+                            if let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last() {
+                                if let Some(sub_layout) = self.tuple_key_layouts.get(k).cloned() {
+                                    self.tuple_key_layouts.insert(name.clone(), sub_layout);
                                 }
                             }
                         }
-            self.bindings.insert(name.clone(), (reg, ty));
+                    }
+                    // GetTupleElement: walk idx_to_key chain to resolve layout
+                    // (needed when inlined functions have lowered get calls)
+                    else if let CompiledExpr::GetTupleElement { param, indices } = value_expr {
+                        let mut cur = param.clone();
+                        let mut resolved = true;
+                        for &idx in indices {
+                            if let Some(key) = self.idx_to_key.get(&(cur.clone(), idx)) {
+                                cur = key.clone();
+                            } else {
+                                resolved = false;
+                                break;
+                            }
+                        }
+                        if resolved {
+                            if let Some(sub_layout) = self.tuple_key_layouts.get(&cur).cloned() {
+                                self.tuple_key_layouts.insert(name.clone(), sub_layout);
+                            }
+                        }
+                    }
+                    // Symbol alias: (let [x y]) where y has a layout
+                    else if let CompiledExpr::Symbol(src) = value_expr {
+                        if let Some(layout) = self.tuple_key_layouts.get(src).cloned() {
+                            self.tuple_key_layouts.insert(name.clone(), layout);
+                        }
+                    }
+                }
+                self.bindings.insert(name.clone(), (reg, ty));
             }
         }
         let result = self.generate(body)?;

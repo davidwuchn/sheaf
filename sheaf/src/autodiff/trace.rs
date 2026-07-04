@@ -8,7 +8,7 @@
 //! computations symbolic. The result is a flat expression the symbolic
 //! AD engine can differentiate.
 
-use crate::core::expr::CompiledExpr;
+use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::Value;
@@ -165,35 +165,38 @@ fn trace_rec(
             env.push_scope();
 
             for (bname, bval) in bindings {
-                if bname.starts_with('[') && bname.ends_with(']') {
-                    // Destructuring: evaluate concretely
-                    let concrete = eval(bval, env)?;
-                    let inner = &bname[1..bname.len() - 1];
-                    let names: Vec<&str> = inner.split_whitespace().collect();
-                    let items = match concrete {
-                        Value::List(items) | Value::Tuple(items) => items,
-                        other => return Err(runtime_error(format!(
-                            "trace: destructuring expected list/tuple, got {}", other.type_name()
-                        ))),
-                    };
-                    for (n, v) in names.iter().zip(items.into_iter()) {
-                        if is_tensor_leaf(&v) {
-                            let sym = leaf_map.register(v.clone());
-                            sym_env.insert(n.to_string(), CompiledExpr::Symbol(sym));
+                match bname {
+                    BindingPattern::Destructure(names) => {
+                        // Destructuring: evaluate concretely
+                        let concrete = eval(bval, env)?;
+                        let items = match concrete {
+                            Value::List(items) | Value::Tuple(items) => items,
+                            other => return Err(runtime_error(format!(
+                                "trace: destructuring expected list/tuple, got {}", other.type_name()
+                            ))),
+                        };
+                        for (i, v) in items.into_iter().enumerate() {
+                            if let Some(BindingPattern::Simple(n)) = names.get(i) {
+                                if is_tensor_leaf(&v) {
+                                    let sym = leaf_map.register(v.clone());
+                                    sym_env.insert(n.clone(), CompiledExpr::Symbol(sym));
+                                }
+                                env.set(n, v);
+                            }
                         }
-                        env.set(n, v);
                     }
-                } else {
-                    // Trace the value
-                    let traced_val = trace_rec(bval, env, leaf_map, sym_env)?;
+                    BindingPattern::Simple(name) => {
+                        // Trace the value
+                        let traced_val = trace_rec(bval, env, leaf_map, sym_env)?;
 
-                    // Evaluate concretely to bind in env
-                    let concrete = eval(bval, env)?;
-                    env.set(bname, concrete.clone());
+                        // Evaluate concretely to bind in env
+                        let concrete = eval(bval, env)?;
+                        env.set(name, concrete.clone());
 
-                    if is_tensor_leaf(&concrete) {
-                        // Store traced expression for this symbol
-                        sym_env.insert(bname.clone(), traced_val);
+                        if is_tensor_leaf(&concrete) {
+                            // Store traced expression for this symbol
+                            sym_env.insert(name.clone(), traced_val);
+                        }
                     }
                 }
             }

@@ -4,9 +4,11 @@
 //! Compiler transforms: constant resolution, inlined-get lowering, layout propagation,
 //! and scalar constant extraction. Shared between `sheaf build` (AOT) and JIT compilation.
 
+use crate::core::expr::BindingPattern;
 use crate::core::expr::CompiledExpr;
 use crate::interpreter::value::Value;
 use std::collections::{BTreeMap, HashMap};
+
 
 /// Substitute known scalar constants and propagate Let-bound constants.
 /// Handles: GetTupleElement -> Integer, (static expr) -> evaluate, Symbol -> local constant,
@@ -130,22 +132,30 @@ fn resolve_constants_rec(
                 let resolved = resolve_constants_rec(v, constants, locals, shapes, skip_lambda);
                 match &resolved {
                     CompiledExpr::Integer(_) | CompiledExpr::Float(_) => {
-                        locals.insert(k.clone(), resolved.clone());
+                        if let BindingPattern::Simple(k_str) = k {
+                            locals.insert(k_str.clone(), resolved.clone());
+                        }
                     }
                     CompiledExpr::Symbol(aliased) => {
                         if let Some(sh) = shapes.get(aliased).cloned() {
-                            shapes.insert(k.clone(), sh);
+                            if let BindingPattern::Simple(k_str) = k {
+                                shapes.insert(k_str.clone(), sh);
+                            }
                         }
                     }
                     CompiledExpr::Vector(elems) if elems.iter().all(|e| matches!(e, CompiledExpr::Integer(_))) => {
                         let sh: Vec<i64> = elems.iter().filter_map(|e| {
                             if let CompiledExpr::Integer(n) = e { Some(*n) } else { None }
                         }).collect();
-                        shapes.insert(k.clone(), sh);
+                        if let BindingPattern::Simple(k_str) = k {
+                            shapes.insert(k_str.clone(), sh);
+                        }
                     }
                     _ => {
-                        if let Some(sh) = try_infer_shape(&resolved, shapes) {
-                            shapes.insert(k.clone(), sh);
+                        if let BindingPattern::Simple(k_str) = k {
+                            if let Some(sh) = try_infer_shape(&resolved, shapes) {
+                                shapes.insert(k_str.clone(), sh);
+                            }
                         }
                     }
                 }
@@ -326,17 +336,23 @@ fn lower_inlined_gets_rec(
                     CompiledExpr::GetTupleElement { param, indices } => {
                         let key = (param.clone(), indices.clone());
                         if let Some(path) = reverse.get(&key) {
-                            aliases.insert(k.clone(), (param.clone(), path.clone()));
+                            if let BindingPattern::Simple(k_str) = k {
+                                aliases.insert(k_str.clone(), (param.clone(), path.clone()));
+                            }
                         }
                     }
                     CompiledExpr::Symbol(s) => {
                         // Propagate alias: if `s` is itself an alias, copy it
                         if let Some(existing) = aliases.get(s).cloned() {
-                            aliases.insert(k.clone(), existing);
+                            if let BindingPattern::Simple(k_str) = k {
+                                aliases.insert(k_str.clone(), existing);
+                            }
                         }
                         // If `s` is a known param root, create root alias (empty path)
                         else if index_maps.iter().any(|(p, _)| p == s) {
-                            aliases.insert(k.clone(), (s.clone(), vec![]));
+                            if let BindingPattern::Simple(k_str) = k {
+                                aliases.insert(k_str.clone(), (s.clone(), vec![]));
+                            }
                         }
                     }
                     _ => {}
@@ -408,7 +424,9 @@ pub fn propagate_let_layouts(
                     }
                     if resolved {
                         if let Some(sub_layout) = layouts.get(&cur).cloned() {
-                            layouts.insert(var_name.clone(), sub_layout);
+                            if let BindingPattern::Simple(var_name_str) = var_name {
+                                layouts.insert(var_name_str.clone(), sub_layout);
+                            }
                         }
                     }
                 }
@@ -435,7 +453,7 @@ pub fn propagate_let_layouts(
         }
         CompiledExpr::Lambda { body, .. } => {
             propagate_let_layouts(body, idx_to_key, layouts);
-        }
+        },
         _ => {}
     }
 }
@@ -456,7 +474,7 @@ pub fn substitute_scalar_param(expr: &CompiledExpr, name: &str, value: f64) -> C
                     body: Box::new(substitute_scalar_param(body, name, value)),
                 }
             }
-        }
+        },
         CompiledExpr::Let { bindings, body } => {
             let mut new_bindings = Vec::new();
             let mut shadowed = false;
@@ -466,7 +484,11 @@ pub fn substitute_scalar_param(expr: &CompiledExpr, name: &str, value: f64) -> C
                 } else {
                     substitute_scalar_param(bexpr, name, value)
                 };
-                if bname == name { shadowed = true; }
+                if let BindingPattern::Simple(bname_str) = bname {
+                    if bname_str == name {
+                        shadowed = true;
+                    }
+                }
                 new_bindings.push((bname.clone(), new_expr));
             }
             CompiledExpr::Let {
@@ -475,7 +497,7 @@ pub fn substitute_scalar_param(expr: &CompiledExpr, name: &str, value: f64) -> C
                     Box::new(substitute_scalar_param(body, name, value))
                 },
             }
-        }
+        },
         CompiledExpr::FunctionCall { name: fn_name, args, .. } => CompiledExpr::FunctionCall {
             name: fn_name.clone(),
             args: args.iter().map(|a| substitute_scalar_param(a, name, value)).collect(),
@@ -505,7 +527,7 @@ pub fn substitute_scalar_param(expr: &CompiledExpr, name: &str, value: f64) -> C
                     Box::new(substitute_scalar_param(body, name, value))
                 },
             }
-        }
+        },
         _ => expr.clone(),
     }
 }
@@ -594,7 +616,9 @@ pub fn try_infer_shape(
             let mut inner = shapes.clone();
             for (name, rhs) in bindings {
                 if let Some(sh) = try_infer_shape(rhs, &inner) {
-                    inner.insert(name.clone(), sh);
+                    if let BindingPattern::Simple(name_str) = name {
+                        inner.insert(name_str.clone(), sh);
+                    }
                 }
             }
             try_infer_shape(body, &inner)
@@ -907,7 +931,7 @@ fn unroll_reduces_rec(
                 // Recursively unroll any nested reduces in the substituted body
                 iteration_body = unroll_reduces_rec(&iteration_body, param_types, let_env);
 
-                bindings.push((var_name, iteration_body));
+                bindings.push((BindingPattern::Simple(var_name), iteration_body));
             }
 
             let last_var = format!("__reduce_{}_{}", id, n - 1);
@@ -929,7 +953,9 @@ fn unroll_reduces_rec(
                 .iter()
                 .map(|(k, v)| {
                     let resolved = unroll_reduces_rec(v, param_types, &new_env);
-                    new_env.insert(k.clone(), resolved.clone());
+                    if let BindingPattern::Simple(k_str) = k {
+                        new_env.insert(k_str.clone(), resolved.clone());
+                    }
                     (k.clone(), resolved)
                 })
                 .collect();

@@ -13,7 +13,7 @@
 //!    named binding, so the backward expression is also flat.
 
 use crate::autodiff::replace_symbol;
-use crate::core::expr::CompiledExpr;
+use crate::core::expr::{BindingPattern, CompiledExpr};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -60,7 +60,7 @@ pub fn to_anf(expr: &CompiledExpr) -> CompiledExpr {
 
 /// Recursively convert `expr` to ANF, appending bindings to `out`.
 /// Returns a trivial expression (Symbol or literal) that represents the value.
-fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(String, CompiledExpr)>) -> CompiledExpr {
+fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(BindingPattern, CompiledExpr)>) -> CompiledExpr {
     match expr {
         // Trivial: return as-is
         _ if is_trivial(expr) => expr.clone(),
@@ -74,7 +74,7 @@ fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(String, CompiledExpr)>) -> Compil
                 loc: None,
             };
             let sym = fresh_anf_name();
-            out.push((sym.clone(), result));
+            out.push((BindingPattern::Simple(sym.clone()), result));
             CompiledExpr::Symbol(sym)
         }
 
@@ -90,12 +90,25 @@ fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(String, CompiledExpr)>) -> Compil
                 for (old, new_name) in &rename_map {
                     val = replace_symbol(&val, old, &CompiledExpr::Symbol(new_name.clone()));
                 }
+                
                 let anf_val = anf_rec(&val, out);
                 let fresh = fresh_anf_name();
-                out.push((fresh.clone(), anf_val));
+                out.push((BindingPattern::Simple(fresh.clone()), anf_val));
                 // HashMap::insert overwrites previous entry for same name,
                 // so body/subsequent values always see the LATEST binding.
-                rename_map.insert(name.clone(), fresh);
+                // Per the destructuring elim contract, the binding should be
+                // desugared before reaching here, so a Destructure would be a
+                // bug. debug_assert catches it loudly during development.
+                debug_assert!(
+                    matches!(name, BindingPattern::Simple(_)),
+                    "ANF: expected Simple binding pattern (destructure should be desugared), got {:?}",
+                    name
+                );
+                let simple_name = match name {
+                    BindingPattern::Simple(s) => s.clone(),
+                    BindingPattern::Destructure(_) => String::new(),
+                };
+                rename_map.insert(simple_name, fresh);
             }
             // Apply renames to body
             let mut renamed_body = body.as_ref().clone();
@@ -125,7 +138,7 @@ fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(String, CompiledExpr)>) -> Compil
         // Anything else: bind directly
         other => {
             let sym = fresh_anf_name();
-            out.push((sym.clone(), other.clone()));
+            out.push((BindingPattern::Simple(sym.clone()), other.clone()));
             CompiledExpr::Symbol(sym)
         }
     }

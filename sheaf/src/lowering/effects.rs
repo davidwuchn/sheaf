@@ -188,6 +188,7 @@ fn collect_effects_rec(expr: &CompiledExpr, out: &mut Vec<EffectSite>) {
         | CompiledExpr::FunctionRef(_)
         | CompiledExpr::Quoted(_)
         | CompiledExpr::GetTupleElement { .. }
+        | CompiledExpr::Tuple(_)
         | CompiledExpr::ValueAndGrad { .. } => {}
     }
 }

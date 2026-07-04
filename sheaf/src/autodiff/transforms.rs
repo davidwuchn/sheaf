@@ -3,13 +3,13 @@
 
 //! IR transforms: function inlining and common subexpression elimination.
 
-use crate::core::expr::{CompiledExpr, FunctionDef};
+use crate::core::expr::{BindingPattern, CompiledExpr, FunctionDef};
 use std::collections::HashMap;
 
 /// Inline user-defined function calls so that autodiff can see through them.
 ///
 /// Replaces `FunctionCall("f", [a, b])` where `f` is in `registry` with:
-///   `Let { bindings: [(p1, a), (p2, b)], body: f.body_compiled }`
+//   `Let { bindings: [(p1, a), (p2, b)], body: f.body_compiled }`
 ///
 /// Recurses into the result (the inlined body may itself contain calls).
 /// `depth` guards against infinite recursion (mutual/self-recursive functions).
@@ -42,10 +42,10 @@ fn inline_calls_rec(
 
             // Try to inline: check local lambda bindings first, then registry
             if let Some(CompiledExpr::Lambda { params, body }) = local_lambdas.get(name.as_str()) {
-                let bindings: Vec<(String, CompiledExpr)> = params
+                let bindings: Vec<(BindingPattern, CompiledExpr)> = params
                     .iter()
                     .zip(inlined_args.iter())
-                    .map(|(p, a)| (p.clone(), a.clone()))
+                    .map(|(p, a)| (BindingPattern::Simple(p.clone()), a.clone()))
                     .collect();
                 let inlined = CompiledExpr::Let {
                     bindings,
@@ -56,11 +56,11 @@ fn inline_calls_rec(
 
             if let Some(func_def) = registry.get(name.as_str()) {
                 if let Some(body) = &func_def.body_compiled {
-                    let bindings: Vec<(String, CompiledExpr)> = func_def
+                    let bindings: Vec<(BindingPattern, CompiledExpr)> = func_def
                         .params
                         .iter()
                         .zip(inlined_args.iter())
-                        .map(|(p, a)| (p.clone(), a.clone()))
+                        .map(|(p, a)| (BindingPattern::Simple(p.clone()), a.clone()))
                         .collect();
                     let inlined = CompiledExpr::Let {
                         bindings,
@@ -79,12 +79,14 @@ fn inline_calls_rec(
 
         CompiledExpr::Let { bindings, body } => {
             let mut new_lambdas = local_lambdas.clone();
-            let new_bindings: Vec<(String, CompiledExpr)> = bindings
+            let new_bindings: Vec<(BindingPattern, CompiledExpr)> = bindings
                 .iter()
                 .map(|(k, v)| {
                     let inlined_v = inline_calls_rec(v, registry, &new_lambdas, depth);
-                    if matches!(&inlined_v, CompiledExpr::Lambda { .. }) {
-                        new_lambdas.insert(k.clone(), inlined_v.clone());
+                    if let BindingPattern::Simple(name) = k {
+                        if matches!(&inlined_v, CompiledExpr::Lambda { .. }) {
+                            new_lambdas.insert(name.clone(), inlined_v.clone());
+                        }
                     }
                     (k.clone(), inlined_v)
                 })
@@ -128,10 +130,10 @@ fn inline_calls_rec(
 
             // If callee is a direct lambda, inline it as a Let binding
             if let CompiledExpr::Lambda { params, body } = &inlined_callee {
-                let bindings: Vec<(String, CompiledExpr)> = params
+                let bindings: Vec<(BindingPattern, CompiledExpr)> = params
                     .iter()
                     .zip(inlined_args.iter())
-                    .map(|(p, a)| (p.clone(), a.clone()))
+                    .map(|(p, a)| (BindingPattern::Simple(p.clone()), a.clone()))
                     .collect();
                 let inlined = CompiledExpr::Let {
                     bindings,
@@ -170,12 +172,12 @@ fn fold_dict_gets_rec(
     match expr {
         CompiledExpr::Let { bindings, body } => {
             let mut new_dicts = dict_bindings.clone();
-            let new_bindings: Vec<(String, CompiledExpr)> = bindings
+            let new_bindings: Vec<(BindingPattern, CompiledExpr)> = bindings
                 .iter()
                 .map(|(k, v)| {
                     let folded = fold_dict_gets_rec(v, &new_dicts);
-                    if let CompiledExpr::Dict(pairs) = &folded {
-                        new_dicts.insert(k.clone(), pairs.clone());
+                    if let (BindingPattern::Simple(name), CompiledExpr::Dict(pairs)) = (k, &folded) {
+                        new_dicts.insert(name.clone(), pairs.clone());
                     }
                     (k.clone(), folded)
                 })
@@ -250,7 +252,7 @@ pub fn cse(expr: CompiledExpr) -> CompiledExpr {
     count_exprs(&expr, &mut counts);
 
     let mut seen_keys: Vec<String> = Vec::new();
-    let mut bindings: Vec<(String, CompiledExpr)> = Vec::new();
+    let mut bindings: Vec<(BindingPattern, CompiledExpr)> = Vec::new();
     let mut subst: HashMap<String, String> = HashMap::new();
 
     collect_cse_candidates(&expr, &counts, &mut seen_keys, &mut bindings, &mut subst);
@@ -313,7 +315,7 @@ fn collect_cse_candidates(
     expr: &CompiledExpr,
     counts: &HashMap<String, usize>,
     seen_keys: &mut Vec<String>,
-    bindings: &mut Vec<(String, CompiledExpr)>,
+    bindings: &mut Vec<(BindingPattern, CompiledExpr)>,
     subst: &mut HashMap<String, String>,
 ) {
     if is_trivial(expr) {
@@ -325,7 +327,7 @@ fn collect_cse_candidates(
             seen_keys.push(key.clone());
             let name = format!("__cse{}", bindings.len());
             subst.insert(key, name.clone());
-            bindings.push((name, expr.clone()));
+            bindings.push((BindingPattern::Simple(name), expr.clone()));
         }
         return;
     }
