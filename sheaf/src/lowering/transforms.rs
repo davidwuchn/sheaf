@@ -9,6 +9,8 @@ use crate::core::expr::CompiledExpr;
 use crate::interpreter::value::Value;
 use std::collections::{BTreeMap, HashMap};
 
+use crate::core::inference::{expr_is_tensor, infer_type_with_context};
+use crate::core::error::SheafResult;
 
 /// Substitute known scalar constants and propagate Let-bound constants.
 /// Handles: GetTupleElement -> Integer, (static expr) -> evaluate, Symbol -> local constant,
@@ -777,9 +779,17 @@ fn extract_numeric(expr: &CompiledExpr) -> Option<f64> {
 
 use crate::lowering::stablehlo::StableHLOType;
 use crate::autodiff::replace_symbol;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::core::error::SheafError;
+use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 
 static UNROLL_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static DESTRUCTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Generate a fresh temporary variable name for destructuring desugaring.
+fn fresh_temp() -> String {
+    let n = DESTRUCTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("__dst{}", n)
+}
 
 /// Navigate a `StableHLOType` tree following tuple indices.
 ///
@@ -998,3 +1008,425 @@ enum UnrollColl {
     TupleElement { param: String, base_indices: Vec<usize> },
     Vector(Vec<CompiledExpr>),
 }
+
+pub fn classify_vectors(
+    expr: CompiledExpr,
+    param_shapes: &HashMap<String, Vec<i64>>,
+) -> CompiledExpr {
+    let mut symbol_types = HashMap::new();
+    // Seed initial symbol_types from param_shapes: each param is a tensor of f32 with the given shape
+    for (name, shape) in param_shapes {
+        symbol_types.insert(name.clone(), StableHLOType::f32_tensor(shape.clone()));
+    }
+    classify_vectors_rec(expr, &mut symbol_types)
+}
+
+fn classify_vectors_rec(
+    expr: CompiledExpr,
+    symbol_types: &mut HashMap<String, StableHLOType>,
+) -> CompiledExpr {
+    match expr {
+        CompiledExpr::Let { bindings, body } => {
+            // Process each binding in order
+            let mut new_bindings = Vec::with_capacity(bindings.len());
+            for (pattern, value) in bindings {
+                // Classify the value expression with the current symbol_types
+                let value_classified = classify_vectors_rec(value, symbol_types);
+                // For Simple pattern, we bind the symbol to the type of the value
+                // For Destructure, we don't bind a single symbol (the inner symbols will be bound in desugaring)
+                if let BindingPattern::Simple(name) = &pattern {
+                    // Compute the type of the value
+                    let ty = infer_type_with_context(&value_classified, &*symbol_types)
+                        .unwrap_or_else(|_| StableHLOType::scalar_f32());
+                    symbol_types.insert(name.clone(), ty);
+                }
+                // For Destructure, we do not add a single symbol to symbol_types here.
+                // The desugaring pass will bind the individual elements.
+                new_bindings.push((pattern.clone(), value_classified));
+            }
+            // Now classify the body with the updated symbol_types
+            let body_classified = classify_vectors_rec(*body, symbol_types);
+            CompiledExpr::Let {
+                bindings: new_bindings,
+                body: Box::new(body_classified),
+            }
+        }
+        CompiledExpr::Lambda { params, body } => {
+            // Push params into symbol_types for the duration of the body,
+            // defaulting to scalar unless the caller pre-populated a kind.
+            let mut saved = Vec::new();
+            for param in &params {
+                let old_ty = symbol_types.remove(param);
+                let active = old_ty
+                    .clone()
+                    .unwrap_or_else(|| StableHLOType::scalar_f32());
+                symbol_types.insert(param.clone(), active);
+                saved.push((param.clone(), old_ty));
+            }
+            let body_classified = classify_vectors_rec(*body, symbol_types);
+            for (param, old_ty) in saved {
+                match old_ty {
+                    Some(old) => { symbol_types.insert(param, old); }
+                    None => { symbol_types.remove(&param); }
+                }
+            }
+            CompiledExpr::Lambda {
+                params,
+                body: Box::new(body_classified),
+            }
+        }
+        CompiledExpr::Vector(elems) => {
+            // First, classify each element recursively
+            let mut elems_classified = Vec::with_capacity(elems.len());
+            for e in elems {
+                elems_classified.push(classify_vectors_rec(e, symbol_types));
+            }
+            // Now, apply the classification rule
+            // Rule 1: if try_flatten_to_constant succeeds -> keep as Vector
+            if crate::lowering::codegen::try_flatten_to_constant(&elems_classified).is_some() {
+                return CompiledExpr::Vector(elems_classified);
+            }
+            // Rule 2: if all elements are scalars (shape empty) -> keep as Vector
+            let mut all_scalar = true;
+            for e in &elems_classified {
+                if expr_is_tensor(e, symbol_types) {
+                    all_scalar = false;
+                    break;
+                }
+            }
+            if all_scalar {
+                return CompiledExpr::Vector(elems_classified);
+            }
+            // Otherwise, convert to Tuple
+            CompiledExpr::Tuple(elems_classified)
+        }
+        CompiledExpr::Tuple(elems) => {
+            let mut elems_classified = Vec::with_capacity(elems.len());
+            for e in elems {
+                elems_classified.push(classify_vectors_rec(e, symbol_types));
+            }
+            CompiledExpr::Tuple(elems_classified)
+        }
+        CompiledExpr::FunctionCall { name, args, loc } => {
+            let mut args_classified = Vec::with_capacity(args.len());
+            for a in args {
+                args_classified.push(classify_vectors_rec(a, symbol_types));
+            }
+            CompiledExpr::FunctionCall {
+                name,
+                args: args_classified,
+                loc,
+            }
+        }
+        CompiledExpr::If { condition, then_branch, else_branch } => {
+            let condition_classified = classify_vectors_rec(*condition, symbol_types);
+            let then_classified = classify_vectors_rec(*then_branch, symbol_types);
+            let else_classified = else_branch.map(|e| Box::new(classify_vectors_rec(*e, symbol_types)));
+            CompiledExpr::If {
+                condition: Box::new(condition_classified),
+                then_branch: Box::new(then_classified),
+                else_branch: else_classified,
+            }
+        }
+        CompiledExpr::Do(exprs) => {
+            let mut exprs_classified = Vec::with_capacity(exprs.len());
+            for e in exprs {
+                exprs_classified.push(classify_vectors_rec(e, symbol_types));
+            }
+            CompiledExpr::Do(exprs_classified)
+        }
+        CompiledExpr::LambdaCall { callee, args } => {
+            let callee_classified = classify_vectors_rec(*callee, symbol_types);
+            let mut args_classified = Vec::with_capacity(args.len());
+            for a in args {
+                args_classified.push(classify_vectors_rec(a, symbol_types));
+            }
+            CompiledExpr::LambdaCall {
+                callee: Box::new(callee_classified),
+                args: args_classified,
+            }
+        }
+        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => {
+            let count_classified = classify_vectors_rec(*count, symbol_types);
+            let acc_init_classified = classify_vectors_rec(*acc_init, symbol_types);
+            let body_classified = classify_vectors_rec(*body, symbol_types);
+            CompiledExpr::Repeat {
+                index_var,
+                count: Box::new(count_classified),
+                acc_var,
+                acc_init: Box::new(acc_init_classified),
+                body: Box::new(body_classified),
+            }
+        }
+        // For atomic nodes, we just return them.
+        CompiledExpr::Integer(_)
+        | CompiledExpr::Float(_)
+        | CompiledExpr::Boolean(_)
+        | CompiledExpr::Nil
+        | CompiledExpr::String(_)
+        | CompiledExpr::Keyword(_)
+        | CompiledExpr::Dict(_)
+        | CompiledExpr::Quoted(_)
+        | CompiledExpr::FunctionRef(_)
+        | CompiledExpr::Symbol(_)
+        | CompiledExpr::GetTupleElement { .. }
+        | CompiledExpr::ValueAndGrad { .. }
+        | CompiledExpr::Def { .. }
+        | CompiledExpr::Guard { .. }
+        | CompiledExpr::While { .. }
+        => expr,
+    }
+}
+
+/// Determine the source kind of a destructuring source expression,
+/// using the symbol_types env (from classify_vectors) as ground truth.
+/// Returns one of {Tuple, Tensor1D, Unknown}.
+enum DestructKind {
+    Tuple,
+    Tensor1D,
+    Vector1D, // literal Vector of scalars
+    Unknown,
+}
+
+fn kind_of(
+    expr: &CompiledExpr,
+    symbol_types: &HashMap<String, StableHLOType>,
+) -> DestructKind {
+    match expr {
+        CompiledExpr::Tuple(_) => DestructKind::Tuple,
+        CompiledExpr::Vector(_) => DestructKind::Vector1D,
+        CompiledExpr::Symbol(s) => {
+            match symbol_types.get(s) {
+                Some(StableHLOType::Tuple(_, _)) => DestructKind::Tuple,
+                Some(ty) => {
+                    let sh = ty.shape();
+                    if sh.len() == 1 && !sh.is_empty() {
+                        DestructKind::Tensor1D
+                    } else {
+                        // Scalar (shape empty) or >1-D tensor -> not a destructure source
+                        DestructKind::Unknown
+                    }
+                }
+                None => DestructKind::Unknown,
+            }
+        }
+        _ => DestructKind::Unknown,
+    }
+}
+
+/// Extract the static length of a Vector or Tuple literal.
+/// Returns None for tensors (whose runtime length is dynamic).
+fn static_length(expr: &CompiledExpr) -> Option<usize> {
+    match expr {
+        CompiledExpr::Vector(elems) => Some(elems.len()),
+        CompiledExpr::Tuple(elems) => Some(elems.len()),
+        _ => None,
+    }
+}
+
+/// Desugar destructuring Let bindings into nested Let chains.
+/// 
+/// For a binding `(Destructure([a b c]), value)`, generates:
+/// ```scheme
+/// (let [tmp value]
+///   (let [a (get tmp 0)]
+///     (let [b (get tmp 1)]
+///       (let [c (get tmp 2)]
+///         <body>))))
+/// ```
+pub fn lower_tuples_and_destructuring(
+    body: CompiledExpr,
+    param_shapes: &HashMap<String, Vec<i64>>,
+) -> SheafResult<CompiledExpr> {
+    // Share a single symbol_types env between classify_vectors and
+    // desugar_destructuring_lets, so the latter can resolve kinds (Tuple vs
+    // Tensor1D) without re-guessing.
+    let mut symbol_types: HashMap<String, StableHLOType> = HashMap::new();
+    for (name, shape) in param_shapes {
+        symbol_types.insert(name.clone(), StableHLOType::f32_tensor(shape.clone()));
+    }
+    let classified = classify_vectors_rec(body, &mut symbol_types);
+    desugar_destructuring_lets(classified, &symbol_types)
+}
+
+pub fn desugar_destructuring_lets(
+    expr: CompiledExpr,
+    symbol_types: &HashMap<String, StableHLOType>,
+) -> SheafResult<CompiledExpr> {
+    match expr {
+        CompiledExpr::Let { bindings, body } => {
+            let mut new_bindings = Vec::new();
+            // First, desugar the body (in case it contains nested Let)
+            let mut body = desugar_destructuring_lets(*body, symbol_types)?;
+            
+            for (pattern, value) in bindings {
+                match pattern {
+                    BindingPattern::Simple(_) => {
+                        // Leave simple bindings as-is
+                        new_bindings.push((pattern, desugar_destructuring_lets(value, symbol_types)?));
+                    }
+                    BindingPattern::Destructure(names) => {
+                        // Check for nested destructuring (not yet supported)
+                        for name in &names {
+                            if let BindingPattern::Destructure(_) = name {
+                                return Err(SheafError::Compile {
+                                    message: "Nested destructuring patterns are not yet supported".to_string(),
+                                    location: crate::core::error::SourceLocation::unknown(),
+                                });
+                            }
+                        }
+                        
+                        // Generate a temporary variable
+                        let tmp = fresh_temp();
+                        // Desugar the value first
+                        let value = desugar_destructuring_lets(value, symbol_types)?;
+                        
+                        // Determine the kind of the value, using symbol_types as ground truth
+                        let kind = kind_of(&value, symbol_types);
+                        let len = static_length(&value).ok_or_else(|| match kind {
+                            DestructKind::Tensor1D | DestructKind::Unknown => SheafError::Compile {
+                                message: format!(
+                                    "Destructuring arity mismatch: source is a tensor of dynamic length; cannot destructure statically"
+                                ),
+                                location: crate::core::error::SourceLocation::unknown(),
+                            },
+                            _ => SheafError::Compile {
+                                message: format!("Destructuring arity mismatch: source is of dynamic length"),
+                                location: crate::core::error::SourceLocation::unknown(),
+                            },
+                        })?;
+                        
+                        // Check arity match
+                        if len != names.len() {
+                            return Err(SheafError::Compile {
+                                message: format!(
+                                    "Destructuring arity mismatch: pattern has {} names, source has {} elements",
+                                    names.len(),
+                                    len
+                                ),
+                                location: crate::core::error::SourceLocation::unknown(),
+                            });
+                        }
+                        
+                        // Create nested Let bindings for each name
+                        for (i, name) in names.into_iter().enumerate().rev() {
+                            // Extract the i-th element based on the source kind.
+                            let extraction = match kind {
+                                DestructKind::Tuple => CompiledExpr::GetTupleElement {
+                                    param: tmp.clone(),
+                                    indices: vec![i],
+                                },
+                                DestructKind::Vector1D | DestructKind::Tensor1D => {
+                                    // For Vector/Tensor 1-D: use tensor indexing (get builtin).
+                                    CompiledExpr::FunctionCall {
+                                        name: "get".to_string(),
+                                        args: vec![CompiledExpr::Symbol(tmp.clone()), CompiledExpr::Integer(i as i64)],
+                                        loc: None,
+                                    }
+                                }
+                                DestructKind::Unknown => {
+                                    return Err(SheafError::Compile {
+                                        message: format!(
+                                            "Destructuring the result of a runtime tensor of unknown shape is not supported"
+                                        ),
+                                        location: crate::core::error::SourceLocation::unknown(),
+                                    });
+                                }
+                            };
+                            
+                            // Wrap the current body in a Let binding
+                            body = CompiledExpr::Let {
+                                bindings: vec![(name, extraction)],
+                                body: Box::new(body),
+                            };
+                        }
+                        
+                        // Add the binding for the temporary variable
+                        new_bindings.push((BindingPattern::Simple(tmp), value));
+                    }
+                }
+            }
+            
+            Ok(CompiledExpr::Let {
+                bindings: new_bindings,
+                body: Box::new(body),
+            })
+        }
+        // Recurse into other expression types
+        CompiledExpr::FunctionCall { name, args, loc } => {
+            let mut new_args = Vec::new();
+            for arg in args {
+                new_args.push(desugar_destructuring_lets(arg, symbol_types)?);
+            }
+            Ok(CompiledExpr::FunctionCall {
+                name,
+                args: new_args,
+                loc,
+            })
+        }
+        CompiledExpr::Lambda { params, body } => {
+            // Params shadow the outer symbol_types; for desugaring purposes we just recurse.
+            Ok(CompiledExpr::Lambda {
+                params,
+                body: Box::new(desugar_destructuring_lets(*body, symbol_types)?),
+            })
+        }
+        CompiledExpr::LambdaCall { callee, args } => {
+            let new_args: Vec<CompiledExpr> = args
+                .into_iter()
+                .map(|a| desugar_destructuring_lets(a, symbol_types))
+                .collect::<SheafResult<_>>()?;
+            Ok(CompiledExpr::LambdaCall {
+                callee: Box::new(desugar_destructuring_lets(*callee, symbol_types)?),
+                args: new_args,
+            })
+        }
+        CompiledExpr::If { condition, then_branch, else_branch } => {
+            Ok(CompiledExpr::If {
+                condition: Box::new(desugar_destructuring_lets(*condition, symbol_types)?),
+                then_branch: Box::new(desugar_destructuring_lets(*then_branch, symbol_types)?),
+                else_branch: match else_branch {
+                    Some(e) => Some(Box::new(desugar_destructuring_lets(*e, symbol_types)?)),
+                    None => None,
+                },
+            })
+        }
+        CompiledExpr::Do(exprs) => {
+            Ok(CompiledExpr::Do(
+                exprs.into_iter()
+                    .map(|e| desugar_destructuring_lets(e, symbol_types))
+                    .collect::<SheafResult<_>>()?,
+            ))
+        }
+        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => {
+            Ok(CompiledExpr::Repeat {
+                index_var,
+                count: Box::new(desugar_destructuring_lets(*count, symbol_types)?),
+                acc_var,
+                acc_init: Box::new(desugar_destructuring_lets(*acc_init, symbol_types)?),
+                body: Box::new(desugar_destructuring_lets(*body, symbol_types)?),
+            })
+        }
+        CompiledExpr::Vector(elems) => {
+            Ok(CompiledExpr::Vector(
+                elems.into_iter()
+                    .map(|e| desugar_destructuring_lets(e, symbol_types))
+                    .collect::<SheafResult<_>>()?,
+            ))
+        }
+        CompiledExpr::Tuple(elems) => {
+            Ok(CompiledExpr::Tuple(
+                elems.into_iter()
+                    .map(|e| desugar_destructuring_lets(e, symbol_types))
+                    .collect::<SheafResult<_>>()?,
+            ))
+        }
+        // Other / atomic nodes (Dict, Quoted, FunctionRef, Symbol, GetTupleElement,
+        // ValueAndGrad, Def, Guard, While, ...) are returned as-is. destructuring
+        // patterns inside such nodes are not expected to appear in user bodies that
+        // reach the JIT pipeline; the FunctionCall/Lambda/If/Do/Vector/Tuple/Repeat/
+        // Let arms above cover anything the codegen will encounter post-AST -> ANF.
+        other => Ok(other),
+    }
+}
+

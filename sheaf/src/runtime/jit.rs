@@ -348,11 +348,27 @@ impl JitCompiler {
         // VAG lambdas get their own resolve_static_constants with correct (unshadowed)
         // param_shapes. Then the outer resolve_static_constants can safely skip
         // Lambda bodies since they're already resolved.
+        let arity_err: std::cell::Cell<Option<SheafError>> = std::cell::Cell::new(None);
         body = self.preprocess_vag_lambda(
             &body, registry, &constants, &param_shapes, &param_index_maps, &known_types,
+            &arity_err,
         );
+        if let Some(err) = arity_err.into_inner() {
+            self.jit_fail(name, &err.short_message());
+            return None;
+        }
 
         body = resolve_static_constants(&body, &constants, &param_shapes, false);
+
+        body = match crate::lowering::transforms::lower_tuples_and_destructuring(
+            body, &param_shapes,
+        ) {
+            Ok(b) => b,
+            Err(e) => {
+                self.jit_fail(name, &e.short_message());
+                return None;
+            }
+        };
 
         // Build key layouts for codegen
         let mut tuple_key_layouts: HashMap<String, BTreeMap<String, usize>> = HashMap::new();
@@ -552,8 +568,17 @@ impl JitCompiler {
         param_shapes: &HashMap<String, Vec<i64>>,
         param_index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
         known_types: &[(String, StableHLOType)],
+        arity_err: &std::cell::Cell<Option<SheafError>>,
     ) -> CompiledExpr {
-        preprocess_vag_lambda_rec(body, registry, constants, param_shapes, param_index_maps, known_types)
+        preprocess_vag_lambda_rec(
+            body,
+            registry,
+            constants,
+            param_shapes,
+            param_index_maps,
+            known_types,
+            arity_err,
+        )
     }
 
     /// JIT-compile a value-and-grad closure into a single VMFB.
@@ -866,6 +891,16 @@ impl JitCompiler {
             inject_tuple_shapes(param_name, param_ty, &[], &mut param_shapes);
         }
         body = resolve_static_constants(&body, &constants, &param_shapes, false);
+
+        body = match crate::lowering::transforms::lower_tuples_and_destructuring(
+            body, &param_shapes,
+        ) {
+            Ok(b) => b,
+            Err(e) => {
+                self.jit_fail("value_and_grad", &e.short_message());
+                return None;
+            }
+        };
 
         // Build key layouts for codegen
         let mut tuple_key_layouts: HashMap<String, BTreeMap<String, usize>> = HashMap::new();
@@ -1508,8 +1543,19 @@ fn preprocess_vag_lambda_rec(
     param_shapes: &HashMap<String, Vec<i64>>,
     param_index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
     known_types: &[(String, StableHLOType)],
+    arity_err: &std::cell::Cell<Option<SheafError>>,
 ) -> CompiledExpr {
-    let recurse = |e: &CompiledExpr| preprocess_vag_lambda_rec(e, registry, constants, param_shapes, param_index_maps, known_types);
+    let recurse = |e: &CompiledExpr| {
+        preprocess_vag_lambda_rec(
+            e,
+            registry,
+            constants,
+            param_shapes,
+            param_index_maps,
+            known_types,
+            arity_err,
+        )
+    };
 
     match expr {
         CompiledExpr::LambdaCall { callee, args } => {
@@ -1519,7 +1565,13 @@ fn preprocess_vag_lambda_rec(
             if let CompiledExpr::FunctionCall { name, args: inner_args, .. } = &new_callee {
                 if name == "__value-and-grad-hof__" && inner_args.len() == 1 {
                     let preprocessed_lambda = preprocess_one_vag_lambda(
-                        &inner_args[0], registry, constants, param_shapes, param_index_maps, known_types,
+                        &inner_args[0],
+                        registry,
+                        constants,
+                        param_shapes,
+                        param_index_maps,
+                        known_types,
+                        arity_err,
                     );
                     return CompiledExpr::LambdaCall {
                         callee: Box::new(CompiledExpr::FunctionCall {
@@ -1544,6 +1596,7 @@ fn preprocess_one_vag_lambda(
     param_shapes: &HashMap<String, Vec<i64>>,
     param_index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
     known_types: &[(String, StableHLOType)],
+    arity_err: &std::cell::Cell<Option<SheafError>>,
 ) -> CompiledExpr {
     let (params, body) = match lambda_expr {
         CompiledExpr::Lambda { params, body, .. } => (params.clone(), body.as_ref().clone()),
@@ -1557,7 +1610,18 @@ fn preprocess_one_vag_lambda(
         }
     }
 
-    let body = preprocess_body(&body, registry, param_index_maps, constants, &lambda_param_shapes, false);
+    // Surface the destructuring arity error to the caller via the Cell instead of
+    // silently swallowing it; if no error occurs, this is a no-op.
+    let body = match preprocess_body(&body, registry, param_index_maps, constants, &lambda_param_shapes, false) {
+        Ok(b) => b,
+        Err(err) => {
+            // Fallback: return the un-preprocessed lambda. This is rarer than the
+            // happy path and the clone cost is acceptable (a destructuring arity
+            // error is a user error, not a performance-critical path).
+            arity_err.set(Some(err));
+            return lambda_expr.clone();
+        }
+    };
 
     CompiledExpr::Lambda {
         params,
@@ -1572,7 +1636,7 @@ fn preprocess_body(
     constants: &HashMap<(String, Vec<usize>), f64>,
     param_shapes: &HashMap<String, Vec<i64>>,
     skip_lambda: bool,
-) -> CompiledExpr {
+) -> Result<CompiledExpr, SheafError> {
     let mut body = crate::autodiff::inline_function_calls(body, registry);
 
     for (param_name, index_map) in param_index_maps {
@@ -1582,5 +1646,6 @@ fn preprocess_body(
 
     body = resolve_static_constants(&body, constants, param_shapes, skip_lambda);
 
-    body
+    // Arity mismatch and other destructuring errors bubble up as SheafError::Compile.
+    crate::lowering::transforms::lower_tuples_and_destructuring(body, param_shapes)
 }
