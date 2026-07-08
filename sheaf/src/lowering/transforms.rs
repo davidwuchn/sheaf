@@ -1214,12 +1214,32 @@ fn kind_of(
     }
 }
 
-/// Extract the static length of a Vector or Tuple literal.
-/// Returns None for tensors (whose runtime length is dynamic).
-fn static_length(expr: &CompiledExpr) -> Option<usize> {
+/// Extract the statically-known length of a destructuring source.
+///
+/// Literal vectors/tuples resolve to their element count. A typed Symbol
+/// (e.g. a function parameter whose type was seeded into `symbol_types` by
+/// `classify_vectors` / `param_shapes`) resolves from its type: a 1-D tensor
+/// yields `shape[0]`, a tuple yields its arity. Returns `None` only when the
+/// length is genuinely unknown at compile time, so desugar never errors on a
+/// source whose length is in fact statically derivable.
+fn static_length_with_types(
+    expr: &CompiledExpr,
+    symbol_types: &HashMap<String, StableHLOType>,
+) -> Option<usize> {
     match expr {
         CompiledExpr::Vector(elems) => Some(elems.len()),
         CompiledExpr::Tuple(elems) => Some(elems.len()),
+        CompiledExpr::Symbol(s) => symbol_types.get(s).and_then(|ty| match ty {
+            StableHLOType::Tuple(tys, _) => Some(tys.len()),
+            other => {
+                let sh = other.shape();
+                if sh.len() == 1 && !sh.is_empty() {
+                    Some(sh[0] as usize)
+                } else {
+                    None
+                }
+            }
+        }),
         _ => None,
     }
 }
@@ -1283,17 +1303,18 @@ pub fn desugar_destructuring_lets(
                         
                         // Determine the kind of the value, using symbol_types as ground truth
                         let kind = kind_of(&value, symbol_types);
-                        let len = static_length(&value).ok_or_else(|| match kind {
-                            DestructKind::Tensor1D | DestructKind::Unknown => SheafError::Compile {
-                                message: format!(
-                                    "Destructuring arity mismatch: source is a tensor of dynamic length; cannot destructure statically"
-                                ),
+                        let len = static_length_with_types(&value, symbol_types).ok_or_else(|| {
+                            // Only genuinely unknown lengths reach here: the source is neither a
+                            // literal nor a typed parameter of known shape (e.g. a runtime scalar
+                            // or the result of an untyped function call). A 1-D tensor parameter
+                            // of known shape was already resolved via symbol_types above.
+                            SheafError::Compile {
+                                message: "Destructuring source has a dynamic length that cannot be \
+                                          resolved statically: it is neither a literal nor a typed \
+                                          parameter of known shape"
+                                    .to_string(),
                                 location: crate::core::error::SourceLocation::unknown(),
-                            },
-                            _ => SheafError::Compile {
-                                message: format!("Destructuring arity mismatch: source is of dynamic length"),
-                                location: crate::core::error::SourceLocation::unknown(),
-                            },
+                            }
                         })?;
                         
                         // Check arity match
@@ -1429,4 +1450,3 @@ pub fn desugar_destructuring_lets(
         other => Ok(other),
     }
 }
-
