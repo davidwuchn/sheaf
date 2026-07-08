@@ -166,19 +166,37 @@ impl CodeGenerator {
     fn gen_transpose(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
         let permutation: Vec<i64> = if args.len() == 2 {
-            if let CompiledExpr::Vector(perm_elems) = &args[1] {
-                perm_elems
+            match &args[1] {
+                CompiledExpr::Vector(perm_elems) => perm_elems
                     .iter()
                     .map(|e| match e {
-                        CompiledExpr::Integer(n) => *n,
-                        _ => panic!("Permutation element must be integer"),
+                        CompiledExpr::Integer(n) => Ok(*n),
+                        _ => Err(SheafError::Compile {
+                            message: "transpose: permutation elements must be integers".to_string(),
+                            location: crate::core::error::SourceLocation::unknown(),
+                        }),
                     })
-                    .collect()
-            } else {
-                return Err(SheafError::Compile {
+                    .collect::<SheafResult<_>>()?,
+                CompiledExpr::Quoted(val) => match val.as_ref() {
+                    SheafValue::Vector(elems, _) => elems
+                        .iter()
+                        .map(|e| match e {
+                            SheafValue::Integer(n, _) => Ok(*n),
+                            _ => Err(SheafError::Compile {
+                                message: "transpose: permutation elements must be integers".to_string(),
+                                location: crate::core::error::SourceLocation::unknown(),
+                            }),
+                        })
+                        .collect::<SheafResult<_>>()?,
+                    _ => return Err(SheafError::Compile {
+                        message: "transpose expects a vector permutation argument".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    }),
+                },
+                _ => return Err(SheafError::Compile {
                     message: "transpose expects a vector permutation argument".to_string(),
                     location: crate::core::error::SourceLocation::unknown(),
-                });
+                }),
             }
         } else {
             let ndim = operand_ty.shape().len().max(2) as i64;
