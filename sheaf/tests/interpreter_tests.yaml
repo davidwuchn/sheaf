@@ -780,3 +780,27 @@
     (def colors ["red" "green" "blue"])
     (first colors)
   expected: "red"
+
+- name: let-destructure
+  test: (let [[a b] [1 2]] (+ a b))
+  expected: "3"
+- name: let-destructure-fn
+  test: >
+    (defn pair [x] [(* 2.0 x) (+ x 1.0)])
+    (let [[a b] (pair 3.0)] (+ a b))
+  expected: "10.0"
+- name: let-destructure-tensor-param
+  test: ((fn [v] (let [[a b] v] (+ a b))) [1.0 2.0])
+  expected: "3.0"
+- name: let-destructure-arity-mismatch
+  test: ((fn [v] (let [[a b c] v] (+ a b c))) [1.0 2.0])
+  expected: "ERROR: runtime error: let destructuring: arity mismatch"
+- name: let-destructure-scan-carry
+  test: >
+    (let [[carry ys] (scan (fn [carry x] (let [[h c] carry] [[(+ h x) (+ h x)] c])) [0.0 0.0] '[1.0 2.0 3.0])]
+      [carry ys])
+  expected: "[[6. 6.], [0.0, 1.0, 3.0]]"
+- name: let-destructure-scan-simple
+  test: >
+    (scan (fn [carry x] (let [[h c] carry] [[(+ h x) c] h])) [0.0 0.0] '[1.0 2.0 3.0])
+  expected: "([6. 0.], [0.0, 1.0, 3.0])"
