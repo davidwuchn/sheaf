@@ -353,13 +353,16 @@ fn eval_vector(elements: &[CompiledExpr], env: &mut Env) -> Result<Value, SheafE
         return Ok(Value::tensor_f32(arr));
     }
 
-    // Rule 2 (literal stacking only): all tensors of the same inner shape -> stack.
-    // This preserves the interpréteur sémantique for `[[1 2] [3 4]]` literals.
-    // classify_vectors only converts to Tuple when the elements are *runtime*
-    // expressions (FunctionCall/Symbol referencing a tuple). Pure literal
-    // nested vectors stay as Vector -> still passéd through here.
+    // Rule 2 (literal stacking only): stack nested *literal* vectors such as
+    // `[[1 2] [3 4]]` into a 2-D tensor. Runtime vectors of tensors (e.g. `[a b]`
+    // where a, b are tensors) are NOT stacked: they become a List, matching
+    // classify_vectors which turns them into a Tuple (Decision D1: no implicit
+    // stacking of runtime tensors).
+    let all_literal_vectors = elements
+        .iter()
+        .all(|e| matches!(e, CompiledExpr::Vector(_)));
     let all_tensors = vals.iter().all(|v| matches!(v, Value::Tensor { .. }));
-    if all_tensors {
+    if all_tensors && all_literal_vectors {
         let shapes: Vec<_> = vals.iter().map(|v| match v {
             Value::Tensor { data, .. } => data.shape().to_vec(),
             _ => unreachable!(),
