@@ -804,3 +804,7 @@
   test: >
     (scan (fn [carry x] (let [[h c] carry] [[(+ h x) c] h])) [0.0 0.0] '[1.0 2.0 3.0])
   expected: "([6. 0.], [0.0, 1.0, 3.0])"
+- name: let-destructure-scan-ambiguous-tensor
+  test: >
+    (scan (fn [carry x] (let [[h c] carry] [(+ h x) c])) [0.0 0.0] '[1.0 2.0 3.0])
+  expected: "ERROR: <eval>:1: runtime error: scan: fn returned a 2-element tensor, but the carry is not a scalar; return a list/tuple [new-carry output] instead"

@@ -147,19 +147,33 @@ pub(super) fn eval_scan(args: &[Value], env: &mut Env) -> Result<Value, SheafErr
     let mut carry = args[1].clone();
     let mut outputs = Vec::new();
 
-    // Destructure [new_carry, output] from each step
+    // Destructure [new_carry, output] from each step.
+    // A 1-D length-2 tensor result is ambiguous: it can only mean
+    // [scalar_carry, scalar_output] when the incoming carry is itself a scalar.
+    // With a compound carry it almost always indicates a buggy step that
+    // forgot the output, so we reject it instead of silently collapsing the
+    // carry to a float (which used to corrupt the next iteration).
     let step = |func: &Value, carry: Value, x: Value, env: &mut Env|
         -> Result<(Value, Value), SheafError>
     {
+        let carry_is_scalar = matches!(&carry, Value::Float(_) | Value::Int(_));
         let result = call_function(func, &[carry, x], env)?;
         match &result {
             Value::List(items) | Value::Tuple(items) if items.len() == 2 => {
                 Ok((items[0].clone(), items[1].clone()))
             }
-            Value::Tensor { data, .. } if data.ndim() == 1 && data.shape()[0] == 2 => {
+            Value::Tensor { data, .. }
+                if data.ndim() == 1 && data.shape()[0] == 2 && carry_is_scalar =>
+            {
                 Ok((Value::Float(data[[0]]), Value::Float(data[[1]])))
             }
-            Value::Tensor { data, .. } if data.shape()[0] == 2 => {
+            Value::Tensor { data, .. } if data.ndim() == 1 && data.shape()[0] == 2 => {
+                Err(runtime_error(
+                    "scan: fn returned a 2-element tensor, but the carry is not a scalar; \
+                     return a list/tuple [new-carry output] instead",
+                ))
+            }
+            Value::Tensor { data, .. } if data.ndim() >= 2 && data.shape()[0] == 2 => {
                 let carry = data.index_axis(ndarray::Axis(0), 0).to_owned();
                 let output = data.index_axis(ndarray::Axis(0), 1).to_owned();
                 Ok((Value::tensor_f32(carry), Value::tensor_f32(output)))
