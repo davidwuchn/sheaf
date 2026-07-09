@@ -33,6 +33,42 @@
     [new-p new-m new-v new-t]))
 
 
+(defn adamw-step [params grads m v t lr b1 b2 eps wd]
+  ;; AdamW optimizer step with decoupled weight decay (Loshchilov & Hutter, 2019).
+  ;; Same moment estimates and bias correction as adam-step, but the weight
+  ;; decay term is decoupled from the gradient-based update:
+  ;;   p <- p - lr * (wd * p + m_hat / (sqrt(v_hat) + eps))
+  ;; Pass wd = 0.0 to recover plain Adam. Returns [new-params new-m new-v new-t]
+  ;; so it is a drop-in replacement for adam-step.
+  ;;
+  ;; Args:
+  ;;   params, grads, m, v, t, lr, b1, b2, eps: as in adam-step
+  ;;   wd: Weight decay coefficient (e.g. 0.1 for GPT-2 / nanoGPT)
+  (let [new-t (+ t 1)
+        new-m (tree-map (fn [md gd] (+ (* b1 md) (* (- 1 b1) gd))) m grads)
+        new-v (tree-map (fn [vd gd] (+ (* b2 vd) (* (- 1 b2) (* gd gd)))) v grads)
+        bias-correction-m (/ 1.0 (- 1 (** b1 new-t)))
+        bias-correction-v (/ 1.0 (- 1 (** b2 new-t)))
+        new-p (tree-map (fn [p mh vh]
+                          (- p (* lr (+ (* wd p)
+                                       (/ (* mh bias-correction-m)
+                                          (+ (sqrt (* vh bias-correction-v)) eps))))))
+                        params new-m new-v)]
+    [new-p new-m new-v new-t]))
+
+
+(defn sgd-momentum-step [params grads buf momentum lr]
+  ;; SGD with momentum (heavy-ball / Polyak).
+  ;;   buf_t   = momentum * buf_{t-1} + grad
+  ;;   params  = params - lr * buf_t
+  ;; Initialize buf with (tree-map-zeros params). Nesterov is not included;
+  ;; for that variant modify the update to use (grad + momentum * buf_t).
+  ;; Returns [new-params new-buf].
+  (let [new-buf (tree-map (fn [b g] (+ (* momentum b) g)) buf grads)
+        new-p (tree-map (fn [p b] (- p (* lr b))) params new-buf)]
+    [new-p new-buf]))
+
+
 (defn global-norm [pytree]
   ;; Compute global L2 norm of all leaves in a pytree
   (sqrt (tree-reduce + (tree-map (fn [g] (sum (** g 2))) pytree) 0.0)))

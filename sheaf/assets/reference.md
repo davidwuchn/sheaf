@@ -2638,6 +2638,36 @@ Adam optimizer step. Maintains first moment `m` (mean) and second moment `v` (va
 ; => [{:w 0.999}, {:w 0.0001}, {:w 0.00001}]
 ```
 
+#### adamw-step
+
+**Type:** function  
+**Signature:** `(adamw-step params grads m v t lr beta1 beta2 eps weight-decay)`
+AdamW optimizer step with decoupled weight decay (Loshchilov & Hutter, 2019). Same moment estimates and bias correction as `adam-step`, but the weight decay is decoupled from the gradient-based update: `p <- p - lr * (wd * p + m_hat / (sqrt(v_hat) + eps))`. Pass `weight-decay = 0.0` to recover plain Adam. Returns `[new-params, new-m, new-v, new-t]`, so it is a drop-in replacement for `adam-step`. This is the default optimizer for Transformer training (nanoGPT uses `weight-decay = 0.1`).
+
+```sheaf
+(let [p {:w 1.0} g {:w 0.1}
+      m {:w 0.0} v {:w 0.0}
+      t 0]
+  (let [[p1 m1 v1 t1] (adamw-step p g m v t 0.001 0.9 0.999 1e-8 0.01)]
+    (get p1 :w)))
+
+; => 0.99899
+```
+
+#### sgd-momentum-step
+
+**Type:** function  
+**Signature:** `(sgd-momentum-step params grads buf momentum lr)`
+SGD with momentum (heavy-ball / Polyak). Maintains a velocity buffer `buf`: `buf_t = momentum * buf_{t-1} + grad`, then `params = params - lr * buf_t`. Initialize `buf` with `(tree-map-zeros params)`. Returns `[new-params, new-buf]`. For Nesterov momentum, replace the update with `(grad + momentum * buf_t)`.
+
+```sheaf
+(let [p {:w 1.0} g {:w 0.1} buf {:w 0.1}]   ; buf carries momentum from a prior step
+  (let [[p1 b1] (sgd-momentum-step p g buf 0.9 0.01)]
+    (get b1 :w)))
+
+; => 0.19   ;; 0.9 * 0.1 + 0.1 = 0.19
+```
+
 #### global-norm
 
 **Type:** function  
