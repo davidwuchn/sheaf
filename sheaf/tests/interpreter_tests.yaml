@@ -671,6 +671,9 @@
 - name: grad-power-float
   test: (let [f (fn [x] (sum (** x 2.0))) [v g] ((value-and-grad f) [3.0])] g)
   expected: "[6.]"
+- name: random-uniform-grad
+  test: (let [f (fn [x] (sum (where (> (random-uniform (random-key 0) (shape x)) -1.0) x 0.0))) [v g] ((value-and-grad f) [5.0 7.0])] [v g])
+  expected: "[12.0, [1. 1.]]"
 
 # VAG on dict params (MLP-style)
 - name: vag-mlp-loss

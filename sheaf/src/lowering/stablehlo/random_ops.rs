@@ -269,6 +269,150 @@ impl StableHLOEmitter {
         }
     }
 
+    /// Emit random-uniform tensor: (random-uniform key [M N])
+    /// Generates values in [0, 1) using the same i32 hash as random-normal.
+    /// Key is tensor<2xf32> (opaque, stores i32 via bitcast).
+    pub fn emit_random_uniform(
+        &mut self,
+        key: &Register,
+        key_ty: &StableHLOType,
+        shape: &[i64],
+    ) -> (Register, StableHLOType) {
+        let total: i64 = shape.iter().product();
+        let n_i32_ty = StableHLOType::i32_tensor(vec![total]);
+        let n_f32_ty = StableHLOType::f32_tensor(vec![total]);
+        let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+
+        // Bitcast key to i32, extract lo and hi
+        let i32_2_ty = StableHLOType::i32_tensor(vec![2]);
+        let (key_i32, _) = self.emit_bitcast_convert(key, key_ty, "i32");
+
+        let lo_1d = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.slice {} [0:1:1] : ({}) -> tensor<1xi32>",
+            lo_1d.to_mlir(), key_i32.to_mlir(), i32_2_ty.to_mlir(),
+        ));
+        let lo = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.reshape {} : (tensor<1xi32>) -> {}",
+            lo.to_mlir(), lo_1d.to_mlir(), scalar_i32.to_mlir(),
+        ));
+        let hi_1d = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.slice {} [1:2:1] : ({}) -> tensor<1xi32>",
+            hi_1d.to_mlir(), key_i32.to_mlir(), i32_2_ty.to_mlir(),
+        ));
+        let hi = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.reshape {} : (tensor<1xi32>) -> {}",
+            hi.to_mlir(), hi_1d.to_mlir(), scalar_i32.to_mlir(),
+        ));
+
+        // Create i32 iota [0, 1, 2, ..., N-1]
+        let iota = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.iota dim = 0 : {}",
+            iota.to_mlir(), n_i32_ty.to_mlir(),
+        ));
+
+        // Broadcast lo and hi to tensor<N x i32>
+        let lo_bc = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.broadcast_in_dim {}, dims = [] : ({}) -> {}",
+            lo_bc.to_mlir(), lo.to_mlir(), scalar_i32.to_mlir(), n_i32_ty.to_mlir(),
+        ));
+        let hi_bc = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.broadcast_in_dim {}, dims = [] : ({}) -> {}",
+            hi_bc.to_mlir(), hi.to_mlir(), scalar_i32.to_mlir(), n_i32_ty.to_mlir(),
+        ));
+
+        // Hash round 1: x = (iota + lo) * c1 + hi
+        let c1 = self.emit_constant_i32(1540483477); // murmurhash constant
+        let c1_bc = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.broadcast_in_dim {}, dims = [] : ({}) -> {}",
+            c1_bc.to_mlir(), c1.to_mlir(), scalar_i32.to_mlir(), n_i32_ty.to_mlir(),
+        ));
+        let x0 = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.add {}, {} : {}",
+            x0.to_mlir(), iota.to_mlir(), lo_bc.to_mlir(), n_i32_ty.to_mlir(),
+        ));
+        let x1 = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.multiply {}, {} : {}",
+            x1.to_mlir(), x0.to_mlir(), c1_bc.to_mlir(), n_i32_ty.to_mlir(),
+        ));
+        let x2 = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.add {}, {} : {}",
+            x2.to_mlir(), x1.to_mlir(), hi_bc.to_mlir(), n_i32_ty.to_mlir(),
+        ));
+
+        // Hash round 2: x = x * c2 + c3
+        let c2 = self.emit_constant_i32(668265263); // golden ratio * 2^30
+        let c2_bc = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.broadcast_in_dim {}, dims = [] : ({}) -> {}",
+            c2_bc.to_mlir(), c2.to_mlir(), scalar_i32.to_mlir(), n_i32_ty.to_mlir(),
+        ));
+        let c3 = self.emit_constant_i32(1013904223);
+        let c3_bc = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.broadcast_in_dim {}, dims = [] : ({}) -> {}",
+            c3_bc.to_mlir(), c3.to_mlir(), scalar_i32.to_mlir(), n_i32_ty.to_mlir(),
+        ));
+        let x3 = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.multiply {}, {} : {}",
+            x3.to_mlir(), x2.to_mlir(), c2_bc.to_mlir(), n_i32_ty.to_mlir(),
+        ));
+        let x4 = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.add {}, {} : {}",
+            x4.to_mlir(), x3.to_mlir(), c3_bc.to_mlir(), n_i32_ty.to_mlir(),
+        ));
+
+        // Convert to uniform [0,1): abs(x) as f32 / 2^31
+        let abs_x = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.abs {} : {}",
+            abs_x.to_mlir(), x4.to_mlir(), n_i32_ty.to_mlir(),
+        ));
+        let float_x = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.convert {} : ({}) -> {}",
+            float_x.to_mlir(), abs_x.to_mlir(), n_i32_ty.to_mlir(), n_f32_ty.to_mlir(),
+        ));
+        let max_int = self.emit_constant_f32(2147483648.0);
+        let max_int_bc = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.broadcast_in_dim {}, dims = [] : ({}) -> {}",
+            max_int_bc.to_mlir(), max_int.to_mlir(),
+            StableHLOType::ScalarF32.to_mlir(), n_f32_ty.to_mlir(),
+        ));
+        let uniform = self.fresh_register();
+        self.body.push(format!(
+            "    {} = stablehlo.divide {}, {} : {}",
+            uniform.to_mlir(), float_x.to_mlir(), max_int_bc.to_mlir(), n_f32_ty.to_mlir(),
+        ));
+
+        // Reshape to target shape
+        let result_ty = StableHLOType::f32_tensor(shape.to_vec());
+        if shape.len() == 1 && shape[0] == total {
+            (uniform, result_ty)
+        } else {
+            let result = self.fresh_register();
+            self.body.push(format!(
+                "    {} = stablehlo.reshape {} : ({}) -> {}",
+                result.to_mlir(), uniform.to_mlir(),
+                n_f32_ty.to_mlir(), result_ty.to_mlir(),
+            ));
+            (result, result_ty)
+        }
+    }
+
     /// Emit random-randint: (random-randint key [M N] low high)
     /// Generates integer values in [low, high) stored as f32.
     /// Uses i32 hash to produce uniform values, then scales to range.

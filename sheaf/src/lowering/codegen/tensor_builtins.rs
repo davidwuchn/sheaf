@@ -40,6 +40,7 @@ impl CodeGenerator {
             "append-and-roll" if args.len() == 2 => Some(self.gen_append_and_roll(args)),
             "random-key" if args.len() == 1 => Some(self.gen_random_key(args)),
             "random-normal" if args.len() == 2 => Some(self.gen_random_normal(args)),
+            "random-uniform" if args.len() == 2 => Some(self.gen_random_uniform(args)),
             "random-randint" if args.len() == 4 => Some(self.gen_random_randint(args)),
             "random-split" if args.len() == 1 || args.len() == 2 =>
                 Some(self.gen_random_split(args)),
@@ -541,6 +542,20 @@ impl CodeGenerator {
         } else {
             Err(SheafError::Compile {
                 message: "random-normal expects a vector shape argument".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            })
+        }
+    }
+
+    fn gen_random_uniform(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
+        if let CompiledExpr::Vector(shape_elems) = &args[1] {
+            let shape = self.parse_shape_vec(shape_elems)?;
+            let (key_reg, key_ty) = self.generate(&args[0])?;
+            let (reg, ty) = self.emitter.emit_random_uniform(&key_reg, &key_ty, &shape);
+            Ok((reg, ty))
+        } else {
+            Err(SheafError::Compile {
+                message: "random-uniform expects a vector shape argument".to_string(),
                 location: crate::core::error::SourceLocation::unknown(),
             })
         }
