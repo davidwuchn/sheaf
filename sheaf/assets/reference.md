@@ -2723,6 +2723,65 @@ Clips gradients by global norm to prevent gradient explosion. If global norm > m
 ; => {:w [1.2 1.6] :b 0.0}  (scaled by 2.0/5.0)
 ```
 
+#### linear-warmup
+
+**Type:** function  
+**Signature:** `(linear-warmup lr step warmup-steps)`
+
+Linearly ramps the learning rate from 0 to `lr` over `warmup-steps` training steps, then holds it constant. `step` is the 0-based step count. Useful at the start of training to avoid instability from large initial gradients.
+
+```sheaf
+(linear-warmup 0.1 5 10)   ; ramping, halfway   -> 0.05
+(linear-warmup 0.1 20 10)  ; past warmup        -> 0.1
+```
+
+#### inverse-sqrt-warmup
+
+**Type:** function  
+**Signature:** `(inverse-sqrt-warmup lr step warmup-steps)`
+
+The Noam schedule from "Attention Is All You Need": `lr * warmup^(-1/2) * min(step^(-1/2), step * warmup^(-3/2))`. Rises linearly during warmup, peaks at `step = warmup-steps` with value `lr / warmup-steps`, then decays as `1/sqrt(step)`. Note that `lr` is the overall scale, not the peak value. The standard Transformer schedule when cosine decay is unavailable.
+
+```sheaf
+(inverse-sqrt-warmup 1.0 4 4)        ; at peak (lr / warmup) -> 0.25
+(inverse-sqrt-warmup 1.0 10000 100)  ; deep in decay        -> 0.001
+```
+
+#### exponential-decay
+
+**Type:** function  
+**Signature:** `(exponential-decay lr step decay-steps decay-rate)`
+
+Multiplies `lr` by `decay-rate ^ (step / decay-steps)`. Use `decay-rate < 1` to decay (e.g. 0.96); `1.0` leaves `lr` constant. At `step = decay-steps` the learning rate has been multiplied by `decay-rate` exactly once.
+
+```sheaf
+(exponential-decay 0.1 100 1000 0.96)  ; => 0.09959262
+```
+
+#### step-decay
+
+**Type:** function  
+**Signature:** `(step-decay lr step step-size decay-rate)`
+
+Multiplies `lr` by `decay-rate` every `step-size` steps (floor division). The learning rate is constant between drops.
+
+```sheaf
+(step-decay 0.1 25 10 0.5)  ; 25 // 10 = 2 drops -> 0.1 * 0.5^2 = 0.025
+```
+
+#### cosine-decay
+
+**Type:** function  
+**Signature:** `(cosine-decay lr step warmup-steps total-steps)`
+
+Linear warmup over `warmup-steps`, then cosine decay from `lr` down to 0 over the remaining steps (reaches 0 at `total-steps`). `step` is 0-based. The standard schedule for GPT-2 / nanoGPT training.
+
+```sheaf
+(cosine-decay 0.1 10 10 100)   ; at peak (end of warmup) -> 0.1
+(cosine-decay 0.1 55 10 100)   ; midway through decay    -> 0.05
+(cosine-decay 0.1 100 10 100)  ; at total-steps           -> 0.0
+```
+
 ---
 
 ### Macros (macros.shf)

@@ -80,3 +80,54 @@
   (let [g-norm (global-norm pytree)
         clip-factor (minimum 1.0 (/ max-norm (+ g-norm 1e-8)))]
     (tree-map (fn [g] (* g clip-factor)) pytree)))
+
+
+;; Learning-rate schedules
+;;
+;; Pure scalar functions of the current step count (0-based). Call them in the
+;; training loop to compute the learning rate passed to the optimizer step.
+;; Cosine schedules are not provided (no trig builtins); use inverse-sqrt-warmup
+;; or exponential-decay for Transformer-style decay.
+
+(defn linear-warmup [lr step warmup-steps]
+  ;; Linearly ramps lr from 0 to `lr` over `warmup-steps`, then holds constant.
+  ;;   step 0            -> 0
+  ;;   step = warmup     -> lr
+  ;;   step > warmup     -> lr
+  (let [ratio (/ step warmup-steps)]
+    (* lr (minimum 1.0 ratio))))
+
+(defn inverse-sqrt-warmup [lr step warmup-steps]
+  ;; Noam / "Attention is all you need" schedule.
+  ;;   lr * warmup^(-1/2) * min(step^(-1/2), step * warmup^(-3/2))
+  ;; Rises linearly during warmup, peaks at step = warmup-steps (value
+  ;; lr / warmup-steps), then decays as 1/sqrt(step). `lr` is the scale.
+  (let [s (float step)
+        w (float warmup-steps)]
+    (* lr
+       (** w -0.5)
+       (minimum (** s -0.5) (* s (** w -1.5))))))
+
+(defn exponential-decay [lr step decay-steps decay-rate]
+  ;; lr * decay_rate^(step / decay_steps). Use decay-rate < 1 to decay; 1.0 is
+  ;; constant. At step = decay-steps the lr is multiplied by decay-rate once.
+  (* lr (** decay-rate (/ step decay-steps))))
+
+(defn step-decay [lr step step-size decay-rate]
+  ;; Multiplies lr by decay-rate every step-size steps (floor division).
+  ;;   step in [0, step-size)             -> lr
+  ;;   step in [step-size, 2*step-size)   -> lr * decay-rate
+  (* lr (** decay-rate (// step step-size))))
+
+(defn cosine-decay [lr step warmup-steps total-steps]
+  ;; Linear warmup over `warmup-steps`, then cosine decay from `lr` down to 0
+  ;; over the remaining steps (reaches 0 at `total-steps`). step is 0-based.
+  ;; The standard schedule for GPT-2 / nanoGPT training.
+  (let [s        (float step)
+        warmup   (float warmup-steps)
+        total    (float total-steps)
+        pi       3.1415927
+        progress (minimum 1.0 (/ (- s warmup) (- total warmup)))
+        warmup-lr (* lr (/ s warmup))
+        decay-lr  (* lr (* 0.5 (+ 1.0 (cos (* pi progress)))))]
+    (where (< s warmup) warmup-lr decay-lr)))

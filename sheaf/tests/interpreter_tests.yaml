@@ -632,6 +632,36 @@
 - name: sgd-momentum-accum
   test: (let [p {:w 1.0} g {:w 0.1} buf {:w 0.1} [p1 b1] (sgd-momentum-step p g buf 0.9 0.01)] (get b1 :w))
   expected: "0.19"
+- name: linear-warmup
+  test: (linear-warmup 0.1 5 10)
+  expected: "0.05"
+- name: linear-warmup-saturated
+  test: (linear-warmup 0.1 20 10)
+  expected: "0.1"
+- name: inverse-sqrt-warmup-peak
+  test: (inverse-sqrt-warmup 1.0 4 4)
+  expected: "0.25"
+- name: inverse-sqrt-warmup-decay
+  test: (inverse-sqrt-warmup 1.0 10000 100)
+  expected: "0.001"
+- name: exponential-decay
+  test: (exponential-decay 0.1 100 1000 0.96)
+  expected: "0.09959262"
+- name: step-decay
+  test: (step-decay 0.1 25 10 0.5)
+  expected: "0.025"
+- name: cosine-decay-warmup
+  test: (cosine-decay 0.1 5 10 100)
+  expected: "0.05"
+- name: cosine-decay-peak
+  test: (cosine-decay 0.1 10 10 100)
+  expected: "0.1"
+- name: cosine-decay-mid
+  test: (cosine-decay 0.1 55 10 100)
+  expected: "0.05"
+- name: cosine-decay-end
+  test: (cosine-decay 0.1 100 10 100)
+  expected: "0.0"
 - name: argmax
   test: (argmax [3 1 4 1 5])
   expected: "4"
