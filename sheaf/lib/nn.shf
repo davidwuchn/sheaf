@@ -34,6 +34,17 @@
     (- s (log (sum (exp s) :axis -1 :keepdims)))))
 
 
+;; Regularization
+
+(defn dropout [x key p]
+  ;; Inverted dropout. With probability p each element is zeroed; the rest are
+  ;; scaled by 1/(1-p) so the expected value is preserved and no rescaling is
+  ;; needed at inference (simply omit the call). Pass a freshly split PRNG key
+  ;; on every call to keep draws independent across steps. Requires p in [0, 1).
+  (let [mask (> (random-uniform key (shape x)) p)]
+    (where mask (/ x (- 1.0 p)) 0.0)))
+
+
 ;; Loss functions
 
 (defn cross-entropy-loss [logits targets]

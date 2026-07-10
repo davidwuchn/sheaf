@@ -2499,6 +2499,19 @@ Linear transformation: `y = x @ w + b`. Applies a fully-connected layer to input
 ; => [1.1 2.7]
 ```
 
+#### dropout
+
+**Type:** function  
+**Signature:** `(dropout x key p)`
+
+Inverted dropout for regularization. With probability `p`, each element of `x` is zeroed; the remaining elements are scaled by `1/(1-p)` so the expected value is preserved. No rescaling is needed at inference: simply omit the call. Pass a freshly split PRNG `key` on each invocation to keep the random draws independent across training steps. Requires `p` in `[0, 1)`. Fully differentiable, so it can appear directly inside `value-and-grad`.
+
+```sheaf
+;; p = 0 is the identity (keeps everything); the call is then a no-op.
+(dropout [1.0 2.0 3.0] (random-key 0) 0.0)
+; => [1. 2. 3.]
+```
+
 #### cross-entropy-loss
 
 **Type:** function  

@@ -229,6 +229,21 @@
 - name: log-softmax
   test: (log-softmax [1.0 2.0])
   expected: "[-1.3132616 -0.31326166]"
+- name: dropout-identity
+  test: (dropout [1.0 2.0 3.0] (random-key 0) 0.0)
+  expected: "[1. 2. 3.]"
+- name: dropout-shape
+  test: (shape (dropout (ones '[4 4]) (random-key 1) 0.5))
+  expected: "[4. 4.]"
+- name: dropout-scales-kept
+  test: (max (dropout (ones '[50]) (random-key 0) 0.5))
+  expected: "2.0"
+- name: dropout-drops
+  test: (min (dropout (ones '[50]) (random-key 0) 0.5))
+  expected: "0.0"
+- name: dropout-grad
+  test: (let [f (fn [x] (sum (dropout x (random-key 0) 0.0))) [v g] ((value-and-grad f) [3.0 4.0])] g)
+  expected: "[1. 1.]"
 - name: sum
   test: (sum [1 2 3])
   expected: "6.0"
