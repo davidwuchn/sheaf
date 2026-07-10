@@ -91,6 +91,24 @@
 - name: sqrt
   test: (sqrt [1.0 4.0 9.0])
   expected: "[1. 2. 3.]"
+- name: sin
+  test: (sin 0.0)
+  expected: "0.0"
+- name: sin
+  test: (sin 1.0)
+  expected: "0.84147096"
+- name: cos
+  test: (cos 0.0)
+  expected: "1.0"
+- name: cos
+  test: (cos 1.0)
+  expected: "0.5403023"
+- name: tan
+  test: (tan 1.0)
+  expected: "1.5574077"
+- name: sin-grad
+  test: (let [f (fn [x] (sum (sin x))) [v g] ((value-and-grad f) [2.0])] (sum g))
+  expected: "-0.41614679"
 - name: round
   test: (round 3.7)
   expected: "4.0"

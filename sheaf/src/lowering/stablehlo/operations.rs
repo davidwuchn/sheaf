@@ -128,6 +128,22 @@ impl StableHLOEmitter {
                     ty.to_mlir()
                 ));
             }
+            "sin" => {
+                self.body.push(format!(
+                    "    {} = stablehlo.sine {} : {}",
+                    reg.to_mlir(),
+                    operand.to_mlir(),
+                    ty.to_mlir()
+                ));
+            }
+            "cos" => {
+                self.body.push(format!(
+                    "    {} = stablehlo.cosine {} : {}",
+                    reg.to_mlir(),
+                    operand.to_mlir(),
+                    ty.to_mlir()
+                ));
+            }
             _ => panic!("Unsupported unary op: {}", op),
         }
 

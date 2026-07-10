@@ -177,7 +177,7 @@ pub fn reverse_grad(
         .filter_map(|(name, expr)| {
             match expr {
                 CompiledExpr::FunctionCall { name: fn_name, .. }
-                    if matches!(fn_name.as_str(), "mean" | "softmax" | "tanh" | "sigmoid" | "exp" | "log" | "sqrt") =>
+                    if matches!(fn_name.as_str(), "mean" | "softmax" | "tanh" | "sigmoid" | "exp" | "log" | "sqrt" | "sin" | "cos" | "tan") =>
                 {
                     Some((format!("{:?}", expr), name.clone()))
                 }
@@ -733,6 +733,34 @@ fn distribute_fn_adjoint_named(
             };
             let t2 = emit_binding(bindings, call("*", vec![sym(&t), sym(&t)]));
             let local = emit_binding(bindings, call("-", vec![float(1.0), sym(&t2)]));
+            let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&local)]));
+            acc_arg(&args[0], sym(&contrib), adj_names, bindings);
+        }
+
+        "sin" => {
+            // d/dx sin(x) = cos(x)
+            let c = emit_binding(bindings, call("cos", vec![args[0].clone()]));
+            let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&c)]));
+            acc_arg(&args[0], sym(&contrib), adj_names, bindings);
+        }
+
+        "cos" => {
+            // d/dx cos(x) = -sin(x)
+            let s = emit_binding(bindings, call("sin", vec![args[0].clone()]));
+            let neg = emit_binding(bindings, call("*", vec![float(-1.0), sym(&s)]));
+            let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&neg)]));
+            acc_arg(&args[0], sym(&contrib), adj_names, bindings);
+        }
+
+        "tan" => {
+            // d/dx tan(x) = 1 + tan(x)^2
+            let fwd_key = format!("{:?}", call("tan", vec![args[0].clone()]));
+            let t = match fwd_lookup.get(&fwd_key) {
+                Some(fwd_sym) => fwd_sym.clone(),
+                None => emit_binding(bindings, call("tan", vec![args[0].clone()])),
+            };
+            let t2 = emit_binding(bindings, call("*", vec![sym(&t), sym(&t)]));
+            let local = emit_binding(bindings, call("+", vec![float(1.0), sym(&t2)]));
             let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&local)]));
             acc_arg(&args[0], sym(&contrib), adj_names, bindings);
         }

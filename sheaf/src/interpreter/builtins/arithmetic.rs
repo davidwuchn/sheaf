@@ -18,6 +18,9 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("round", builtin_round);
     env.set_builtin("ceil", builtin_ceil);
     env.set_builtin("floor", builtin_floor);
+    env.set_builtin("sin", builtin_sin);
+    env.set_builtin("cos", builtin_cos);
+    env.set_builtin("tan", builtin_tan);
     env.set_builtin("@", builtin_matmul);
     env.set_builtin("@-grad-lhs", builtin_matmul_grad_lhs);
     env.set_builtin("@-grad-rhs", builtin_matmul_grad_rhs);
@@ -148,6 +151,18 @@ fn builtin_ceil(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 
 fn builtin_floor(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     unary_op(args, f32::floor)
+}
+
+fn builtin_sin(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    unary_op(args, f32::sin)
+}
+
+fn builtin_cos(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    unary_op(args, f32::cos)
+}
+
+fn builtin_tan(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    unary_op(args, f32::tan)
 }
 
 fn check_matmul_shapes(a: &ArrayD<f32>, b: &ArrayD<f32>) -> Result<(), crate::core::error::SheafError> {

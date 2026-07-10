@@ -35,8 +35,11 @@ impl CodeGenerator {
         else if name == "-" && args.len() == 1 {
             Some(self.gen_math_unary("neg", args))
         }
-        else if matches!(name, "sqrt" | "exp" | "log" | "abs" | "neg") && args.len() == 1 {
+        else if matches!(name, "sqrt" | "exp" | "log" | "abs" | "neg" | "sin" | "cos") && args.len() == 1 {
             Some(self.gen_math_unary(name, args))
+        }
+        else if name == "tan" && args.len() == 1 {
+            Some(self.gen_tan(args))
         }
         else if name == "not" && args.len() == 1 {
             Some(self.gen_not(args))
@@ -127,6 +130,15 @@ impl CodeGenerator {
     ) -> SheafResult<(Register, StableHLOType)> {
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
         let result_reg = self.emitter.emit_unary(name, &operand_reg, &operand_ty);
+        Ok((result_reg, operand_ty))
+    }
+
+    fn gen_tan(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
+        // stablehlo.tangent is not supported by IREE 3.10, so emit tan = sin / cos.
+        let (operand_reg, operand_ty) = self.generate(&args[0])?;
+        let sin_reg = self.emitter.emit_unary("sin", &operand_reg, &operand_ty);
+        let cos_reg = self.emitter.emit_unary("cos", &operand_reg, &operand_ty);
+        let (result_reg, _) = self.emitter.emit_binop("/", &sin_reg, &cos_reg, &operand_ty, &operand_ty);
         Ok((result_reg, operand_ty))
     }
 

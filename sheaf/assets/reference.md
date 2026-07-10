@@ -179,6 +179,22 @@ Computes the element-wise non-negative square root of the input. For real-valued
 
 ---
 
+### sin, cos, tan
+
+**Type:** function  
+**Signature:** `(sin x)`, `(cos x)`, `(tan x)`
+
+Compute the element-wise trigonometric functions (sine, cosine, tangent), with angles in radians. Fully differentiable: `sin'(x) = cos(x)`, `cos'(x) = -sin(x)`, `tan'(x) = 1 + tan(x)^2`. Required for Rotary Position Embeddings (RoPE) and sinusoidal position encodings, as well as cosine learning-rate schedules.
+
+```sheaf
+(sin 1.0)            ; => 0.84147096
+(cos 1.0)            ; => 0.5403023
+(tan 1.0)            ; => 1.5574077
+(sin [0.0 1.0 2.0])  ; => [0. 0.84147096 0.9092974]
+```
+
+---
+
 ### round
 
 **Type:** function
