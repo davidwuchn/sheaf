@@ -105,6 +105,7 @@ pub fn trace_function_signature(
         return_type,
         return_dict_keys,
         arg_type_layouts: vec![],
+        captured_scalars: std::collections::HashMap::new(),
     })
 }
 

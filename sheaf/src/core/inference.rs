@@ -28,6 +28,10 @@ pub struct FunctionSignature {
     /// Layouts of dict/tuple arguments, keyed by their StableHLO type.
     /// Used to reconstruct nested dicts from flat tuples in JIT return values.
     pub arg_type_layouts: Vec<(StableHLOType, ValueLayout)>,
+    /// Scalar leaves that were baked into this compiled VMFB as literal
+    /// constants, captured from the dict argument(s) at first-compile time.
+    /// Used only for staleness warnings (Rec 1) — does not affect dispatch.
+    pub captured_scalars: std::collections::HashMap<(String, Vec<usize>), f64>,
 }
 
 impl ValueLayout {
@@ -183,6 +187,7 @@ pub fn infer_function_signature_with_known(
         return_type,
         return_dict_keys,
         arg_type_layouts: vec![],
+        captured_scalars: std::collections::HashMap::new(),
     })
 }
 
