@@ -1254,6 +1254,168 @@ fn static_length_with_types(
 ///       (let [c (get tmp 2)]
 ///         <body>))))
 /// ```
+
+/// Shape-bearing operations and the argument positions that require compile-time integers.
+const SHAPE_BEARING_OPS: &[(&str, &[usize])] = &[
+    ("reshape", &[1]),              // dimensions
+    ("slice", &[1, 2]),             // start_indices, limit_indices
+    ("dynamic-slice", &[1, 2]),     // start_indices, limit_indices
+    ("one-hot", &[1]),              // num_classes
+    ("random-randint", &[2, 3]),    // low, high
+    ("random-split", &[1]),         // N
+    ("repeat", &[1]),               // count
+];
+
+/// Resolve `e` to a `(param, indices)` pair by following `Let`-bound symbol
+/// aliases. Returns `Some` only if the expression (possibly through a chain
+/// of symbol references) bottoms out at a `GetTupleElement`. This lets the
+/// classifier recognize the canonical pattern
+/// `(let [n (get cfg :n)] (reshape x [n]))`, where the GTE lives in a binding
+/// and only a `Symbol` appears at the shape-bearing position.
+fn resolve_to_gte<'a>(
+    e: &'a crate::core::expr::CompiledExpr,
+    locals: &'a HashMap<String, crate::core::expr::CompiledExpr>,
+) -> Option<(&'a str, &'a Vec<usize>)> {
+    use crate::core::expr::CompiledExpr;
+    match e {
+        CompiledExpr::GetTupleElement { param, indices } => Some((param, indices)),
+        CompiledExpr::Symbol(name) => {
+            let resolved = locals.get(name)?;
+            resolve_to_gte(resolved, locals)
+        }
+        _ => None,
+    }
+}
+
+/// Collect all `GetTupleElement { param, indices }` whose value flows into a
+/// shape-bearing argument position anywhere in `body`, resolving one or more
+/// levels of `Let`-bound symbol aliases. Decides which dict-leaf scalars must
+/// be baked as compile-time constants (shape dims require static integers)
+/// versus which may stay as live runtime arguments.
+pub(crate) fn collect_shape_gtes(
+    body: &crate::core::expr::CompiledExpr,
+) -> std::collections::HashSet<(String, Vec<usize>)> {
+    use crate::core::expr::{BindingPattern, CompiledExpr};
+    let mut result = std::collections::HashSet::new();
+    let root_locals: HashMap<String, CompiledExpr> = HashMap::new();
+
+    fn visit(
+        e: &CompiledExpr,
+        shape_gtes: &mut std::collections::HashSet<(String, Vec<usize>)>,
+        locals: &HashMap<String, CompiledExpr>,
+    ) {
+        if let CompiledExpr::FunctionCall { name, args, .. } = e {
+            if let Some(pos_list) = SHAPE_BEARING_OPS
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, p)| *p)
+            {
+                for &pos in pos_list {
+                    if pos < args.len() {
+                        // Direct GTE, or a Symbol aliased to one via Let.
+                        if let Some((param, indices)) = resolve_to_gte(&args[pos], locals) {
+                            shape_gtes.insert((param.to_string(), indices.clone()));
+                        }
+                        // Inside Vector/Tuple literals at shape positions, e.g.
+                        // (reshape x [n n]) where n is a let-bound GTE.
+                        if let CompiledExpr::Vector(elems) | CompiledExpr::Tuple(elems) = &args[pos] {
+                            for elem in elems {
+                                if let Some((param, indices)) = resolve_to_gte(elem, locals) {
+                                    shape_gtes.insert((param.to_string(), indices.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Recurse into children, threading locals through Let scopes.
+        match e {
+            CompiledExpr::FunctionCall { args, .. } => {
+                for a in args { visit(a, shape_gtes, locals); }
+            }
+            CompiledExpr::Let { bindings, body: b } => {
+                // Sequential let (Clojure-style): each binding can see prior
+                // bindings in the same let. Walk them in order, growing the
+                // scope so a later RHS that references an earlier name (e.g.
+                // (let [n (get cfg :n) r (reshape x [n n])] ...)) resolves.
+                let mut scope = locals.clone();
+                for (pat, rhs) in bindings {
+                    visit(rhs, shape_gtes, &scope);
+                    if let BindingPattern::Simple(name) = pat {
+                        scope.insert(name.clone(), rhs.clone());
+                    }
+                }
+                visit(b, shape_gtes, &scope);
+            }
+            CompiledExpr::Vector(elems) | CompiledExpr::Tuple(elems) => {
+                for e in elems { visit(e, shape_gtes, locals); }
+            }
+            CompiledExpr::Dict(pairs) => {
+                for (_, v) in pairs { visit(v, shape_gtes, locals); }
+            }
+            CompiledExpr::Lambda { body: b, .. } => { visit(b, shape_gtes, locals); }
+            CompiledExpr::LambdaCall { callee, args } => {
+                visit(callee, shape_gtes, locals);
+                for a in args { visit(a, shape_gtes, locals); }
+            }
+            CompiledExpr::If { condition: c, then_branch: t, else_branch: e } => {
+                visit(c, shape_gtes, locals);
+                visit(t, shape_gtes, locals);
+                if let Some(e) = e { visit(e, shape_gtes, locals); }
+            }
+            CompiledExpr::Do(stmts) => { for s in stmts { visit(s, shape_gtes, locals); } }
+            CompiledExpr::Repeat { count: c, acc_init: a, body: b, .. } => {
+                visit(c, shape_gtes, locals);
+                visit(a, shape_gtes, locals);
+                visit(b, shape_gtes, locals);
+            }
+            CompiledExpr::While { condition: c, acc_init: a, body: b, .. } => {
+                visit(c, shape_gtes, locals);
+                visit(a, shape_gtes, locals);
+                visit(b, shape_gtes, locals);
+            }
+            CompiledExpr::Guard { check: _, expr: e } => { visit(e, shape_gtes, locals); }
+            CompiledExpr::Def { value: v, .. } => { visit(v, shape_gtes, locals); }
+            CompiledExpr::ValueAndGrad { shape_config, .. } => {
+                // VAG lambdas are preprocessed separately with their own constant scope.
+                let _ = shape_config;
+            }
+            // Leaf nodes — nothing to recurse into.
+            CompiledExpr::Integer(_)
+            | CompiledExpr::Float(_)
+            | CompiledExpr::Boolean(_)
+            | CompiledExpr::Nil
+            | CompiledExpr::String(_)
+            | CompiledExpr::Keyword(_)
+            | CompiledExpr::FunctionRef(_)
+            | CompiledExpr::Symbol(_)
+            | CompiledExpr::GetTupleElement { .. }
+            | CompiledExpr::Quoted(_) => {}
+        }
+    }
+
+    visit(body, &mut result, &root_locals);
+    result
+}
+
+/// Filter the captured-scalar map: keep only entries whose `GetTupleElement`
+/// flows into a shape-bearing position in `body` (resolving `Let` aliases).
+/// Scalars that only feed arithmetic are dropped so they stay live runtime
+/// arguments instead of being baked into the VMFB. If nothing shape-bearing
+/// is found, nothing is baked.
+pub(crate) fn filter_constants_for_shape_positions(
+    constants: &HashMap<(String, Vec<usize>), f64>,
+    body: &crate::core::expr::CompiledExpr,
+) -> HashMap<(String, Vec<usize>), f64> {
+    let shape_gtes = collect_shape_gtes(body);
+    constants
+        .iter()
+        .filter(|((param, indices), _)| shape_gtes.contains(&(param.clone(), indices.clone())))
+        .map(|((p, i), v)| ((p.clone(), i.clone()), *v))
+        .collect()
+}
+
 pub fn lower_tuples_and_destructuring(
     body: CompiledExpr,
     param_shapes: &HashMap<String, Vec<i64>>,
@@ -1448,5 +1610,127 @@ pub fn desugar_destructuring_lets(
         // reach the JIT pipeline; the FunctionCall/Lambda/If/Do/Vector/Tuple/Repeat/
         // Let arms above cover anything the codegen will encounter post-AST -> ANF.
         other => Ok(other),
+    }
+}
+
+#[cfg(test)]
+mod shape_classifier_tests {
+    use super::{collect_shape_gtes, filter_constants_for_shape_positions};
+    use crate::core::expr::{BindingPattern, CompiledExpr};
+    use std::collections::HashMap;
+
+    fn gte(param: &str, idx: usize) -> CompiledExpr {
+        CompiledExpr::GetTupleElement { param: param.into(), indices: vec![idx] }
+    }
+    fn sym(name: &str) -> CompiledExpr {
+        CompiledExpr::Symbol(name.into())
+    }
+    fn call(name: &str, args: Vec<CompiledExpr>) -> CompiledExpr {
+        CompiledExpr::FunctionCall { name: name.into(), args, loc: None }
+    }
+    fn let_(bindings: Vec<(&str, CompiledExpr)>, body: CompiledExpr) -> CompiledExpr {
+        CompiledExpr::Let {
+            bindings: bindings
+                .into_iter()
+                .map(|(n, rhs)| (BindingPattern::Simple(n.into()), rhs))
+                .collect(),
+            body: Box::new(body),
+        }
+    }
+
+    /// Regression: the canonical pattern `(let [n (get cfg :n)] (reshape x [n n]))`
+    /// MUST be recognised as shape-bearing through the let alias. Previously the
+    /// classifier only saw GTEs directly at shape positions and missed this,
+    /// causing silent interpreter fallback.
+    #[test]
+    fn shape_scalar_via_let_alias_is_collected() {
+        let body = let_(
+            vec![("n", gte("cfg", 0))],
+            call("reshape", vec![
+                sym("x"),
+                CompiledExpr::Vector(vec![sym("n"), sym("n")]),
+            ]),
+        );
+        let gtes = collect_shape_gtes(&body);
+        assert!(
+            gtes.contains(&("cfg".to_string(), vec![0])),
+            "let-aliased shape scalar must be detected, got {:?}",
+            gtes
+        );
+    }
+
+    /// Multi-level alias chains must resolve transitively.
+    #[test]
+    fn shape_scalar_via_nested_let_alias_is_collected() {
+        let body = let_(
+            vec![("n", gte("cfg", 0))],
+            let_(
+                vec![("m", sym("n"))],
+                call("reshape", vec![
+                    sym("x"),
+                    CompiledExpr::Vector(vec![sym("m"), sym("m")]),
+                ]),
+            ),
+        );
+        let gtes = collect_shape_gtes(&body);
+        assert!(gtes.contains(&("cfg".to_string(), vec![0])));
+    }
+
+    /// Regression: a scalar used only in arithmetic must NOT be baked.
+    /// This is the freeze footgun fix.
+    #[test]
+    fn arithmetic_only_scalar_is_not_collected() {
+        let body = let_(
+            vec![("lr", gte("cfg", 0))],
+            call("+", vec![sym("w"), call("*", vec![sym("lr"), sym("x")])]),
+        );
+        let gtes = collect_shape_gtes(&body);
+        assert!(
+            gtes.is_empty(),
+            "arithmetic-only scalar must not be baked, got {:?}",
+            gtes
+        );
+    }
+
+    /// filter_constants_for_shape_positions keeps shape-bearing entries and
+    /// drops arithmetic-only ones.
+    #[test]
+    fn filter_keeps_shape_drops_arithmetic() {
+        // n -> shape (reshape dim), scale -> arithmetic
+        let body = let_(
+            vec![
+                ("n", gte("cfg", 0)),
+                ("scale", gte("cfg", 1)),
+                ("r", call("reshape", vec![
+                    sym("x"),
+                    CompiledExpr::Vector(vec![sym("n"), sym("n")]),
+                ])),
+            ],
+            call("*", vec![sym("scale"), sym("r")]),
+        );
+        let mut constants = HashMap::new();
+        constants.insert(("cfg".to_string(), vec![0]), 8.0);   // n
+        constants.insert(("cfg".to_string(), vec![1]), 2.0);   // scale
+        let filtered = filter_constants_for_shape_positions(&constants, &body);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered.get(&("cfg".to_string(), vec![0])), Some(&8.0));
+    }
+
+    /// Sequential let: a later binding may reference an earlier one for its
+    /// shape arg. The classifier must see the accumulated scope.
+    #[test]
+    fn sequential_let_accumulates_scope() {
+        let body = let_(
+            vec![
+                ("n", gte("cfg", 0)),
+                ("r", call("reshape", vec![
+                    sym("x"),
+                    CompiledExpr::Vector(vec![sym("n"), sym("n")]),
+                ])),
+            ],
+            sym("r"),
+        );
+        let gtes = collect_shape_gtes(&body);
+        assert!(gtes.contains(&("cfg".to_string(), vec![0])));
     }
 }

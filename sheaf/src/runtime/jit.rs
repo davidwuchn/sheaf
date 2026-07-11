@@ -50,8 +50,8 @@ use crate::lowering::config::{layout_to_index_map, lower_get_calls};
 use crate::lowering::effects::{collect_effects, collect_hof_calls};
 use crate::lowering::stablehlo::{Register, StableHLOEmitter};
 use crate::lowering::transforms::{
-    extract_scalar_constants, lower_inlined_gets, propagate_let_layouts, resolve_static_constants,
-    substitute_scalar_param, unroll_reduces,
+    extract_scalar_constants, filter_constants_for_shape_positions, lower_inlined_gets,
+    propagate_let_layouts, resolve_static_constants, substitute_scalar_param, unroll_reduces,
 };
 use crate::sheaf_msg;
 
@@ -344,13 +344,21 @@ impl JitCompiler {
             })
             .collect();
 
+        // Filter constants: only bake scalars used in shape-bearing positions
+        // (reshape dims, slice bounds, repeat count, ...), resolving Let-bound
+        // symbol aliases. Scalars that only feed arithmetic stay live runtime
+        // arguments. If a shape-bearing scalar eludes the classifier it will
+        // surface as a codegen error (not a silent freeze).
+        let filtered_constants =
+            filter_constants_for_shape_positions(&constants, &body);
+
         // Preprocess VAG lambda bodies BEFORE resolve_static_constants so that
         // VAG lambdas get their own resolve_static_constants with correct (unshadowed)
         // param_shapes. Then the outer resolve_static_constants can safely skip
         // Lambda bodies since they're already resolved.
         let arity_err: std::cell::Cell<Option<SheafError>> = std::cell::Cell::new(None);
         body = self.preprocess_vag_lambda(
-            &body, registry, &constants, &param_shapes, &param_index_maps, &known_types,
+            &body, registry, &filtered_constants, &param_shapes, &param_index_maps, &known_types,
             &arity_err,
         );
         if let Some(err) = arity_err.into_inner() {
@@ -358,7 +366,7 @@ impl JitCompiler {
             return None;
         }
 
-        body = resolve_static_constants(&body, &constants, &param_shapes, false);
+        body = resolve_static_constants(&body, &filtered_constants, &param_shapes, false);
 
         body = match crate::lowering::transforms::lower_tuples_and_destructuring(
             body, &param_shapes,
@@ -549,6 +557,9 @@ impl JitCompiler {
 
         let session_idx = vmfb_sessions.len();
         vmfb_sessions.push(Arc::new(session));
+
+        // Populate captured_scalars so the dispatcher knows which scalars were baked.
+        sig.captured_scalars = filtered_constants.clone();
 
         Some((session_idx, sig))
     }
@@ -873,6 +884,11 @@ impl JitCompiler {
         }
         body = lower_inlined_gets(&body, &param_index_maps);
 
+        // Filter constants: only bake scalars used in shape-bearing positions
+        // (see the main JIT path above for rationale).
+        let filtered_vag_constants =
+            filter_constants_for_shape_positions(&constants, &body);
+
         // Resolve static constants
         let mut param_shapes: HashMap<String, Vec<i64>> = all_param_names
             .iter()
@@ -890,7 +906,7 @@ impl JitCompiler {
         for (param_name, param_ty) in all_param_names.iter().zip(sig.param_types.iter()) {
             inject_tuple_shapes(param_name, param_ty, &[], &mut param_shapes);
         }
-        body = resolve_static_constants(&body, &constants, &param_shapes, false);
+        body = resolve_static_constants(&body, &filtered_vag_constants, &param_shapes, false);
 
         body = match crate::lowering::transforms::lower_tuples_and_destructuring(
             body, &param_shapes,
