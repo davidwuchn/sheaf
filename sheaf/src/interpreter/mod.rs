@@ -492,7 +492,7 @@ let has_kwargs = matches!(name,
     }
 
     // Try user-defined function from registry
-    if let Some(func_def) = env.registry.get(name).cloned() {
+    if let Some(mut func_def) = env.registry.get(name).cloned() {
         // Arity check before any JIT or interpreter dispatch
         if pos_args.len() != func_def.params.len() {
             let got = pos_args.iter().map(|a| a.short_desc()).collect::<Vec<_>>().join(", ");
@@ -569,7 +569,7 @@ let has_kwargs = matches!(name,
             let mut recompiled = false;
             if let Some(jit) = &mut env.jit_compiler {
                 if let Some((session_idx, sig)) = jit.try_jit_compile(
-                    &func_def,
+                    &mut func_def,
                     &pos_args,
                     &env.registry,
                     &mut env.vmfb_sessions,

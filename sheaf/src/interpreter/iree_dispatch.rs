@@ -10,7 +10,55 @@ use crate::runtime::jit::JitVagOutcome;
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+
+static STALE_WARNINGS: OnceLock<Mutex<HashSet<(String, String, String)>>> = OnceLock::new();
+
+fn warn_stale_scalars_once(name: &str, diffs: &[ (String, String, f64, f64) ]) {
+    let warnings = STALE_WARNINGS.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut lock = warnings.lock().unwrap();
+
+    for (param, path, baked, current) in diffs {
+        if lock.insert((name.to_string(), param.clone(), path.clone())) {
+            sheaf_msg!("WARN {}: scalar {}.{} is baked into the compiled VMFB (value {}) but the current call passed {}. The runtime value is ignored. Delete __sheaf__/ and re-run if you need this to change, or pass this value as a positional argument instead of inside a dict.", 
+                name, param, path, baked, current);
+        }
+    }
+}
+
+fn find_scalar_with_path(args: &[Value], param_names: &[String], param: &str, indices: &[usize]) -> Option<(f64, String)> {
+    let arg_idx = param_names.iter().position(|p| p == param)?;
+    let mut current = &args[arg_idx];
+    let mut path_parts = Vec::new();
+
+    for &idx in indices {
+        match current {
+            Value::Tuple(elems) => {
+                if idx < elems.len() {
+                    current = &elems[idx];
+                } else {
+                    return None;
+                }
+            }
+            Value::Dict(map) => {
+                let entry = map.iter().nth(idx)?;
+                path_parts.push(entry.0.clone());
+                current = entry.1;
+            }
+            _ => return None,
+        }
+    }
+
+    let val = current.to_f64()?;
+    let path_str = if path_parts.is_empty() {
+        format!("{:?}", indices)
+    } else {
+        path_parts.join(".")
+    };
+
+    Some((val, path_str))
+}
 
 /// Try to dispatch a function call to IREE.
 /// Returns `Some(result)` if IREE handled it, `None` to fall through to the interpreter.
@@ -35,6 +83,21 @@ pub(super) fn try_iree_dispatch(
     }
     if crate::runtime::iree_session::check_shapes_match(args, &sig.param_types).is_err() {
         return None;
+    }
+
+    // Check for stale baked scalars in dict arguments
+    if !sig.captured_scalars.is_empty() {
+        let mut diffs = Vec::new();
+        for ((param, indices), baked) in &sig.captured_scalars {
+            if let Some((current, path)) = find_scalar_with_path(args, &func_def.params, param, indices) {
+                if (current - *baked).abs() > 1e-6 {
+                    diffs.push((param.clone(), path, *baked, current));
+                }
+            }
+        }
+        if !diffs.is_empty() {
+            warn_stale_scalars_once(func_def.name.as_str(), &diffs);
+        }
     }
 
     let full_name = format!("module.{}", func_def.name.replace('-', "_").replace('?', "_q").replace('!', "_b"));
