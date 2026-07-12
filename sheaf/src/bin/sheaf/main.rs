@@ -9,6 +9,7 @@
 //!   sheaf -c '(+ 1 2)'                 Evaluate an expression
 
 mod doc;
+mod pretty;
 mod repl;
 
 use sheaf_compiler::sheaf_msg;

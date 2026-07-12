@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use std::cell::Cell;
 
 use crate::doc;
+use crate::pretty;
 
 struct MatchingBracketHighlighter {
     bracket: Cell<Option<(u8, usize)>>,
@@ -409,20 +410,9 @@ pub fn run() {
                     continue;
                 }
 
-                // Collapse multi-line input to single line for history recall
-                // Strip comments first so `;` doesn't eat the rest of the line
-                let history_entry: String = trimmed.split('\n')
-                    .map(|l| {
-                        let l = l.trim();
-                        match l.find(';') {
-                            Some(pos) => l[..pos].trim_end(),
-                            None => l,
-                        }
-                    })
-                    .filter(|l| !l.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                rl.add_history_entry(&history_entry).ok();
+                // Preserve multi-line input verbatim for history recall so
+                // that re-editing a multi-line form keeps its line breaks.
+                rl.add_history_entry(trimmed).ok();
 
                 match interp.eval(trimmed) {
                     Ok(val) => {
@@ -534,10 +524,11 @@ fn handle_command(input: &str, interp: &mut Interpreter) -> bool {
         ":show" => {
             if arg.is_empty() {
                 println!("Usage: :show <name>");
+            } else if let Some(fdef) = interp.registry_get(arg) {
+                // Registered defn (stdlib or user-defined): show its source.
+                println!("{}\n", pretty::format_defn(&fdef.name, &fdef.params, &fdef.body));
             } else if let Ok(val) = interp.env().get(arg) {
                 println!("{}", val);
-            } else if interp.registry_names().contains(&arg.to_string()) {
-                println!("<fn:{}>", arg);
             } else {
                 eprintln!("Unknown symbol: {}", arg);
             }
@@ -578,7 +569,7 @@ fn print_general_help() {
   :list                  List all built-in functions by category
   :env                   List all functions and variables
   :registry, :reg        List user-defined functions
-  :show <name>           Show a variable's value
+  :show <name>           Show a variable's value or a function's source
   :clear                 Clear screen
   :quit, :q              Exit");
 }

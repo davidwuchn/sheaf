@@ -255,6 +255,13 @@ impl Interpreter {
         self.compiler.registry.keys().cloned().collect()
     }
 
+    /// Look up a registered function definition by name.
+    /// Covers stdlib and user-defined `defn` functions. Returns the original
+    /// AST body, useful for REPL source display.
+    pub fn registry_get(&self, name: &str) -> Option<&crate::core::expr::FunctionDef> {
+        self.compiler.registry.get(name)
+    }
+
     pub fn env(&self) -> &Env {
         &self.env
     }
