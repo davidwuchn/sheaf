@@ -304,15 +304,59 @@ fn format_element(x: f32, dtype: Dtype) -> String {
     }
 }
 
-fn format_tensor_1d(data: &[f32], dtype: Dtype) -> String {
-    let formatted: Vec<String> = data.iter().map(|&x| format_element(x, dtype)).collect();
+/// Number of elements shown at each edge of a truncated dimension.
+const EDGE_ITEMS: usize = 3;
+/// Truncate a dimension in display output when it exceeds this size.
+const TRUNC_THRESHOLD: usize = 10;
+
+/// Indices to display for a dimension of size `n`. When `n` exceeds
+/// `TRUNC_THRESHOLD`, only the first and last `EDGE_ITEMS` indices are
+/// returned and the caller inserts an ellipsis between them.
+fn trunc_indices(n: usize) -> (Vec<usize>, bool) {
+    if n > TRUNC_THRESHOLD {
+        let mut v: Vec<usize> = (0..EDGE_ITEMS).collect();
+        v.extend((n - EDGE_ITEMS)..n);
+        (v, true)
+    } else {
+        ((0..n).collect(), false)
+    }
+}
+
+/// Format one row of a 2D tensor, inserting a column ellipsis when needed.
+fn format_row(tokens: &[String], col_widths: &[usize], ellipsis_cols: bool, dtype: Dtype) -> String {
     if dtype == Dtype::Bool {
-        return format!("[{}]", formatted.join(" "));
+        let mut t: Vec<String> = tokens.to_vec();
+        if ellipsis_cols { t.insert(EDGE_ITEMS, "...".to_string()); }
+        return format!("[{}]", t.join(" "));
+    }
+    let mut padded: Vec<String> = tokens.iter().enumerate().map(|(c, s)| {
+        format!("{:>width$}", s, width = col_widths[c])
+    }).collect();
+    if ellipsis_cols {
+        padded.insert(EDGE_ITEMS, "...".to_string());
+    }
+    format!("[{}]", padded.join(" "))
+}
+
+fn format_tensor_1d(data: &[f32], dtype: Dtype) -> String {
+    let n = data.len();
+    if n == 0 {
+        return "[]".to_string();
+    }
+    let (indices, ellipsis) = trunc_indices(n);
+    let formatted: Vec<String> = indices.iter().map(|&i| format_element(data[i], dtype)).collect();
+    if dtype == Dtype::Bool {
+        let mut tokens = formatted;
+        if ellipsis { tokens.insert(EDGE_ITEMS, "...".to_string()); }
+        return format!("[{}]", tokens.join(" "));
     }
     let max_width = formatted.iter().map(|s| s.len()).max().unwrap_or(0);
-    let padded: Vec<String> = formatted.iter().map(|s| {
+    let mut padded: Vec<String> = formatted.iter().map(|s| {
         format!("{:>width$}", s, width = max_width)
     }).collect();
+    if ellipsis {
+        padded.insert(EDGE_ITEMS, "...".to_string());
+    }
     format!("[{}]", padded.join(" "))
 }
 
@@ -330,11 +374,17 @@ fn format_tensor_nd(arr: &ArrayD<f32>, dtype: Dtype) -> String {
         1 => format_tensor_1d(arr.as_slice().unwrap(), dtype),
         2 => format_tensor_2d(arr, dtype),
         _ => {
-            let rows: Vec<String> = (0..shape[0]).map(|i| {
+            let n = shape[0];
+            let (indices, ellipsis) = trunc_indices(n);
+            let rows: Vec<String> = indices.iter().map(|&i| {
                 let sub = arr.index_axis(ndarray::Axis(0), i).to_owned();
                 format_tensor_nd(&sub, dtype)
             }).collect();
-            format!("[{}]", rows.join("\n "))
+            let mut all = rows;
+            if ellipsis {
+                all.insert(EDGE_ITEMS, "...".to_string());
+            }
+            format!("[{}]", all.join("\n "))
         }
     }
 }
@@ -342,21 +392,25 @@ fn format_tensor_nd(arr: &ArrayD<f32>, dtype: Dtype) -> String {
 fn format_tensor_2d(arr: &ArrayD<f32>, dtype: Dtype) -> String {
     let shape = arr.shape();
     let (nrows, ncols) = (shape[0], shape[1]);
-    let all_formatted: Vec<Vec<String>> = (0..nrows).map(|r| {
-        (0..ncols).map(|c| format_element(arr[IxDyn(&[r, c])], dtype)).collect()
+    let (row_idx, ellipsis_rows) = trunc_indices(nrows);
+    let (col_idx, ellipsis_cols) = trunc_indices(ncols);
+
+    let all_formatted: Vec<Vec<String>> = row_idx.iter().map(|&r| {
+        col_idx.iter().map(|&c| format_element(arr[IxDyn(&[r, c])], dtype)).collect()
     }).collect();
-    let col_widths: Vec<usize> = (0..ncols).map(|c| {
-        all_formatted.iter().map(|row| row[c].len()).max().unwrap_or(0)
+    // When an ellipsis row is shown, every column holds "...", so pad to >= 3.
+    let min_w = if ellipsis_rows { 3 } else { 0 };
+    let col_widths: Vec<usize> = (0..col_idx.len()).map(|c| {
+        all_formatted.iter().map(|row| row[c].len()).max().unwrap_or(0).max(min_w)
     }).collect();
-    let rows: Vec<String> = all_formatted.iter().map(|row| {
-        if dtype == Dtype::Bool {
-            return format!("[{}]", row.join(" "));
-        }
-        let padded: Vec<String> = row.iter().enumerate().map(|(c, s)| {
-            format!("{:>width$}", s, width = col_widths[c])
-        }).collect();
-        format!("[{}]", padded.join(" "))
-    }).collect();
+
+    let mut rows: Vec<String> = all_formatted.iter()
+        .map(|row| format_row(row, &col_widths, ellipsis_cols, dtype))
+        .collect();
+    if ellipsis_rows {
+        let ellipsis_tokens: Vec<String> = col_idx.iter().map(|_| "...".to_string()).collect();
+        rows.insert(EDGE_ITEMS, format_row(&ellipsis_tokens, &col_widths, ellipsis_cols, dtype));
+    }
     format!("[{}]", rows.join("\n "))
 }
 
@@ -405,5 +459,55 @@ impl fmt::Display for Value {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn tensor_f32(shape: Vec<usize>, fill: f32) -> Value {
+        Value::Tensor {
+            data: Arc::new(ArrayD::from_elem(shape, fill)),
+            dtype: Dtype::F32,
+        }
+    }
+
+    #[test]
+    fn short_1d_not_truncated() {
+        let t = tensor_f32(vec![5], 1.0);
+        let s = format!("{}", t);
+        assert!(!s.contains("..."), "small tensor should not truncate: {s}");
+    }
+
+    #[test]
+    fn long_1d_truncated() {
+        let t = tensor_f32(vec![50], 1.0);
+        let s = format!("{}", t);
+        assert!(s.contains("..."), "expected ellipsis: {s}");
+        // Only 6 elements shown (3 head + 3 tail), not all 50.
+        let count = s.matches("1.").count();
+        assert_eq!(count, 6, "expected 6 elements, got: {s}");
+    }
+
+    #[test]
+    fn large_2d_truncated_both_axes() {
+        let t = tensor_f32(vec![100, 100], 1.0);
+        let s = format!("{}", t);
+        assert!(s.contains("..."), "expected ellipsis: {s}");
+        // 3 head rows + 1 ellipsis row + 3 tail rows = 7 lines.
+        assert!(s.lines().count() <= 8, "too many lines: {s}");
+    }
+
+    #[test]
+    fn tall_2d_truncates_rows_only() {
+        let t = tensor_f32(vec![100, 2], 1.0);
+        let s = format!("{}", t);
+        // Columns fit (2 <= threshold), so no column ellipsis in a data row.
+        let first = s.lines().next().unwrap();
+        assert!(!first.contains("..."), "no col ellipsis expected: {first}");
+        // But rows are truncated.
+        assert!(s.lines().count() <= 8, "too many lines: {s}");
     }
 }
