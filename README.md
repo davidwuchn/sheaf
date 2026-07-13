@@ -80,6 +80,31 @@ for more code samples.
 - Download the examples:
   https://github.com/sheaf-lang/sheaf/releases/download/v2.1.0/sheaf-examples.tar.gz
 
+### Build from source
+
+Sheaf statically links against the [IREE](https://iree.dev) runtime, whose
+libraries are not vendored in this repository, so a fresh `git clone` requires
+one extra step before `cargo build` will work:
+
+```bash
+cd sheaf
+./build-iree.sh                          # builds IREE into iree-runtime/
+cargo build --release                    # builds Sheaf
+cp target/release/sheaf ~/.local/bin     # (or /usr/local/bin)
+```
+
+The following tools are required on both Linux and macOS:
+
+`cmake ninja git g++ rustc cargo`
+
+On Linux, you will need to install `cuda-nvcc` and/or the Vulkan headers.
+
+On macOS, the Xcode Command Line Tools are required. Install them with:
+
+```bash
+xcode-select --install
+```
+
 ### Links
 
 - [Website](https://sheaf-lang.org/)
