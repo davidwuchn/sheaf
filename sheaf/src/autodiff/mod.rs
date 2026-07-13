@@ -412,6 +412,9 @@ fn grad_function_call(
     g: CompiledExpr,
 ) -> CompiledExpr {
     match name {
+        // stop-gradient: forward is identity, backward is zero (blocks backprop)
+        "stop-gradient" => float(0.0),
+
         // Arithmetic
         "+" => {
             // d/dx (f + h) = df/dx + dh/dx

@@ -38,6 +38,15 @@ pub fn register_builtins(env: &mut Env) {
     io::register(env);
     random::register(env);
     losses::register(env);
+    env.set_builtin("stop-gradient", builtin_stop_gradient);
+}
+
+/// stop-gradient: identity in the forward pass; autodiff assigns zero gradient.
+fn builtin_stop_gradient(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    if args.len() != 1 {
+        return Err(runtime_error("stop-gradient expects exactly 1 argument"));
+    }
+    Ok(args[0].clone())
 }
 
 /// Resolve a potentially negative index against a dimension length.

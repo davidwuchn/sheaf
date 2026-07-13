@@ -26,7 +26,7 @@ pub use binding::{DefForm, DefmacroForm, DefnForm, FnForm, LetForm};
 pub use control::{CaseForm, DoForm, GuardForm, IfForm, RepeatForm, WhileForm};
 pub use flow::{ThreadAsForm, ThreadFirstForm};
 pub use ml::WithParamsForm;
-pub use utils::{AssocForm, DictForm, GetForm, GetInForm, LastForm, QuoteForm, UseForm};
+pub use utils::{AssocForm, DictForm, GetForm, GetInForm, LastForm, QuoteForm, StopGradientForm, UseForm};
 
 /// Create the registry of all special forms
 ///
@@ -69,6 +69,7 @@ pub fn special_forms_registry() -> HashMap<&'static str, Box<dyn SpecialForm>> {
     forms.insert("assoc", Box::new(AssocForm));
     forms.insert("last", Box::new(LastForm));
     forms.insert("use", Box::new(UseForm));
+    forms.insert("stop-gradient", Box::new(StopGradientForm));
 
     // ML forms
     forms.insert("with-params", Box::new(WithParamsForm));

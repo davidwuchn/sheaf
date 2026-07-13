@@ -6,10 +6,11 @@
 
 ### +
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(+ a b [c ...])`
 
-Performs element-wise addition supporting standard broadcasting rules. The function is variadic and accepts two or more arguments.
+Performs element-wise addition supporting standard broadcasting rules. The
+function is variadic and accepts two or more arguments.
 
 ```sheaf
 (+ 1 2)              ; => 3
@@ -21,10 +22,12 @@ Performs element-wise addition supporting standard broadcasting rules. The funct
 
 ### -
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(- a [b ...])`
 
-Performs unary negation if a single argument is provided. If multiple arguments are provided, performs element-wise subtraction of all subsequent arguments from the first.
+Performs unary negation if a single argument is provided. If multiple arguments
+are provided, performs element-wise subtraction of all subsequent arguments from
+the first.
 
 ```sheaf
 (- 5)                ; => -5
@@ -36,10 +39,11 @@ Performs unary negation if a single argument is provided. If multiple arguments 
 
 ### \*
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(* a b [c ...])`
 
-Computes element-wise multiplication between inputs with broadcasting support. Variadic for 2+ arguments. For matrix multiplication (dot product), see @.
+Computes element-wise multiplication between inputs with broadcasting support.
+Variadic for 2+ arguments. For matrix multiplication (dot product), see @.
 
 ```sheaf
 (* 2 3)              ; => 6
@@ -51,10 +55,11 @@ Computes element-wise multiplication between inputs with broadcasting support. V
 
 ### /
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(/ a b)`
 
-Computes element-wise division. Inputs are automatically promoted to floating-point types to maintain precision.
+Computes element-wise division. Inputs are automatically promoted to
+floating-point types to maintain precision.
 
 ```sheaf
 (/ 10.0 2.0)         ; => 5.0
@@ -65,10 +70,12 @@ Computes element-wise division. Inputs are automatically promoted to floating-po
 
 ### //
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(// a b)`
 
-Computes element-wise integer division, rounding the result toward negative infinity (floor division). Supporting broadcasting, it returns the largest integer less than or equal to the algebraic quotient.
+Computes element-wise integer division, rounding the result toward negative
+infinity (floor division). Supporting broadcasting, it returns the largest
+integer less than or equal to the algebraic quotient.
 
 ```sheaf
 (// 7 2)             ; => 3
@@ -79,10 +86,12 @@ Computes element-wise integer division, rounding the result toward negative infi
 
 ### mod
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(mod a b)` or `(% a b)`
 
-Computes the element-wise modulo operation (remainder after division). The result has the same sign as the divisor. The `%` operator can also be used as an alias.
+Computes the element-wise modulo operation (remainder after division). The
+result has the same sign as the divisor. The `%` operator can also be used as an
+alias.
 
 ```sheaf
 (mod 7 3)            ; => 1
@@ -95,10 +104,11 @@ Computes the element-wise modulo operation (remainder after division). The resul
 
 ### \*\*
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(** base exponent)`
 
-Computes element-wise exponentiation, raising the first input to the power of the second. Supports broadcasting between base and exponent tensors.
+Computes element-wise exponentiation, raising the first input to the power of
+the second. Supports broadcasting between base and exponent tensors.
 
 ```sheaf
 (** 2.0 3.0)         ; => 8.0
@@ -109,10 +119,11 @@ Computes element-wise exponentiation, raising the first input to the power of th
 
 ### abs
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(abs x)`
 
-Computes the element-wise absolute value of the input. For complex inputs, this returns the magnitude.
+Computes the element-wise absolute value of the input. For complex inputs, this
+returns the magnitude.
 
 ```sheaf
 (abs -5.0)           ; => 5.0
@@ -123,10 +134,11 @@ Computes the element-wise absolute value of the input. For complex inputs, this 
 
 ### ash
 
-**Type:** function
-**Signature:** `(ash value shift)`
+**Type:** function **Signature:** `(ash value shift)`
 
-Arithmetic shift. Positive shift means left shift (multiply by 2^n), negative shift means right shift (divide by 2^n, floor toward negative infinity). Matches Common Lisp `ash` semantics. Works element-wise on tensors.
+Arithmetic shift. Positive shift means left shift (multiply by 2^n), negative
+shift means right shift (divide by 2^n, floor toward negative infinity). Matches
+Common Lisp `ash` semantics. Works element-wise on tensors.
 
 ```sheaf
 (ash 1 8)            ; => 256
@@ -138,10 +150,11 @@ Arithmetic shift. Positive shift means left shift (multiply by 2^n), negative sh
 
 ### exp
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(exp x)`
 
-Computes the element-wise exponential of the input (e^x). It is a fundamental building block for activation functions like Softmax and Sigmoid.
+Computes the element-wise exponential of the input (e^x). It is a fundamental
+building block for activation functions like Softmax and Sigmoid.
 
 ```sheaf
 (exp 0.0)            ; => 1.0
@@ -152,10 +165,11 @@ Computes the element-wise exponential of the input (e^x). It is a fundamental bu
 
 ### log
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(log x)`
 
-Computes the element-wise natural logarithm (base e). The function is defined for positive real inputs; values outside this domain may result in `NaN`.
+Computes the element-wise natural logarithm (base e). The function is defined
+for positive real inputs; values outside this domain may result in `NaN`.
 
 ```sheaf
 (log 1.0)            ; => 0.0
@@ -167,10 +181,11 @@ Computes the element-wise natural logarithm (base e). The function is defined fo
 
 ### sqrt
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(sqrt x)`
 
-Computes the element-wise non-negative square root of the input. For real-valued tensors, results are undefined for negative inputs.
+Computes the element-wise non-negative square root of the input. For real-valued
+tensors, results are undefined for negative inputs.
 
 ```sheaf
 (sqrt 4.0)           ; => 2.0
@@ -181,10 +196,14 @@ Computes the element-wise non-negative square root of the input. For real-valued
 
 ### sin, cos, tan
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(sin x)`, `(cos x)`, `(tan x)`
 
-Compute the element-wise trigonometric functions (sine, cosine, tangent), with angles in radians. Fully differentiable: `sin'(x) = cos(x)`, `cos'(x) = -sin(x)`, `tan'(x) = 1 + tan(x)^2`. Required for Rotary Position Embeddings (RoPE) and sinusoidal position encodings, as well as cosine learning-rate schedules.
+Compute the element-wise trigonometric functions (sine, cosine, tangent), with
+angles in radians. Fully differentiable: `sin'(x) = cos(x)`,
+`cos'(x) = -sin(x)`, `tan'(x) = 1 + tan(x)^2`. Required for Rotary Position
+Embeddings (RoPE) and sinusoidal position encodings, as well as cosine
+learning-rate schedules.
 
 ```sheaf
 (sin 1.0)            ; => 0.84147096
@@ -197,8 +216,7 @@ Compute the element-wise trigonometric functions (sine, cosine, tangent), with a
 
 ### round
 
-**Type:** function
-**Signature:** `(round x)`
+**Type:** function **Signature:** `(round x)`
 
 Rounds each element to the nearest integer (half away from zero).
 
@@ -211,8 +229,7 @@ Rounds each element to the nearest integer (half away from zero).
 
 ### ceil
 
-**Type:** function
-**Signature:** `(ceil x)`
+**Type:** function **Signature:** `(ceil x)`
 
 Rounds each element up to the nearest integer.
 
@@ -225,8 +242,7 @@ Rounds each element up to the nearest integer.
 
 ### floor
 
-**Type:** function
-**Signature:** `(floor x)`
+**Type:** function **Signature:** `(floor x)`
 
 Rounds each element down to the nearest integer.
 
@@ -239,10 +255,12 @@ Rounds each element down to the nearest integer.
 
 ### @
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(@ a b)`
 
-Performs matrix multiplication, dot product, or tensor contraction depending on input dimensionality. It follows standard linear algebra rules for inner products and matrix-matrix or matrix-vector operations.
+Performs matrix multiplication, dot product, or tensor contraction depending on
+input dimensionality. It follows standard linear algebra rules for inner
+products and matrix-matrix or matrix-vector operations.
 
 ```sheaf
 ;; Vector dot product
@@ -258,10 +276,11 @@ Performs matrix multiplication, dot product, or tensor contraction depending on 
 
 ### =
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(= a b)`
 
-Performs structural equality comparison. Works on tensors, lists, strings, keywords, and booleans. Returns a single scalar boolean.
+Performs structural equality comparison. Works on tensors, lists, strings,
+keywords, and booleans. Returns a single scalar boolean.
 
 ```sheaf
 (= 1 1)              ; => true
@@ -275,10 +294,12 @@ Performs structural equality comparison. Works on tensors, lists, strings, keywo
 
 ### ==
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(== a b)`
 
-Performs element-wise equality comparison with broadcasting support. Returns a boolean tensor of the same shape as the broadcasted inputs where each element represents the result of the local equality check.
+Performs element-wise equality comparison with broadcasting support. Returns a
+boolean tensor of the same shape as the broadcasted inputs where each element
+represents the result of the local equality check.
 
 ```sheaf
 (== [1 2] [1 3])     ; => [ true false]
@@ -289,10 +310,12 @@ Performs element-wise equality comparison with broadcasting support. Returns a b
 
 ### !=
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(!= a b)`
 
-Performs element-wise inequality comparison with broadcasting support. Returns a boolean tensor where each entry is true if the corresponding elements are not equal.
+Performs element-wise inequality comparison with broadcasting support. Returns a
+boolean tensor where each entry is true if the corresponding elements are not
+equal.
 
 ```sheaf
 (!= [1 2] [1 3])     ; => [false true]
@@ -303,10 +326,12 @@ Performs element-wise inequality comparison with broadcasting support. Returns a
 
 ### <, >, <=, >=
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(< a b)`, `(> a b)`, etc.
 
-Perform element-wise relational comparisons using standard broadcasting rules. These functions return boolean tensors suitable for masking operations such as `where` or `select`.
+Perform element-wise relational comparisons using standard broadcasting rules.
+These functions return boolean tensors suitable for masking operations such as
+`where` or `select`.
 
 ```sheaf
 (< [1 5] 3)          ; => [ true false]
@@ -320,10 +345,12 @@ Perform element-wise relational comparisons using standard broadcasting rules. T
 
 ### and
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(and expr1 expr2 [...])`
 
-Evaluates expressions from left to right. It short-circuits and returns `false` (or `nil`) at the first falsy value encountered. If all expressions evaluate to truthy, it returns the value of the last expression.
+Evaluates expressions from left to right. It short-circuits and returns `false`
+(or `nil`) at the first falsy value encountered. If all expressions evaluate to
+truthy, it returns the value of the last expression.
 
 ```sheaf
 (and true false)     ; => false
@@ -335,10 +362,12 @@ Evaluates expressions from left to right. It short-circuits and returns `false` 
 
 ### or
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(or expr1 expr2 [...])`
 
-Evaluates expressions from left to right. It short-circuits and returns the first truthy value encountered. If all expressions are falsy, it returns the value of the last expression.
+Evaluates expressions from left to right. It short-circuits and returns the
+first truthy value encountered. If all expressions are falsy, it returns the
+value of the last expression.
 
 ```sheaf
 (or false true)      ; => true
@@ -350,10 +379,11 @@ Evaluates expressions from left to right. It short-circuits and returns the firs
 
 ### not
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(not x)`
 
-Computes the logical negation of the input. Returns `true` if the argument is `false` or `nil`, and `false` for any other truthy value.
+Computes the logical negation of the input. Returns `true` if the argument is
+`false` or `nil`, and `false` for any other truthy value.
 
 ```sheaf
 (not true)           ; => false
@@ -366,7 +396,9 @@ Computes the logical negation of the input. Returns `true` if the argument is `f
 
 **Type:** literals
 
-Represent the fundamental constants for logical operations. In Sheaf, only `false` and `nil` are considered falsy; all other values (including `0`, empty strings, or empty tensors) are treated as truthy in logical contexts.
+Represent the fundamental constants for logical operations. In Sheaf, only
+`false` and `nil` are considered falsy; all other values (including `0`, empty
+strings, or empty tensors) are treated as truthy in logical contexts.
 
 ```sheaf
 true                 ; Boolean true
@@ -380,10 +412,12 @@ nil                  ; Null/None value
 
 ### relu
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(relu x)`
 
-Computes the Rectified Linear Unit activation function. It returns the element-wise maximum of `0` and the input `x`. This function is computationally efficient and helps mitigate the vanishing gradient problem.
+Computes the Rectified Linear Unit activation function. It returns the
+element-wise maximum of `0` and the input `x`. This function is computationally
+efficient and helps mitigate the vanishing gradient problem.
 
 ```sheaf
 (relu -1.0)          ; => 0.0
@@ -394,10 +428,11 @@ Computes the Rectified Linear Unit activation function. It returns the element-w
 
 ### leaky-relu
 
-**Type:** function
-**Signature:** `(leaky-relu x slope)`
+**Type:** function **Signature:** `(leaky-relu x slope)`
 
-Computes the Leaky Rectified Linear Unit activation function. Unlike standard ReLU, it allows a small non-zero gradient when the input is negative, defined as `slope * x`. This prevents "dead" neurons during training.
+Computes the Leaky Rectified Linear Unit activation function. Unlike standard
+ReLU, it allows a small non-zero gradient when the input is negative, defined as
+`slope * x`. This prevents "dead" neurons during training.
 
 ```sheaf
 (leaky-relu -1.0 0.01)          ; => -0.01
@@ -408,10 +443,12 @@ Computes the Leaky Rectified Linear Unit activation function. Unlike standard Re
 
 ### sigmoid
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(sigmoid x)`
 
-Applies the element-wise logistic sigmoid function. It maps any real-valued input into a range between `0` and `1`. Often used for binary classification or as a gating mechanism in recurrent architectures.
+Applies the element-wise logistic sigmoid function. It maps any real-valued
+input into a range between `0` and `1`. Often used for binary classification or
+as a gating mechanism in recurrent architectures.
 
 ```sheaf
 (sigmoid 0.0)        ; => 0.5
@@ -422,10 +459,12 @@ Applies the element-wise logistic sigmoid function. It maps any real-valued inpu
 
 ### tanh
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(tanh x)`
 
-Computes the element-wise hyperbolic tangent. It maps inputs to the range `(-1, 1), providing a zero-centered output which often leads to faster convergence than the sigmoid function in hidden layers.
+Computes the element-wise hyperbolic tangent. It maps inputs to the range `(-1,
+1), providing a zero-centered output which often leads to faster convergence
+than the sigmoid function in hidden layers.
 
 ```sheaf
 (tanh 0.0)           ; => 0.0
@@ -436,10 +475,12 @@ Computes the element-wise hyperbolic tangent. It maps inputs to the range `(-1, 
 
 ### gelu
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(gelu x)`
 
-Computes the Gaussian Error Linear Unit activation. It weights inputs by their percentile according to a normal distribution. Standard in modern Transformer architectures (like BERT and GPT) for its smooth non-linearity.
+Computes the Gaussian Error Linear Unit activation. It weights inputs by their
+percentile according to a normal distribution. Standard in modern Transformer
+architectures (like BERT and GPT) for its smooth non-linearity.
 
 ```sheaf
 (gelu 0.0)           ; => 0.0
@@ -450,10 +491,12 @@ Computes the Gaussian Error Linear Unit activation. It weights inputs by their p
 
 ### selu
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(selu x)`
 
-Applies the Scaled Exponential Linear Unit. When used with correct initialization, SELU enables self-normalizing neural networks, where the mean and variance of activations are naturally preserved across layers.
+Applies the Scaled Exponential Linear Unit. When used with correct
+initialization, SELU enables self-normalizing neural networks, where the mean
+and variance of activations are naturally preserved across layers.
 
 ```sheaf
 (selu [-1.0 1.0])    ; => [-1.1113307  1.050701 ]
@@ -463,10 +506,12 @@ Applies the Scaled Exponential Linear Unit. When used with correct initializatio
 
 ### celu
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(celu x [:alpha a])`
 
-Computes the Continuously Differentiable Exponential Linear Unit. Similar to ELU but ensures the derivative is continuous at `x=0`, facilitating smoother optimization.
+Computes the Continuously Differentiable Exponential Linear Unit. Similar to ELU
+but ensures the derivative is continuous at `x=0`, facilitating smoother
+optimization.
 
 ```sheaf
 (celu [-1.0 1.0])    ; => [-0.63212055  1.        ]
@@ -476,10 +521,12 @@ Computes the Continuously Differentiable Exponential Linear Unit. Similar to ELU
 
 ### silu
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(silu x)`
 
-Computes the Sigmoid Linear Unit (also known as Swish). Defined as `x * sigmoid(x)`, it is a smooth, non-monotonic function that frequently outperforms ReLU in deep convolutional and transformer models.
+Computes the Sigmoid Linear Unit (also known as Swish). Defined as
+`x * sigmoid(x)`, it is a smooth, non-monotonic function that frequently
+outperforms ReLU in deep convolutional and transformer models.
 
 ```sheaf
 (silu 0.0)           ; => 0.0
@@ -490,10 +537,12 @@ Computes the Sigmoid Linear Unit (also known as Swish). Defined as `x * sigmoid(
 
 ### softmax
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(softmax x [:axis axis])`
 
-Applies the Softmax function along the specified axis. It rescales elements such that they fall in the range `[0, 1]` and sum to `1`, effectively representing a categorical probability distribution.
+Applies the Softmax function along the specified axis. It rescales elements such
+that they fall in the range `[0, 1]` and sum to `1`, effectively representing a
+categorical probability distribution.
 
 ```sheaf
 (softmax [1.0 1.0])  ; => [0.5 0.5]
@@ -504,10 +553,13 @@ Applies the Softmax function along the specified axis. It rescales elements such
 
 ### log-softmax
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(log-softmax x [:axis axis])`
 
-Computes the natural logarithm of the Softmax function. This implementation is numerically stable, preventing overflow/underflow issues that occur when computing `log` and `softmax` separately. Essential for training with cross-entropy loss.
+Computes the natural logarithm of the Softmax function. This implementation is
+numerically stable, preventing overflow/underflow issues that occur when
+computing `log` and `softmax` separately. Essential for training with
+cross-entropy loss.
 
 ```sheaf
 (log-softmax [1.0 2.0]) ; => [-1.3132616  -0.31326163]
@@ -519,10 +571,11 @@ Computes the natural logarithm of the Softmax function. This implementation is n
 
 ### sum
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(sum x [:axis axis :keepdims])`
 
-Computes the sum of all elements in the input tensor. If an axis is specified, the reduction is performed along that dimension, collapsing it in the output.
+Computes the sum of all elements in the input tensor. If an axis is specified,
+the reduction is performed along that dimension, collapsing it in the output.
 
 ```sheaf
 (sum [1 2 3])        ; => 6.0
@@ -533,10 +586,11 @@ Computes the sum of all elements in the input tensor. If an axis is specified, t
 
 ### mean
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(mean x [:axis axis :keepdims])`
 
-Computes the arithmetic mean of tensor elements. When an axis is provided, it calculates the average along that specific dimension.
+Computes the arithmetic mean of tensor elements. When an axis is provided, it
+calculates the average along that specific dimension.
 
 ```sheaf
 (mean [1.0 2.0 3.0]) ; => 2.0
@@ -547,10 +601,12 @@ Computes the arithmetic mean of tensor elements. When an axis is provided, it ca
 
 ### product
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(product x [:axis axis :keepdims])`
 
-Computes the product of all elements in the input. Like other reduction functions, it supports axis-specific operations to multiply elements along a given dimension.
+Computes the product of all elements in the input. Like other reduction
+functions, it supports axis-specific operations to multiply elements along a
+given dimension.
 
 ```sheaf
 (product [1 2 3])    ; => 6.0
@@ -561,10 +617,12 @@ Computes the product of all elements in the input. Like other reduction function
 
 ### min, max
 
-**Type:** function  
-**Signature:** `(min x [:axis axis :keepdims])`, `(max x [:axis axis :keepdims])`
+**Type:** function\
+**Signature:** `(min x [:axis axis :keepdims])`,
+`(max x [:axis axis :keepdims])`
 
-Return the single smallest or largest scalar value present in the entire input tensor. These functions perform a total reduction across all dimensions.
+Return the single smallest or largest scalar value present in the entire input
+tensor. These functions perform a total reduction across all dimensions.
 
 ```sheaf
 (min [3 1 4])        ; => 1.0
@@ -575,10 +633,12 @@ Return the single smallest or largest scalar value present in the entire input t
 
 ### minimum, maximum
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(minimum a b)`, `(maximum a b)`
 
-Perform element-wise comparison between two tensors and return a new tensor containing the minimum or maximum value at each position. These functions support broadcasting if the input shapes differ.
+Perform element-wise comparison between two tensors and return a new tensor
+containing the minimum or maximum value at each position. These functions
+support broadcasting if the input shapes differ.
 
 ```sheaf
 (minimum [1 10] [5 2]) ; => [1. 2.]
@@ -589,10 +649,13 @@ Perform element-wise comparison between two tensors and return a new tensor cont
 
 ### argmax, argmin
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(argmax x [:axis axis])`, `(argmin x [:axis axis])`
 
-Return the index of the largest or smallest element in a tensor. Without `:axis`, the result is a single scalar index into the flattened array. With `:axis`, the reduction is performed along that axis, returning a tensor of indices one rank lower than the input.
+Return the index of the largest or smallest element in a tensor. Without
+`:axis`, the result is a single scalar index into the flattened array. With
+`:axis`, the reduction is performed along that axis, returning a tensor of
+indices one rank lower than the input.
 
 ```sheaf
 (argmax [3 1 4 1 5])                ; => 4
@@ -609,7 +672,7 @@ Return the index of the largest or smallest element in a tensor. Without `:axis`
 
 ### shape
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(shape x [axis])`
 
 Returns tensor dimensions as a tuple. With axis, returns size of that axis.
@@ -636,7 +699,7 @@ Returns tensor dimensions as a tuple. With axis, returns size of that axis.
 
 ### ndim
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(ndim x)`
 
 Number of tensor dimensions.
@@ -658,10 +721,11 @@ Number of tensor dimensions.
 
 ### len, count
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(len x)`, `(count x)`
 
-Return the length of the first dimension for arrays/tensors, or number of elements in a sequence.
+Return the length of the first dimension for arrays/tensors, or number of
+elements in a sequence.
 
 ```sheaf
 (len [1 2 3])              ; => 3
@@ -673,10 +737,12 @@ Return the length of the first dimension for arrays/tensors, or number of elemen
 
 ### reshape
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(reshape x new-shape)`
 
-Gives a new shape to a tensor without changing its underlying data. The total number of elements must remain constant. A dimension value of `-1` may be used to let the compiler infer the correct size based on the remaining dimensions.
+Gives a new shape to a tensor without changing its underlying data. The total
+number of elements must remain constant. A dimension value of `-1` may be used
+to let the compiler infer the correct size based on the remaining dimensions.
 
 ```sheaf
 ;; Explicit reshape
@@ -691,11 +757,11 @@ Gives a new shape to a tensor without changing its underlying data. The total nu
 
 ### transpose
 
-**Type:** function
-**Signature:** `(transpose x [perm])`
-**Alias:** `tr`
+**Type:** function **Signature:** `(transpose x [perm])` **Alias:** `tr`
 
-Permutes the dimensions of a tensor according to the sequence of axes provided. This is a zero-copy operation that is critical for reordering dimensions (e.g., swapping batch and sequence axes or head dimensions).
+Permutes the dimensions of a tensor according to the sequence of axes provided.
+This is a zero-copy operation that is critical for reordering dimensions (e.g.,
+swapping batch and sequence axes or head dimensions).
 
 ```sheaf
 ;; Default transpose (reverse axes): (2 3 2) -> (2 3 2)
@@ -719,10 +785,12 @@ Permutes the dimensions of a tensor according to the sequence of axes provided. 
 
 ### swapaxes
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(swapaxes x axis1 axis2)`
 
-Interchanges two specified axes of a tensor. This is a specialized version of transpose used to reorder dimensions, commonly used to switch between "batch-first" and "sequence-first" formats.
+Interchanges two specified axes of a tensor. This is a specialized version of
+transpose used to reorder dimensions, commonly used to switch between
+"batch-first" and "sequence-first" formats.
 
 ```sheaf
 (shape (swapaxes [[1 2 3] [4 5 6]] 0 1)) ; => (3, 2)
@@ -732,10 +800,11 @@ Interchanges two specified axes of a tensor. This is a specialized version of tr
 
 ### slice
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(slice x start end)`
 
-Extracts a continuous sub-section of a tensor along its first axis, starting from the `start` index (inclusive) and stopping at the `end` index (exclusive).
+Extracts a continuous sub-section of a tensor along its first axis, starting
+from the `start` index (inclusive) and stopping at the `end` index (exclusive).
 
 ```sheaf
 (slice [0 1 2 3 4] 1 4)    ; => [1. 2. 3.]
@@ -745,10 +814,12 @@ Extracts a continuous sub-section of a tensor along its first axis, starting fro
 
 ### roll
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(roll x shift [:axis axis])`
 
-Rolls tensor elements along the specified axis. Elements that roll off one end are reintroduced at the other. If no axis is provided, the tensor is flattened, rolled, and restored to its original shape.
+Rolls tensor elements along the specified axis. Elements that roll off one end
+are reintroduced at the other. If no axis is provided, the tensor is flattened,
+rolled, and restored to its original shape.
 
 ```sheaf
 (roll [1 2 3] 1) ; => [3. 1. 2.]
@@ -759,10 +830,10 @@ Rolls tensor elements along the specified axis. Elements that roll off one end a
 
 ### flip
 
-**Type:** function
-**Signature:** `(flip x [:axis axis])`
+**Type:** function **Signature:** `(flip x [:axis axis])`
 
-Reverses the order of elements along the specified axis. For tensors, defaults to axis 0. For lists, reverses the entire list.
+Reverses the order of elements along the specified axis. For tensors, defaults
+to axis 0. For lists, reverses the entire list.
 
 ```sheaf
 (flip [1 2 3 4 5]) ; => [5. 4. 3. 2. 1.]
@@ -774,10 +845,11 @@ Reverses the order of elements along the specified axis. For tensors, defaults t
 
 ### concat
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(concat x1 x2 [...] [:axis axis])`
 
-Concatenate sequences (lists or arrays). Returns a list for list inputs, tensor for array inputs. Supports `:axis` for array concatenation (default 0).
+Concatenate sequences (lists or arrays). Returns a list for list inputs, tensor
+for array inputs. Supports `:axis` for array concatenation (default 0).
 
 ```sheaf
 ;; Concatenate lists
@@ -795,10 +867,11 @@ Concatenate sequences (lists or arrays). Returns a list for list inputs, tensor 
 
 ### tril
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(tril x)`
 
-Returns the lower triangular part of a matrix or a stack of matrices. Elements above the main diagonal are set to zero.
+Returns the lower triangular part of a matrix or a stack of matrices. Elements
+above the main diagonal are set to zero.
 
 ```sheaf
 (tril [[1 2 3] [4 5 6] [7 8 9]]) ; => [[1. 0. 0.]
@@ -810,10 +883,13 @@ Returns the lower triangular part of a matrix or a stack of matrices. Elements a
 
 ### where
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(where condition x y)`
 
-Performs element-wise selection between `x` and `y` based on a boolean condition. If the condition is true, it selects the element from `x`, otherwise from `y`. This is the functionally pure equivalent of an if-else statement for tensors and is compatible with JIT compilation.
+Performs element-wise selection between `x` and `y` based on a boolean
+condition. If the condition is true, it selects the element from `x`, otherwise
+from `y`. This is the functionally pure equivalent of an if-else statement for
+tensors and is compatible with JIT compilation.
 
 ```sheaf
 (where (> [1 3 2] 2) [10 20 30] 0) ; => [ 0. 20.  0.]
@@ -825,10 +901,11 @@ Performs element-wise selection between `x` and `y` based on a boolean condition
 
 ### ones, zeros
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(ones shape)`, `(zeros shape)`
 
-Fill tensor with 1.0 or 0.0. Shape must be a tuple/list (use quote for vector literals).
+Fill tensor with 1.0 or 0.0. Shape must be a tuple/list (use quote for vector
+literals).
 
 ```sheaf
 (ones '[2 3])        ; => [[1. 1. 1.]
@@ -840,10 +917,12 @@ Fill tensor with 1.0 or 0.0. Shape must be a tuple/list (use quote for vector li
 
 ### eye
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(eye n [m])`
 
-Creates a 2D identity matrix of shape `(n, n)`. When a second argument `m` is provided, the output shape is `(n, m)` — a rectangular matrix with ones on the main diagonal and zeros elsewhere.
+Creates a 2D identity matrix of shape `(n, n)`. When a second argument `m` is
+provided, the output shape is `(n, m)` — a rectangular matrix with ones on the
+main diagonal and zeros elsewhere.
 
 ```sheaf
 (eye 3)                ; => [[1. 0. 0.]
@@ -858,10 +937,12 @@ Creates a 2D identity matrix of shape `(n, n)`. When a second argument `m` is pr
 
 ### arange
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(arange [start] stop [step])`
 
-Generates a 1D tensor containing a sequence of evenly spaced values within a given interval. The sequence starts at `start` (default 0), increments by `step` (default 1), and ends before reaching `stop`.
+Generates a 1D tensor containing a sequence of evenly spaced values within a
+given interval. The sequence starts at `start` (default 0), increments by `step`
+(default 1), and ends before reaching `stop`.
 
 ```sheaf
 (arange 5)           ; => [0 1 2 3 4]
@@ -873,10 +954,12 @@ Generates a 1D tensor containing a sequence of evenly spaced values within a giv
 
 ### one-hot
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(one-hot indices num-classes)`
 
-Converts integer indices into a one-hot representation. For an input of shape `(...)`, the output will have shape `(..., num-classes)`, where the specified indices are set to `1` and all other entries to `0`.
+Converts integer indices into a one-hot representation. For an input of shape
+`(...)`, the output will have shape `(..., num-classes)`, where the specified
+indices are set to `1` and all other entries to `0`.
 
 ```sheaf
 (one-hot 1 3)        ; => [0. 1. 0.]
@@ -891,10 +974,13 @@ Converts integer indices into a one-hot representation. For an input of shape `(
 
 ### index-update
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(index-update tensor idx value)`
 
-Returns a new tensor identical to `tensor` except that the slice at position `idx` is replaced by `value`. The index must be a scalar integer — not a single-element vector. This is the standard way to perform functional (out-of-place) updates on tensors.
+Returns a new tensor identical to `tensor` except that the slice at position
+`idx` is replaced by `value`. The index must be a scalar integer — not a
+single-element vector. This is the standard way to perform functional
+(out-of-place) updates on tensors.
 
 ```sheaf
 ;; Replace one element in a 1D vector
@@ -909,10 +995,12 @@ Returns a new tensor identical to `tensor` except that the slice at position `id
 
 ### tensor
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(tensor data)`
 
-Converts a literal list or a dynamically-generated list into a tensor. This function is required when a sequence is built at runtime (via `cons`, `append`, etc.) and needs to enter the computational pipeline.
+Converts a literal list or a dynamically-generated list into a tensor. This
+function is required when a sequence is built at runtime (via `cons`, `append`,
+etc.) and needs to enter the computational pipeline.
 
 ```sheaf
 ;; Conversion from a literal list
@@ -929,10 +1017,13 @@ Converts a literal list or a dynamically-generated list into a tensor. This func
 
 ### int, float
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(int x)`, `(float x)`
 
-Cast a scalar tensor or number to a 32-bit integer or 32-bit float, respectively. The result is a scalar tensor. These are the primary way to extract a concrete numeric value from a tensor for use in indexing or list operations.
+Cast a scalar tensor or number to a 32-bit integer or 32-bit float,
+respectively. The result is a scalar tensor. These are the primary way to
+extract a concrete numeric value from a tensor for use in indexing or list
+operations.
 
 ```sheaf
 (int 3.7)                ; => 3
@@ -946,12 +1037,13 @@ Cast a scalar tensor or number to a 32-bit integer or 32-bit float, respectively
 
 ### cast
 
-**Type:** function
-**Signature:** `(cast expr :dtype)`
+**Type:** function **Signature:** `(cast expr :dtype)`
 
-Converts a tensor, scalar, or DeviceBuffer to the specified dtype. Supported dtypes: `:f32`, `:bf16`, `:i32`. Sheaf never converts dtypes implicitly.
+Converts a tensor, scalar, or DeviceBuffer to the specified dtype. Supported
+dtypes: `:f32`, `:bf16`, `:i32`. Sheaf never converts dtypes implicitly.
 
-The `[vec] :dtype` syntax is syntactic sugar that desugars to `cast` at parse time.
+The `[vec] :dtype` syntax is syntactic sugar that desugars to `cast` at parse
+time.
 
 ```sheaf
 ;; Equivalent shorthand via type annotation
@@ -969,17 +1061,20 @@ The `[vec] :dtype` syntax is syntactic sugar that desugars to `cast` at parse ti
 
 ## Initializers
 
-All follow the `(init key shape)` convention, matching PyTorch naming. These functions are available by default (no import needed).
-Use a quoted vector for the shape (e.g., `'[256 128]`) to ensure it is treated as static data.
+All follow the `(init key shape)` convention, matching PyTorch naming. These
+functions are available by default (no import needed). Use a quoted vector for
+the shape (e.g., `'[256 128]`) to ensure it is treated as static data.
 
-For zero/one initialization, use the builtins `zeros` and `ones` directly (no key needed).
+For zero/one initialization, use the builtins `zeros` and `ones` directly (no
+key needed).
 
 ### xavier-uniform, xavier-normal
 
-**Type:** function (`nn` module)
-**Signature:** `(xavier-uniform key shape)`, `(xavier-normal key shape)`
+**Type:** function (`nn` module) **Signature:** `(xavier-uniform key shape)`,
+`(xavier-normal key shape)`
 
-Xavier (Glorot) initialization. Scales weights so variance stays constant across layers. Effective with symmetric activations (`tanh`, `sigmoid`).
+Xavier (Glorot) initialization. Scales weights so variance stays constant across
+layers. Effective with symmetric activations (`tanh`, `sigmoid`).
 
 ```sheaf
 (xavier-uniform (random-key 42) '[256 128])  ; U(-limit, limit), limit = sqrt(6/(fan_in+fan_out))
@@ -990,10 +1085,11 @@ Xavier (Glorot) initialization. Scales weights so variance stays constant across
 
 ### kaiming-uniform, kaiming-normal
 
-**Type:** function (`nn` module)
-**Signature:** `(kaiming-uniform key shape)`, `(kaiming-normal key shape)`
+**Type:** function (`nn` module) **Signature:** `(kaiming-uniform key shape)`,
+`(kaiming-normal key shape)`
 
-Kaiming (He) initialization. Accounts for ReLU non-linearity by scaling variance by `2/fan_in`.
+Kaiming (He) initialization. Accounts for ReLU non-linearity by scaling variance
+by `2/fan_in`.
 
 ```sheaf
 (kaiming-normal (random-key 42) '[512 256])
@@ -1003,8 +1099,8 @@ Kaiming (He) initialization. Accounts for ReLU non-linearity by scaling variance
 
 ### lecun-normal, lecun-uniform
 
-**Type:** function (`nn` module)
-**Signature:** `(lecun-normal key shape)`, `(lecun-uniform key shape)`
+**Type:** function (`nn` module) **Signature:** `(lecun-normal key shape)`,
+`(lecun-uniform key shape)`
 
 LeCun initialization. Scales by `1/fan_in`. Default for SELU networks.
 
@@ -1018,10 +1114,13 @@ LeCun initialization. Scales by `1/fan_in`. Default for SELU networks.
 
 ### random-key
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(random-key seed)`
 
-Generates a Pseudo-Random Number Generator (PRNG) key starting from an integer seed. Unlike many other frameworks, randomness in Sheaf is explicit and deterministic: the state is never hidden, ensuring identical results across different runs and hardwares.
+Generates a Pseudo-Random Number Generator (PRNG) key starting from an integer
+seed. Unlike many other frameworks, randomness in Sheaf is explicit and
+deterministic: the state is never hidden, ensuring identical results across
+different runs and hardwares.
 
 ```sheaf
 (random-key 42)      ; => key<fry>[] = Array((), overlaying: [ 0 42]
@@ -1031,10 +1130,13 @@ Generates a Pseudo-Random Number Generator (PRNG) key starting from an integer s
 
 ### random-split
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(random-split key [num])`
 
-Splits a single PRNG key into a specified number `num` of independent sub-keys. This is a cornerstone of stochastic modeling in Sheaf: to maintain statistical independence, a key should be used for exactly one operation and then "discarded" in favor of its split children.
+Splits a single PRNG key into a specified number `num` of independent sub-keys.
+This is a cornerstone of stochastic modeling in Sheaf: to maintain statistical
+independence, a key should be used for exactly one operation and then
+"discarded" in favor of its split children.
 
 ```sheaf
 (let [key (random-key 0)
@@ -1050,10 +1152,11 @@ Splits a single PRNG key into a specified number `num` of independent sub-keys. 
 
 ### random-normal
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(random-normal key shape [:dtype dtype])`
 
-Samples random values from a standard normal distribution (mean 0, variance 1) with the specified shape.
+Samples random values from a standard normal distribution (mean 0, variance 1)
+with the specified shape.
 
 ```sheaf
 (random-normal (random-key 0) '[100 100])  ; => Tensor i32[100x100]
@@ -1063,10 +1166,12 @@ Samples random values from a standard normal distribution (mean 0, variance 1) w
 
 ### random-uniform
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(random-uniform key [shape])`
 
-Samples random values from a uniform distribution over the semi-open interval `[0.0, 1.0)`. This is often used as a base for custom probability transforms or simple noise injection.
+Samples random values from a uniform distribution over the semi-open interval
+`[0.0, 1.0)`. This is often used as a base for custom probability transforms or
+simple noise injection.
 
 ```sheaf
 (random-uniform (random-key 0) '[10 10])  ; => Tensor i32[10x10]
@@ -1076,10 +1181,11 @@ Samples random values from a uniform distribution over the semi-open interval `[
 
 ### random-range
 
-**Type:** stdlib function (misc.shf)
-**Signature:** `(random-range key shape lo hi)`
+**Type:** stdlib function (misc.shf) **Signature:**
+`(random-range key shape lo hi)`
 
-Samples uniform random values in the range `[lo, hi)`. Built on `random-uniform`.
+Samples uniform random values in the range `[lo, hi)`. Built on
+`random-uniform`.
 
 ```sheaf
 (random-range (random-key 42) '[3] 0.1 0.9)
@@ -1090,10 +1196,12 @@ Samples uniform random values in the range `[lo, hi)`. Built on `random-uniform`
 
 ### random-randint
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(random-randint key shape low high)`
 
-Generates random integers sampled uniformly from the range `[low, high)`. This is useful for generating random indices, selecting data augmentations, or creating dummy datasets.
+Generates random integers sampled uniformly from the range `[low, high)`. This
+is useful for generating random indices, selecting data augmentations, or
+creating dummy datasets.
 
 ```sheaf
 (random-randint (random-key 0) '[100] 0 10)  ; => ⇒ Tensor i32[100]
@@ -1103,12 +1211,13 @@ Generates random integers sampled uniformly from the range `[low, high)`. This i
 
 ### choice
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(choice key a shape [:p p :replace replace])`
 
 Generates a random sample from a given 1D array or a range.
 
-- `a`: If an integer, the sample is taken from `(arange a)`. If a tensor, the sample is taken from its elements.
+- `a`: If an integer, the sample is taken from `(arange a)`. If a tensor, the
+  sample is taken from its elements.
 
 - `shape`: The shape of the output sample.
 
@@ -1117,7 +1226,6 @@ Generates a random sample from a given 1D array or a range.
 - `replace`: Whether the sample is with or without replacement.
 
 ```sheaf
-
 ;; Samples 5 random integers from the range [0, 100).
 (choice (random-key 0) 100 '[5])  ; => [89  0 12 73 71]
 
@@ -1132,11 +1240,11 @@ Generates a random sample from a given 1D array or a range.
 
 ### first, second, last
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(first seq)`, `(second seq)`, `(last seq)`
 
-Provides positional access to elements within a list.
-To access elements in a tensor, use `nth` or `slice`.
+Provides positional access to elements within a list. To access elements in a
+tensor, use `nth` or `slice`.
 
 ```sheaf
 (first '[1 2 3])      ; => 1
@@ -1148,10 +1256,12 @@ To access elements in a tensor, use `nth` or `slice`.
 
 ### rest
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(rest seq)`
 
-Returns a new sequence containing all elements of the input except for the first one. In Lisp terms, this is the `cdr` operation. If the sequence is empty, it returns an empty list.
+Returns a new sequence containing all elements of the input except for the first
+one. In Lisp terms, this is the `cdr` operation. If the sequence is empty, it
+returns an empty list.
 
 ```sheaf
 (rest '[1 2 3])      ; => [2, 3]
@@ -1161,10 +1271,12 @@ Returns a new sequence containing all elements of the input except for the first
 
 ### chars
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(chars s)`
 
-Splits a string into a list of its individual characters. This is the standard way to iterate over a string character by character, e.g. to build a vocabulary or encode text.
+Splits a string into a list of its individual characters. This is the standard
+way to iterate over a string character by character, e.g. to build a vocabulary
+or encode text.
 
 ```sheaf
 (chars "hello")      ; => ["h" "e" "l" "l" "o"]
@@ -1175,10 +1287,12 @@ Splits a string into a list of its individual characters. This is the standard w
 
 ### nth
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(nth seq index)`
 
-Retrieves the element at the specified zero-based `index`. This function is polymorphic in Sheaf: it performs a pointer-based lookup on lists and a coordinate-based extraction on tensors.
+Retrieves the element at the specified zero-based `index`. This function is
+polymorphic in Sheaf: it performs a pointer-based lookup on lists and a
+coordinate-based extraction on tensors.
 
 ```sheaf
 (nth '[10 20 30] 1)  ; => 20 (Sheaf list)
@@ -1189,10 +1303,12 @@ Retrieves the element at the specified zero-based `index`. This function is poly
 
 ### cons
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(cons elem seq)`
 
-Constructs a new list by prepending `elem` to the front of `seq`. This is a constant-time O(1) operation for lists, making it the preferred way to build sequences dynamically.
+Constructs a new list by prepending `elem` to the front of `seq`. This is a
+constant-time O(1) operation for lists, making it the preferred way to build
+sequences dynamically.
 
 ```sheaf
 (cons 0 '[1 2 3])    ; => [0, 1, 2, 3]
@@ -1202,10 +1318,12 @@ Constructs a new list by prepending `elem` to the front of `seq`. This is a cons
 
 ### append
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(append seq elem)`
 
-Creates a new sequence by adding `elem` to the end of `seq`. Unlike cons, this operation requires traversing the entire sequence, resulting in O(N) complexity for lists.
+Creates a new sequence by adding `elem` to the end of `seq`. Unlike cons, this
+operation requires traversing the entire sequence, resulting in O(N) complexity
+for lists.
 
 ```sheaf
 (append '[1 2] 3)    ; => [1, 2, 3]
@@ -1217,10 +1335,11 @@ Creates a new sequence by adding `elem` to the end of `seq`. Unlike cons, this o
 
 ### empty?
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(empty? seq)`
 
-Returns `true` if the provided sequence (list or tensor) contains no elements. For tensors, this checks if any dimension in the shape is `0`.
+Returns `true` if the provided sequence (list or tensor) contains no elements.
+For tensors, this checks if any dimension in the shape is `0`.
 
 ```sheaf
 (empty? '[])         ; => true
@@ -1232,7 +1351,7 @@ Returns `true` if the provided sequence (list or tensor) contains no elements. F
 
 ### sort
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(sort seq [:reverse] [:key f] [:axis n])`
 
 Sorts a list or tensor. Polymorphic: available options depend on the input type.
@@ -1262,10 +1381,12 @@ Sorts a list or tensor. Polymorphic: available options depend on the input type.
 
 ### filter
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(filter pred seq)`
 
-Returns a new list containing only the elements of `seq` for which the predicate `pred` returns a truthy value. The result is always a tuple (static list). Works on both quoted lists and lists of strings built at runtime.
+Returns a new list containing only the elements of `seq` for which the predicate
+`pred` returns a truthy value. The result is always a tuple (static list). Works
+on both quoted lists and lists of strings built at runtime.
 
 ```sheaf
 (filter (fn [x] (> x 2)) '[1 2 3 4 5])                ; => '[3, 4, 5]
@@ -1279,10 +1400,12 @@ Returns a new list containing only the elements of `seq` for which the predicate
 
 ### find
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(find pred seq)`
 
-Returns the first element of `seq` for which `pred` returns a truthy value, or `nil` if no element matches. Traversal is left-to-right and stops at the first match.
+Returns the first element of `seq` for which `pred` returns a truthy value, or
+`nil` if no element matches. Traversal is left-to-right and stops at the first
+match.
 
 ```sheaf
 (find (fn [x] (> x 3)) '[1 2 3 4 5])                  ; => 4
@@ -1293,10 +1416,11 @@ Returns the first element of `seq` for which `pred` returns a truthy value, or `
 
 ### index-of
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(index-of seq val)`
 
-Returns the zero-based index of the first occurrence of `val` in `seq`, or `-1` if `val` is not present. Works on both numbers and strings.
+Returns the zero-based index of the first occurrence of `val` in `seq`, or `-1`
+if `val` is not present. Works on both numbers and strings.
 
 ```sheaf
 (index-of '[10 20 30 40] 30)                           ; => 2
@@ -1312,10 +1436,13 @@ Returns the zero-based index of the first occurrence of `val` in `seq`, or `-1` 
 
 ### map
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(map func seq)`
 
-Applies a function to each element of a sequence and returns a list of the results. In Sheaf, `map` is the primary way to transform collections without using explicit loops. While `map` is sequential in logic, the underlying execution on tensors can often be optimized by the compiler.
+Applies a function to each element of a sequence and returns a list of the
+results. In Sheaf, `map` is the primary way to transform collections without
+using explicit loops. While `map` is sequential in logic, the underlying
+execution on tensors can often be optimized by the compiler.
 
 ```sheaf
 ;; Basic numeric transformation
@@ -1334,10 +1461,13 @@ Applies a function to each element of a sequence and returns a list of the resul
 
 ### tree-map
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(tree-map f tree1 [tree2 ...])`
 
-Applies a function `f` to every leaf in a tree (or multiple trees) and returns a new tree with the same structure. This is the primary tool for manipulating model parameters, such as applying an optimizer update or scaling weights, without manually flattening the structures.
+Applies a function `f` to every leaf in a tree (or multiple trees) and returns a
+new tree with the same structure. This is the primary tool for manipulating
+model parameters, such as applying an optimizer update or scaling weights,
+without manually flattening the structures.
 
 ```sheaf
 ;; Square all elements in a nested structure
@@ -1352,10 +1482,12 @@ Applies a function `f` to every leaf in a tree (or multiple trees) and returns a
 
 ### tree-map-zeros
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(tree-map-zeros tree)`
 
-Creates a new tree with the same structure as the input, but where every leaf is replaced by a zero of the same numerical type. This is primarily used to initialize gradient accumulators or optimizer states.
+Creates a new tree with the same structure as the input, but where every leaf is
+replaced by a zero of the same numerical type. This is primarily used to
+initialize gradient accumulators or optimizer states.
 
 ````sheaf
 ;; Zero all elements in a nested structure
@@ -1424,17 +1556,18 @@ Reduces a collection to a single value by applying a binary function func cumula
 ;; Finding the maximum value across multiple tensors
 ;; Useful for tracking the peak activation across different layers
 (reduce maximum -1e9 [[1 5] [2 3] [8 4]]) ; => [8. 5.]
-
 ````
 
 ---
 
 ### apply
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(apply func seq)`
 
-Calls the provided function func using the elements of seq as its individual arguments. It "unpacks" a list or a tensor so that each element becomes a separate argument to the function.
+Calls the provided function func using the elements of seq as its individual
+arguments. It "unpacks" a list or a tensor so that each element becomes a
+separate argument to the function.
 
 ```sheaf
 ;; Unpacking a list for a variadic function
@@ -1452,7 +1585,6 @@ Calls the provided function func using the elements of seq as its individual arg
   (apply ones dims))
 
 ; => f32[2x3x4] (μ=1.000 min=1.000 max=1.000)
-
 ```
 
 ---
@@ -1461,10 +1593,12 @@ Calls the provided function func using the elements of seq as its individual arg
 
 ### dict
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(dict :key1 val1 :key2 val2 ...)`
 
-Creates a dictionary (map) from a sequence of alternating keys and values. This is useful for dynamically constructing parameter maps or configurations where keys and values are computed or passed as arguments.
+Creates a dictionary (map) from a sequence of alternating keys and values. This
+is useful for dynamically constructing parameter maps or configurations where
+keys and values are computed or passed as arguments.
 
 ```sheaf
 ;; Basic construction
@@ -1478,22 +1612,18 @@ Creates a dictionary (map) from a sequence of alternating keys and values. This 
   (dict :W w :b b))
 
 ; => {:W f32[10], :b f32[1]}
-
-
-
 ```
 
 ---
 
 ### get
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(get coll key [default])`
 
 Retrieves the value associated with a key in a map or an index in a tensor.
 
-If the key/index exists, returns the corresponding value.
-If it does not exist:
+If the key/index exists, returns the corresponding value. If it does not exist:
 
 - Returns `nil` if no `default` is provided.
 - Returns the `default` value if provided.
@@ -1507,10 +1637,12 @@ If it does not exist:
 
 ### get-in
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(get-in collection key-vector [default])`
 
-Navigates through nested data structures (maps, lists, or tensors) using a sequence of keys. If the path exists, returns the value at the destination; otherwise, returns nil or the optional not-found value.
+Navigates through nested data structures (maps, lists, or tensors) using a
+sequence of keys. If the path exists, returns the value at the destination;
+otherwise, returns nil or the optional not-found value.
 
 ```sheaf
 ;; Deep navigation in a parameter dictionary
@@ -1533,10 +1665,11 @@ Navigates through nested data structures (maps, lists, or tensors) using a seque
 
 ### assoc
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(assoc dict :key1 val1 :key2 val2 ...)`
 
-Creates a new dictionary with updated key-value pairs. Does not mutate the original dictionary (functional update).
+Creates a new dictionary with updated key-value pairs. Does not mutate the
+original dictionary (functional update).
 
 ```sheaf
 ;; Add a new key
@@ -1553,17 +1686,17 @@ Creates a new dictionary with updated key-value pairs. Does not mutate the origi
 (assoc {:layer1 {:w w1 :b b1}} :learning-rate 0.001 :epochs 100)
 
 ; => {:layer1 {...}, :learning-rate 0.001, :epochs 100}
-
 ```
 
 ---
 
 ### dissoc
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(dissoc dict keys-list)`
 
-Creates a new dictionary with specified keys removed. Does not mutate the original dictionary (functional update). Keys are passed as a list.
+Creates a new dictionary with specified keys removed. Does not mutate the
+original dictionary (functional update). Keys are passed as a list.
 
 ```sheaf
 ;; Remove a single key
@@ -1586,17 +1719,17 @@ Creates a new dictionary with specified keys removed. Does not mutate the origin
   (dissoc state [:loss]))  ; Remove loss before scan
 
 ; => {:p ..., :m ..., :v ..., :t ...}
-
 ```
 
 ---
 
 ### merge
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(merge dict1 dict2 ...)`
 
-Merges multiple dictionaries into one. Later dictionaries override earlier ones for conflicting keys. Does not mutate the originals (creates new dict).
+Merges multiple dictionaries into one. Later dictionaries override earlier ones
+for conflicting keys. Does not mutate the originals (creates new dict).
 
 ```sheaf
 ;; Merge two dicts
@@ -1621,10 +1754,12 @@ Merges multiple dictionaries into one. Later dictionaries override earlier ones 
 
 ### keys
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(keys dict)`
 
-Returns a list containing all the keys present in the dictionary. The order of keys is generally consistent with the insertion order but should not be relied upon for critical logic.
+Returns a list containing all the keys present in the dictionary. The order of
+keys is generally consistent with the insertion order but should not be relied
+upon for critical logic.
 
 ```sheaf
 (keys {:a 1 :b 2 :c 3})
@@ -1636,10 +1771,12 @@ Returns a list containing all the keys present in the dictionary. The order of k
 
 ### vals
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(vals dict)`
 
-Returns a list of all values stored in the dictionary. This is particularly useful when combined with `tree-map` or other sequence operations to process all parameters of a model layer simultaneously.
+Returns a list of all values stored in the dictionary. This is particularly
+useful when combined with `tree-map` or other sequence operations to process all
+parameters of a model layer simultaneously.
 
 ```sheaf
 (vals {:a 1 :b 2 :c 3})
@@ -1653,10 +1790,14 @@ Returns a list of all values stored in the dictionary. This is particularly usef
 
 ### if
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(if condition then-expr [else-expr])`
 
-The fundamental conditional operator. It evaluates the `condition`; if truthy, it evaluates and returns `then-expr`. If falsy, it evaluates and returns `else-expr` (or `nil` if no else branch is provided). In compiled JIT contexts, `if` is used for structural control flow, not for element-wise tensor masking (use `where` for that).
+The fundamental conditional operator. It evaluates the `condition`; if truthy,
+it evaluates and returns `then-expr`. If falsy, it evaluates and returns
+`else-expr` (or `nil` if no else branch is provided). In compiled JIT contexts,
+`if` is used for structural control flow, not for element-wise tensor masking
+(use `where` for that).
 
 ```sheaf
 (if (> 1 0) :yes :no) ; => :yes
@@ -1667,10 +1808,13 @@ The fundamental conditional operator. It evaluates the `condition`; if truthy, i
 
 ### case
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(case x match1 result1 ... [default])`
 
-Provides efficient multi-branch dispatch. It evaluates `x` and compares it against each `match` literal. When a match is found, the corresponding `result` is returned. If no matches succeed and a `default` value is provided at the end, it is returned; otherwise, the result is `nil`.
+Provides efficient multi-branch dispatch. It evaluates `x` and compares it
+against each `match` literal. When a match is found, the corresponding `result`
+is returned. If no matches succeed and a `default` value is provided at the end,
+it is returned; otherwise, the result is `nil`.
 
 ```sheaf
 (case 2
@@ -1684,10 +1828,13 @@ Provides efficient multi-branch dispatch. It evaluates `x` and compares it again
 
 ### do
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(do expr1 expr2 ... exprN)`
 
-Evaluates a sequence of expressions in order and returns the value of the last one. The preceding expressions are evaluated for their side effects only (e.g. `print`, `io "save"`). This is the idiomatic way to sequence imperative actions inside an otherwise functional context.
+Evaluates a sequence of expressions in order and returns the value of the last
+one. The preceding expressions are evaluated for their side effects only (e.g.
+`print`, `io "save"`). This is the idiomatic way to sequence imperative actions
+inside an otherwise functional context.
 
 ```sheaf
 (do
@@ -1716,10 +1863,12 @@ Evaluates a sequence of expressions in order and returns the value of the last o
 
 ### repeat
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(repeat [i n] [acc init] body)`
 
-Loops exactly `n` times. `i` is the iteration index (0-based), `acc` is the accumulator that carries state across iterations. The body must return the new value of `acc`. Returns the final accumulator value.
+Loops exactly `n` times. `i` is the iteration index (0-based), `acc` is the
+accumulator that carries state across iterations. The body must return the new
+value of `acc`. Returns the final accumulator value.
 
 ```sheaf
 ;; Sum 0..9
@@ -1738,16 +1887,19 @@ Loops exactly `n` times. `i` is the iteration index (0-based), `acc` is the accu
 ;; => {:params <trained> :loss <final-loss>}
 ```
 
-Use `repeat` when the iteration count is known at compile time. For loops that depend on a runtime condition, see `while`.
+Use `repeat` when the iteration count is known at compile time. For loops that
+depend on a runtime condition, see `while`.
 
 ---
 
 ### while
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(while cond [acc init] body)`
 
-Loops as long as `cond` is true. `acc` is the accumulator, visible both in `cond` and in `body`. The body must return the new value of `acc`. Returns the accumulator value at the point where `cond` becomes false.
+Loops as long as `cond` is true. `acc` is the accumulator, visible both in
+`cond` and in `body`. The body must return the new value of `acc`. Returns the
+accumulator value at the point where `cond` becomes false.
 
 ```sheaf
 ;; Count up to 5
@@ -1771,16 +1923,20 @@ Loops as long as `cond` is true. `acc` is the accumulator, visible both in `cond
      :key    k1}))
 ```
 
-Use `while` when the stopping condition depends on runtime values (e.g. loss convergence). For a fixed number of iterations, prefer `repeat`.
+Use `while` when the stopping condition depends on runtime values (e.g. loss
+convergence). For a fixed number of iterations, prefer `repeat`.
 
 ---
 
 ### let
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(let [var1 val1 var2 val2 ...] body ...)`
 
-Evaluates expressions in a local scope where each variable name is bound to its corresponding value sequentially. Each binding can reference previously defined variables within the same block. Multiple body expressions are supported (implicit `do`): all are evaluated in order, and the last value is returned.
+Evaluates expressions in a local scope where each variable name is bound to its
+corresponding value sequentially. Each binding can reference previously defined
+variables within the same block. Multiple body expressions are supported
+(implicit `do`): all are evaluated in order, and the last value is returned.
 
 ```sheaf
 (let [x 1] x)         ; => 1
@@ -1800,10 +1956,11 @@ Evaluates expressions in a local scope where each variable name is bound to its 
 
 ### def
 
-**Type:** special-form
-**Signature:** `(def name value)`
+**Type:** special-form **Signature:** `(def name value)`
 
-Binds a global name to an immutable value. The value is evaluated once at definition time. Redefinition is not allowed. Use `def` for constants, configuration, and shared data that does not change.
+Binds a global name to an immutable value. The value is evaluated once at
+definition time. Redefinition is not allowed. Use `def` for constants,
+configuration, and shared data that does not change.
 
 ```sheaf
 (def scale 2.0)
@@ -1821,10 +1978,10 @@ Binds a global name to an immutable value. The value is evaluated once at defini
 
 ### defn
 
-**Type:** special-form
-**Signature:** `(defn name [params] body ...)`
+**Type:** special-form **Signature:** `(defn name [params] body ...)`
 
-Binds a global name to a function. Multiple body expressions are allowed (implicit `do`): all are evaluated in order, and the last value is returned.
+Binds a global name to a function. Multiple body expressions are allowed
+(implicit `do`): all are evaluated in order, and the last value is returned.
 
 ```sheaf
 (defn square [x]
@@ -1842,10 +1999,13 @@ Binds a global name to a function. Multiple body expressions are allowed (implic
 
 ### fn
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(fn [params] body ...)`
 
-Defines an anonymous function (lambda) that captures no external state (pure function). It is primarily used for short-lived transformations, mapping operations, or as arguments to higher-order functions like `map` or `vmap`. Multiple body expressions are supported (implicit `do`).
+Defines an anonymous function (lambda) that captures no external state (pure
+function). It is primarily used for short-lived transformations, mapping
+operations, or as arguments to higher-order functions like `map` or `vmap`.
+Multiple body expressions are supported (implicit `do`).
 
 ```sheaf
 ((fn [x] (+ x 1)) 10)         ; => 11
@@ -1868,10 +2028,14 @@ Defines an anonymous function (lambda) that captures no external state (pure fun
 
 ### defmacro
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(defmacro name [params] body)`
 
-Defines a macro that performs code transformation at compile-time. Unlike functions, macros receive their arguments as unevaluated data (S-expressions) and return a new expression that replaces the macro call before execution. This is primarily used for syntax extension and code generation without runtime overhead.
+Defines a macro that performs code transformation at compile-time. Unlike
+functions, macros receive their arguments as unevaluated data (S-expressions)
+and return a new expression that replaces the macro call before execution. This
+is primarily used for syntax extension and code generation without runtime
+overhead.
 
 ```sheaf
 ;; Define a 'when' macro (syntactic sugar for if)
@@ -1898,10 +2062,13 @@ Defines a macro that performs code transformation at compile-time. Unlike functi
 
 ### ->
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(-> x (f1) (f2 a) ...)`
 
-Threads the expression `x` through the provided forms. It inserts `x` as the first argument of the first form, then inserts the result as the first argument of the next form, and so on. This macro linearizes nested function calls, improving readability for sequential data transformations.
+Threads the expression `x` through the provided forms. It inserts `x` as the
+first argument of the first form, then inserts the result as the first argument
+of the next form, and so on. This macro linearizes nested function calls,
+improving readability for sequential data transformations.
 
 ```sheaf
 ;; Linear sequence: (f3 (f2 (f1 x a) b))
@@ -1920,17 +2087,20 @@ Threads the expression `x` through the provided forms. It inserts `x` as the fir
   (reshape '[3 4])  ; Reshape to [3, 4]
   (sum :axis 0)     ; Sum columns => [12 13 14 15]
   (+ 10))           ; Add bias => [22 23 24 25]
-
 ```
 
 ---
 
 ### as->
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(as-> init name form1 form2 ...)`
 
-Threads the initial expression init through the provided forms by binding its result to a symbol name. At each step, name is updated with the result of the previous form, allowing the data to be placed at any position within the next expression. This is the preferred way to handle pipelines where functions do not accept the threaded data as their first argument.
+Threads the initial expression init through the provided forms by binding its
+result to a symbol name. At each step, name is updated with the result of the
+previous form, allowing the data to be placed at any position within the next
+expression. This is the preferred way to handle pipelines where functions do not
+accept the threaded data as their first argument.
 
 ```sheaf
 ;; Simple math pipeline
@@ -1956,10 +2126,12 @@ Threads the initial expression init through the provided forms by binding its re
 
 ### with-params
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(with-params [dict] body)` or `(with-params [dict :key] body)`
 
-Unpacks the keys of a dictionary into the local scope as bound variables. If a `:key` is provided, it destructures the nested dictionary located at `(get dict :key)`.
+Unpacks the keys of a dictionary into the local scope as bound variables. If a
+`:key` is provided, it destructures the nested dictionary located at
+`(get dict :key)`.
 
 ```sheaf
 ;; Access root level keys (params dict)
@@ -1979,7 +2151,6 @@ Unpacks the keys of a dictionary into the local scope as bound variables. If a `
       x [1.0 1.0]]                         ; Input
   (with-params (get layers layer-id)
     (relu (+ (@ x W) b))))
-
 ```
 
 ---
@@ -1988,10 +2159,12 @@ Unpacks the keys of a dictionary into the local scope as bound variables. If a `
 
 ### vmap
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(vmap func)` or `(vmap func in-axes)`
 
-Vectorized mapping over batches. Applies function independently to each element along specified axes. Optional second argument controls axis mapping for multiple parameters.
+Vectorized mapping over batches. Applies function independently to each element
+along specified axes. Optional second argument controls axis mapping for
+multiple parameters.
 
 ```sheaf
 ;; Apply function to each row (default axis=0)
@@ -2013,10 +2186,11 @@ Vectorized mapping over batches. Applies function independently to each element 
 
 ### scan
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(scan func init-state xs)`
 
-Iterates over `xs` while carrying a state. At each step, `func` is applied to the current state and the next element of `xs`.
+Iterates over `xs` while carrying a state. At each step, `func` is applied to
+the current state and the next element of `xs`.
 
 The function `func` must return a pair: `[new-state, output]`.
 
@@ -2037,7 +2211,8 @@ Returns a vector `[final-state, stacked-outputs]`.
 
 **Example 2: RNN-style recurrence (state threading)**
 
-For RNNs, state is the hidden vector. Each step processes `(h_prev, x_t) -> (h_next, output)`:
+For RNNs, state is the hidden vector. Each step processes
+`(h_prev, x_t) -> (h_next, output)`:
 
 ```sheaf
 ;; Concrete RNN example: h_t+1 = tanh(W_hh @ h_t + W_xh @ x_t + b_h)
@@ -2078,20 +2253,24 @@ For RNNs, state is the hidden vector. Each step processes `(h_prev, x_t) -> (h_n
 **Notes:**
 
 - If `func` returns only one element, `scan` will fail
-- If state and output structures mismatch between iterations, `scan` will also fail
+- If state and output structures mismatch between iterations, `scan` will also
+  fail
 - `scan` is fully differentiable; use with `value-and-grad` for learning
 
 ---
 
 ### value-and-grad
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(value-and-grad func)`
 
-A higher-order function that transforms a scalar-valued function `func` into a new function. This new function returns a list containing two elements: the original result (value) and the gradient(s) with respect to the first argument of `func`. The gradients share the same structure (Pytree) as the input parameters.
+A higher-order function that transforms a scalar-valued function `func` into a
+new function. This new function returns a list containing two elements: the
+original result (value) and the gradient(s) with respect to the first argument
+of `func`. The gradients share the same structure (Pytree) as the input
+parameters.
 
 ```sheaf
-
 ;; Basic scalar optimization
 ;; f(x) = x² + 1  => f'(x) = 2x
 (let [loss-fn (fn [x] (+ (* x x) 1))
@@ -2112,16 +2291,63 @@ A higher-order function that transforms a scalar-valued function `func` into a n
 
 ---
 
+### stop-gradient
+
+**Type:** function\
+**Signature:** `(stop-gradient x)`
+
+Returns `x` unchanged in the forward pass, but signals to the autodiff machinery
+that no gradient should flow back through it. This is Sheaf's equivalent of
+`jax.lax.stop_gradient`: the value is passed along to every consumer verbatim,
+only differentiation is affected. The gradient of `(stop-gradient x)` with
+respect to `x` is zero, and it carries the same shape (pytree structure) as `x`.
+
+Use it whenever a tensor must be treated as a constant for gradient purposes
+while still being computed at runtime. The canonical cases are:
+
+- **Target / online networks** (DQN, deep RL): the bootstrap target reuses
+  parameters whose gradients must not flow back into the updater.
+- **Actor-critic baselines** (REINFORCE, A2C): subtract
+  `stop-gradient(baseline)` from the return so the baseline cuts variance
+  without biasing the policy gradient.
+- **EM and fixed-point iterations**, and **stop-gradient normalization**: treat
+  an intermediate activation as a constant for one step of the update.
+- **Straight-through estimators**: couple a non-differentiable forward value to
+  a differentiable surrogate.
+
+`stop-gradient` is itself differentiable (its derivative is simply zero), so it
+may appear freely inside `value-and-grad`.
+
+```sheaf
+;; Forward value is unchanged.
+(stop-gradient [1.0 2.0 3.0])            ; => [1. 2. 3.]
+
+;; A fully stop-gradient'd argument yields a zero gradient of the same shape.
+((value-and-grad (fn [x] (sum (stop-gradient x)))) [1.0 2.0 3.0])
+; => [6.0, [0. 0. 0.]]
+
+;; Gradients flow through the unstopped branch only.
+((value-and-grad (fn [x] (sum (+ x (stop-gradient x))))) [1.0 2.0])
+; => [6.0, [1. 1.]]
+
+;; Baseline semantics: d/dx (x * stop_gradient(x)) = stop_gradient(x) = x.
+((value-and-grad (fn [x] (sum (* x (stop-gradient x))))) [3.0 4.0])
+; => [25.0, [3. 4.]]
+```
+
+---
+
 ## Loss & Metrics
 
 ## Advanced Tensor Ops
 
 ### einsum
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(einsum pattern x1 x2 [...])`
 
-Computes the Einstein summation of the input tensors according to the specified `pattern`.
+Computes the Einstein summation of the input tensors according to the specified
+`pattern`.
 
 ```sheaf
 ;; Dot product: i,i->
@@ -2141,10 +2367,12 @@ Computes the Einstein summation of the input tensors according to the specified 
 
 ### top_k
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(top_k x k)`
 
-Finds the `k` largest elements and their corresponding indices in the input tensor along the last axis. This is the standard operation for selecting the most likely next tokens during language model decoding and inference.
+Finds the `k` largest elements and their corresponding indices in the input
+tensor along the last axis. This is the standard operation for selecting the
+most likely next tokens during language model decoding and inference.
 
 ```sheaf
 (let [[vals idxs] (top_k [0.1 0.9 0.3 0.7] 2)]
@@ -2155,10 +2383,12 @@ Finds the `k` largest elements and their corresponding indices in the input tens
 
 ### tensor-split
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(tensor-split x num-sections [:axis axis])`
 
-Splits a tensor into `num-sections` sub-tensors along the specified axis. This function is often used to divide a large hidden state into separate Query, Key, and Value projections in Transformer layers.
+Splits a tensor into `num-sections` sub-tensors along the specified axis. This
+function is often used to divide a large hidden state into separate Query, Key,
+and Value projections in Transformer layers.
 
 ```sheaf
 (let [[a b c] (tensor-split [1 2 3 4 5 6] 3)]
@@ -2169,10 +2399,12 @@ Splits a tensor into `num-sections` sub-tensors along the specified axis. This f
 
 ### dynamic-slice
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(dynamic-slice x start length)`
 
-Extracts a slice of a fixed `length` starting from a dynamic `start` index. The output shape (length) remains constant even when the starting position is a computed value.
+Extracts a slice of a fixed `length` starting from a dynamic `start` index. The
+output shape (length) remains constant even when the starting position is a
+computed value.
 
 ```sheaf
 (dynamic-slice (arange 5) 1 3)  ; => [1 2 3]
@@ -2186,11 +2418,11 @@ Extracts a slice of a fixed `length` starting from a dynamic `start` index. The 
 
 **Type:** functions
 
-Scales the elements of a tensor so they sum to 1.0. This is a common utility for processing probability distributions or attention weights.
+Scales the elements of a tensor so they sum to 1.0. This is a common utility for
+processing probability distributions or attention weights.
 
 ```sheaf
 (normalize [1 2 3])  ; => [0.16666667 0.33333334 0.5       ]
-
 ```
 
 ---
@@ -2215,7 +2447,8 @@ Scales the elements of a tensor so they sum to 1.0. This is a common utility for
 
 ### Escape sequences
 
-Sheaf strings support standard escape sequences. The backslash `\` triggers interpretation of the following character:
+Sheaf strings support standard escape sequences. The backslash `\` triggers
+interpretation of the following character:
 
 | Sequence | Meaning              |
 | -------- | -------------------- |
@@ -2226,7 +2459,8 @@ Sheaf strings support standard escape sequences. The backslash `\` triggers inte
 
 Any other character after `\` is kept as-is (backslash + character).
 
-The tricky case is `\\n`: the first `\\` resolves to a literal backslash, then `n` is just `n` — the result is the two characters `\n`, not a newline.
+The tricky case is `\\n`: the first `\\` resolves to a literal backslash, then
+`n` is just `n` — the result is the two characters `\n`, not a newline.
 
 ```sheaf
 (print "hello\nworld")   ; prints hello and world on separate lines
@@ -2240,10 +2474,12 @@ The tricky case is `\\n`: the first `\\` resolves to a literal backslash, then `
 
 ### str-call
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(str-call method target [args ...])`
 
-Calls a string method on `target`. This is the primary way to manipulate strings in Sheaf. The method name is passed as a string; subsequent arguments are forwarded directly.
+Calls a string method on `target`. This is the primary way to manipulate strings
+in Sheaf. The method name is passed as a string; subsequent arguments are
+forwarded directly.
 
 ```sheaf
 (str-call "replace" "hello world" "world" "sheaf")   ; => "hello sheaf"
@@ -2256,11 +2492,12 @@ Calls a string method on `target`. This is the primary way to manipulate strings
 
 ### print
 
-**Type:** function
-**Signature:** `(print arg ...)`, `(print fmt arg1 arg2 ...)`
+**Type:** function **Signature:** `(print arg ...)`, `(print fmt arg1 arg2 ...)`
 **Alias:** `println`
 
-Prints values to stdout. With multiple arguments, values are space-separated. If the first argument is a format string (contains `{}` or `{:`), uses format-string interpolation instead.
+Prints values to stdout. With multiple arguments, values are space-separated. If
+the first argument is a format string (contains `{}` or `{:`), uses
+format-string interpolation instead.
 
 ```sheaf
 (print "hello")                        ; prints: hello
@@ -2280,14 +2517,17 @@ Prints values to stdout. With multiple arguments, values are space-separated. If
 
 ### io
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(io verb [path] [data] [format-hint])`
 
-Single entry point for all file and system I/O. The verb selects the operation; format is inferred from the file extension unless overridden with a keyword hint.
+Single entry point for all file and system I/O. The verb selects the operation;
+format is inferred from the file extension unless overridden with a keyword
+hint.
 
 #### Verbs
 
-**load** — deserialize a file into a value (pytree, string, dict, or mmap'd handle).
+**load** — deserialize a file into a value (pytree, string, dict, or mmap'd
+handle).
 
 ```sheaf
 (io "load" "weights.pkl")                  ; pickle
@@ -2323,7 +2563,9 @@ Single entry point for all file and system I/O. The verb selects the operation; 
 (io "exists" "out/weights.pkl")            ; => true / false
 ```
 
-**entropy** — read bytes from the OS entropy source (`/dev/urandom`). Returns an integer. Default is 4 bytes (fits `int32`, suitable for `random-key`). Pass an optional byte count for larger values.
+**entropy** — read bytes from the OS entropy source (`/dev/urandom`). Returns an
+integer. Default is 4 bytes (fits `int32`, suitable for `random-key`). Pass an
+optional byte count for larger values.
 
 ```sheaf
 (io "entropy")                             ; => random int32 (4 bytes)
@@ -2354,7 +2596,8 @@ Sharded models: pass a glob pattern or a HuggingFace index file.
 
 #### NpyHandle — single `.npy` file
 
-`(io "load" "file.npy")` returns a **NpyHandle**: a lazy, mmap'd view over the array. No data is read until you slice.
+`(io "load" "file.npy")` returns a **NpyHandle**: a lazy, mmap'd view over the
+array. No data is read until you slice.
 
 ```sheaf
 (let [dataset (io "load" "train.npy")]       ; NpyHandle, shape [50000 784]
@@ -2362,11 +2605,14 @@ Sharded models: pass a glob pattern or a HuggingFace index file.
   (dataset 100:200))                         ; => rows 100–199  f32[100 784]
 ```
 
-Slicing is along axis 0 only. The handle stays open for the lifetime of the binding — no explicit `close` needed.
+Slicing is along axis 0 only. The handle stays open for the lifetime of the
+binding — no explicit `close` needed.
 
 #### ShardedHandle — virtual concat over glob
 
-When training data is split across many files, use a glob pattern. The result is a **ShardedHandle**: a single virtual tensor that spans all shards, backed by independent mmaps.
+When training data is split across many files, use a glob pattern. The result is
+a **ShardedHandle**: a single virtual tensor that spans all shards, backed by
+independent mmaps.
 
 ```sheaf
 ;; .npy shards — dtype is read from each header automatically
@@ -2381,11 +2627,13 @@ When training data is split across many files, use a glob pattern. The result is
   (tokens 0:4096))                           ; => first 4096 tokens
 ```
 
-Shards are sorted lexicographically. Use zero-padded names (`shard-001.bin`, not `shard-1.bin`) to keep the order correct.
+Shards are sorted lexicographically. Use zero-padded names (`shard-001.bin`, not
+`shard-1.bin`) to keep the order correct.
 
 Available dtype flags: `:f32`, `:f16`, `:bf16`, `:i32`, `:i16`, `:u32`, `:bool`.
 
-Binary lookup across shards is O(log N) — reading a single element from shard 10 000 costs the same as from shard 1.
+Binary lookup across shards is O(log N) — reading a single element from shard 10
+000 costs the same as from shard 1.
 
 ---
 
@@ -2393,12 +2641,14 @@ Binary lookup across shards is O(log N) — reading a single element from shard 
 
 ### use
 
-**Type:** special-form  
+**Type:** special-form\
 **Signature:** `(use module-name)`
 
-Loads a library module and imports its public functions into the current global namespace. Use ':registry' to see what functions have been imported.
+Loads a library module and imports its public functions into the current global
+namespace. Use ':registry' to see what functions have been imported.
 
-Note: the standard library modules (`nn`, `optim`, `macros`) are loaded automatically. You do not need to call `(use nn)` or `(use optim)` explicitly.
+Note: the standard library modules (`nn`, `optim`, `macros`) are loaded
+automatically. You do not need to call `(use nn)` or `(use optim)` explicitly.
 
 ```sheaf
 (use my-model)        ; Load a user-defined module (my-model.shf)
@@ -2410,15 +2660,17 @@ Note: the standard library modules (`nn`, `optim`, `macros`) are loaded automati
 
 ### ' (quote)
 
-**Type:** reader macro  
+**Type:** reader macro\
 **Signature:** `'expr` or `(quote expr)`
 
-Prevents evaluation of `expr`. It treats the expression as raw data (S-expression) instead of code to be executed.
+Prevents evaluation of `expr`. It treats the expression as raw data
+(S-expression) instead of code to be executed.
 
 - `[1 2 3]` -> Evaluates immediately into a Tensor.
 - `'[1 2 3]` -> Remains a List/Vector of constants.
 
-Quotes are used to pass arguments like shapes to functions like `reshape` or `ones`, which do not accept Tensors as inputs.
+Quotes are used to pass arguments like shapes to functions like `reshape` or
+`ones`, which do not accept Tensors as inputs.
 
 ```sheaf
 'symbol              ; => symbol (not evaluated)
@@ -2431,7 +2683,7 @@ Quotes are used to pass arguments like shapes to functions like `reshape` or `on
 
 ### `` ` `` (quasiquote)
 
-**Type:** reader macro  
+**Type:** reader macro\
 **Signature:** `` `expr `` or `(quasiquote expr)`
 
 Quote with selective evaluation using `~` and `~@`.
@@ -2455,7 +2707,7 @@ Quote with selective evaluation using `~` and `~@`.
 
 ### append-and-roll
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(append-and-roll buffer value)`
 
 Append value to buffer and roll (for autoregressive state).
@@ -2468,8 +2720,7 @@ Append value to buffer and roll (for autoregressive state).
 
 ### range
 
-**Type:** function
-**Signature:** `(range [start] stop [step])`
+**Type:** function **Signature:** `(range [start] stop [step])`
 
 Alias for `arange`. Generate integer sequence.
 
@@ -2482,10 +2733,12 @@ Alias for `arange`. Generate integer sequence.
 
 ### var
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(var x [:axis axis :keepdims])`
 
-Computes the variance of the tensor elements along the specified axis. It measures the spread of the data around the mean, a core component of normalization layers.
+Computes the variance of the tensor elements along the specified axis. It
+measures the spread of the data around the mean, a core component of
+normalization layers.
 
 ```sheaf
 (var [1 2 3])        ; => 0.6666667
@@ -2497,14 +2750,16 @@ Computes the variance of the tensor elements along the specified axis. It measur
 
 ### Neural Network Operations (nn.shf)
 
-The `nn` module provides essential building blocks for neural network construction.
+The `nn` module provides essential building blocks for neural network
+construction.
 
 #### linear
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(linear x w b)`
 
-Linear transformation: `y = x @ w + b`. Applies a fully-connected layer to input `x` using weight matrix `w` and bias vector `b`.
+Linear transformation: `y = x @ w + b`. Applies a fully-connected layer to input
+`x` using weight matrix `w` and bias vector `b`.
 
 ```sheaf
 (let [x [1.0 2.0]
@@ -2517,10 +2772,15 @@ Linear transformation: `y = x @ w + b`. Applies a fully-connected layer to input
 
 #### dropout
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(dropout x key p)`
 
-Inverted dropout for regularization. With probability `p`, each element of `x` is zeroed; the remaining elements are scaled by `1/(1-p)` so the expected value is preserved. No rescaling is needed at inference: simply omit the call. Pass a freshly split PRNG `key` on each invocation to keep the random draws independent across training steps. Requires `p` in `[0, 1)`. Fully differentiable, so it can appear directly inside `value-and-grad`.
+Inverted dropout for regularization. With probability `p`, each element of `x`
+is zeroed; the remaining elements are scaled by `1/(1-p)` so the expected value
+is preserved. No rescaling is needed at inference: simply omit the call. Pass a
+freshly split PRNG `key` on each invocation to keep the random draws independent
+across training steps. Requires `p` in `[0, 1)`. Fully differentiable, so it can
+appear directly inside `value-and-grad`.
 
 ```sheaf
 ;; p = 0 is the identity (keeps everything); the call is then a no-op.
@@ -2530,10 +2790,11 @@ Inverted dropout for regularization. With probability `p`, each element of `x` i
 
 #### cross-entropy-loss
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(cross-entropy-loss logits targets)`
 
-Categorical cross-entropy loss. Logits are unnormalized predictions; targets are integer class indices.
+Categorical cross-entropy loss. Logits are unnormalized predictions; targets are
+integer class indices.
 
 ```sheaf
 (let [logits [[10.0 1.0 0.1] [1.0 10.0 0.1]]
@@ -2545,10 +2806,11 @@ Categorical cross-entropy loss. Logits are unnormalized predictions; targets are
 
 #### mse-loss
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(mse-loss predictions targets)`
 
-Mean squared error loss: `mean((predictions - targets)²)`. Heavily penalizes large outliers.
+Mean squared error loss: `mean((predictions - targets)²)`. Heavily penalizes
+large outliers.
 
 ```sheaf
 (mse-loss [1.0 2.0 3.0] [1.1 1.9 3.1])
@@ -2558,10 +2820,11 @@ Mean squared error loss: `mean((predictions - targets)²)`. Heavily penalizes la
 
 #### mae-loss
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(mae-loss predictions targets)`
 
-Mean absolute error loss: `mean(|predictions - targets|)`. Provides a more robust linear penalty for errors compared to the MSE.
+Mean absolute error loss: `mean(|predictions - targets|)`. Provides a more
+robust linear penalty for errors compared to the MSE.
 
 ```sheaf
 (mae-loss [1.0 2.0 3.0] [1.2 1.8 3.1])
@@ -2571,10 +2834,12 @@ Mean absolute error loss: `mean(|predictions - targets|)`. Provides a more robus
 
 #### layer-norm
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(layer-norm x p axis)`
 
-Applies Layer Normalization. It re-centers and re-scales the input `x` along the specified `axis` to improve training stability. It uses the parameters in `p` (expected keys: `:gamma` and `:beta).
+Applies Layer Normalization. It re-centers and re-scales the input `x` along the
+specified `axis` to improve training stability. It uses the parameters in `p`
+(expected keys: `:gamma` and `:beta`).
 
 Default epsilon is `1e-5`.
 
@@ -2588,10 +2853,12 @@ Default epsilon is `1e-5`.
 
 #### rms-norm
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(rms-norm x p axis)`
 
-Applies RMS Normalization (Root Mean Square Layer Normalization). Normalizes by the RMS of the input values without centering and uses the parameters in `p` (expected keys: `:gamma` and `:beta`).
+Applies RMS Normalization (Root Mean Square Layer Normalization). Normalizes by
+the RMS of the input values without centering and uses the parameters in `p`
+(expected keys: `:gamma` and `:beta`).
 
 Default epsilon is `1e-6`.
 
@@ -2605,10 +2872,10 @@ Default epsilon is `1e-6`.
 
 #### clamp
 
-**Type:** function
-**Signature:** `(clamp x lo hi)`
+**Type:** function **Signature:** `(clamp x lo hi)`
 
-Clamps values element-wise to the range [lo, hi]. Supports broadcasting between scalars and tensors.
+Clamps values element-wise to the range [lo, hi]. Supports broadcasting between
+scalars and tensors.
 
 ```sheaf
 (clamp 300 0 255)           ; => 255
@@ -2617,10 +2884,12 @@ Clamps values element-wise to the range [lo, hi]. Supports broadcasting between 
 
 #### xavier-uniform
 
-**Type:** function
-**Signature:** `(xavier-uniform key shape)`
+**Type:** function **Signature:** `(xavier-uniform key shape)`
 
-Xavier (Glorot) uniform initialization for weight matrices. Draws from `U(-limit, limit)` where `limit = sqrt(6 / (fan_in + fan_out))`. See also `xavier-normal`, `kaiming-uniform`, `kaiming-normal`, `lecun-normal`, `lecun-uniform`.
+Xavier (Glorot) uniform initialization for weight matrices. Draws from
+`U(-limit, limit)` where `limit = sqrt(6 / (fan_in + fan_out))`. See also
+`xavier-normal`, `kaiming-uniform`, `kaiming-normal`, `lecun-normal`,
+`lecun-uniform`.
 
 ```sheaf
 (let [key (random-key 42)]
@@ -2637,10 +2906,12 @@ The `optim` module provides optimization utilities for training neural networks.
 
 #### sgd-step
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(sgd-step params grads learning-rate)`
 
-Updates model parameters using Stochastic Gradient Descent. It performs the operation `p = p - (lr * g)` across the entire Pytree of parameters, maintaining the model's structural integrity.
+Updates model parameters using Stochastic Gradient Descent. It performs the
+operation `p = p - (lr * g)` across the entire Pytree of parameters, maintaining
+the model's structural integrity.
 
 ```sheaf
 (let [params {:w [1.0 2.0] :b 0.5}
@@ -2653,9 +2924,10 @@ Updates model parameters using Stochastic Gradient Descent. It performs the oper
 
 #### adam-step
 
-**Type:** function  
-**Signature:** `(adam-step params grads m v t lr [beta1 beta2 eps])`
-Adam optimizer step. Maintains first moment `m` (mean) and second moment `v` (variance). Returns `[new-params, new-m, new-v, new-t]`.
+**Type:** function\
+**Signature:** `(adam-step params grads m v t lr [beta1 beta2 eps])` Adam
+optimizer step. Maintains first moment `m` (mean) and second moment `v`
+(variance). Returns `[new-params, new-m, new-v, new-t]`.
 
 ```sheaf
 (let [p {:w 1.0} g {:w 0.1}  ; Params and gradients
@@ -2669,9 +2941,15 @@ Adam optimizer step. Maintains first moment `m` (mean) and second moment `v` (va
 
 #### adamw-step
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(adamw-step params grads m v t lr beta1 beta2 eps weight-decay)`
-AdamW optimizer step with decoupled weight decay (Loshchilov & Hutter, 2019). Same moment estimates and bias correction as `adam-step`, but the weight decay is decoupled from the gradient-based update: `p <- p - lr * (wd * p + m_hat / (sqrt(v_hat) + eps))`. Pass `weight-decay = 0.0` to recover plain Adam. Returns `[new-params, new-m, new-v, new-t]`, so it is a drop-in replacement for `adam-step`. This is the default optimizer for Transformer training (nanoGPT uses `weight-decay = 0.1`).
+AdamW optimizer step with decoupled weight decay (Loshchilov & Hutter, 2019).
+Same moment estimates and bias correction as `adam-step`, but the weight decay
+is decoupled from the gradient-based update:
+`p <- p - lr * (wd * p + m_hat / (sqrt(v_hat) + eps))`. Pass
+`weight-decay = 0.0` to recover plain Adam. Returns
+`[new-params, new-m, new-v, new-t]`, so it is a drop-in replacement for
+`adam-step`. This is the default optimizer for most Transformer training.
 
 ```sheaf
 (let [p {:w 1.0} g {:w 0.1}
@@ -2685,9 +2963,13 @@ AdamW optimizer step with decoupled weight decay (Loshchilov & Hutter, 2019). Sa
 
 #### sgd-momentum-step
 
-**Type:** function  
-**Signature:** `(sgd-momentum-step params grads buf momentum lr)`
-SGD with momentum (heavy-ball / Polyak). Maintains a velocity buffer `buf`: `buf_t = momentum * buf_{t-1} + grad`, then `params = params - lr * buf_t`. Initialize `buf` with `(tree-map-zeros params)`. Returns `[new-params, new-buf]`. For Nesterov momentum, replace the update with `(grad + momentum * buf_t)`.
+**Type:** function\
+**Signature:** `(sgd-momentum-step params grads buf momentum lr)` SGD with
+momentum (heavy-ball / Polyak). Maintains a velocity buffer `buf`:
+`buf_t = momentum * buf_{t-1} + grad`, then `params = params - lr * buf_t`.
+Initialize `buf` with `(tree-map-zeros params)`. Returns
+`[new-params, new-buf]`. For Nesterov momentum, replace the update with
+`(grad + momentum * buf_t)`.
 
 ```sheaf
 (let [p {:w 1.0} g {:w 0.1} buf {:w 0.1}]   ; buf carries momentum from a prior step
@@ -2699,10 +2981,12 @@ SGD with momentum (heavy-ball / Polyak). Maintains a velocity buffer `buf`: `buf
 
 #### global-norm
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(global-norm grads)`
 
-Computes the Euclidean (L2) norm of all scalar values contained within a Pytree. This is primarily used for gradient clipping, preventing numerical instability by scaling down gradients if their total magnitude exceeds a threshold.
+Computes the Euclidean (L2) norm of all scalar values contained within a Pytree.
+This is primarily used for gradient clipping, preventing numerical instability
+by scaling down gradients if their total magnitude exceeds a threshold.
 
 ```sheaf
 (global-norm {:w [3.0 4.0] :b 0.0})
@@ -2712,10 +2996,11 @@ Computes the Euclidean (L2) norm of all scalar values contained within a Pytree.
 
 #### clip-by-global-norm
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(clip-by-global-norm grads max-norm)`
 
-Clips gradients by global norm to prevent gradient explosion. If global norm > max-norm, scales all gradients down proportionally.
+Clips gradients by global norm to prevent gradient explosion. If global norm >
+max-norm, scales all gradients down proportionally.
 
 ```sheaf
 (clip-by-global-norm {:w [3.0 4.0] :b 0.0} 2.0)
@@ -2725,10 +3010,12 @@ Clips gradients by global norm to prevent gradient explosion. If global norm > m
 
 #### linear-warmup
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(linear-warmup lr step warmup-steps)`
 
-Linearly ramps the learning rate from 0 to `lr` over `warmup-steps` training steps, then holds it constant. `step` is the 0-based step count. Useful at the start of training to avoid instability from large initial gradients.
+Linearly ramps the learning rate from 0 to `lr` over `warmup-steps` training
+steps, then holds it constant. `step` is the 0-based step count. Useful at the
+start of training to avoid instability from large initial gradients.
 
 ```sheaf
 (linear-warmup 0.1 5 10)   ; ramping, halfway   -> 0.05
@@ -2737,10 +3024,14 @@ Linearly ramps the learning rate from 0 to `lr` over `warmup-steps` training ste
 
 #### inverse-sqrt-warmup
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(inverse-sqrt-warmup lr step warmup-steps)`
 
-The Noam schedule from "Attention Is All You Need": `lr * warmup^(-1/2) * min(step^(-1/2), step * warmup^(-3/2))`. Rises linearly during warmup, peaks at `step = warmup-steps` with value `lr / warmup-steps`, then decays as `1/sqrt(step)`. Note that `lr` is the overall scale, not the peak value. The standard Transformer schedule when cosine decay is unavailable.
+The Noam schedule from "Attention Is All You Need":
+`lr * warmup^(-1/2) * min(step^(-1/2), step * warmup^(-3/2))`. Rises linearly
+during warmup, peaks at `step = warmup-steps` with value `lr / warmup-steps`,
+then decays as `1/sqrt(step)`. Note that `lr` is the overall scale, not the peak
+value. The standard Transformer schedule when cosine decay is unavailable.
 
 ```sheaf
 (inverse-sqrt-warmup 1.0 4 4)        ; at peak (lr / warmup) -> 0.25
@@ -2749,10 +3040,12 @@ The Noam schedule from "Attention Is All You Need": `lr * warmup^(-1/2) * min(st
 
 #### exponential-decay
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(exponential-decay lr step decay-steps decay-rate)`
 
-Multiplies `lr` by `decay-rate ^ (step / decay-steps)`. Use `decay-rate < 1` to decay (e.g. 0.96); `1.0` leaves `lr` constant. At `step = decay-steps` the learning rate has been multiplied by `decay-rate` exactly once.
+Multiplies `lr` by `decay-rate ^ (step / decay-steps)`. Use `decay-rate < 1` to
+decay (e.g. 0.96); `1.0` leaves `lr` constant. At `step = decay-steps` the
+learning rate has been multiplied by `decay-rate` exactly once.
 
 ```sheaf
 (exponential-decay 0.1 100 1000 0.96)  ; => 0.09959262
@@ -2760,10 +3053,11 @@ Multiplies `lr` by `decay-rate ^ (step / decay-steps)`. Use `decay-rate < 1` to 
 
 #### step-decay
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(step-decay lr step step-size decay-rate)`
 
-Multiplies `lr` by `decay-rate` every `step-size` steps (floor division). The learning rate is constant between drops.
+Multiplies `lr` by `decay-rate` every `step-size` steps (floor division). The
+learning rate is constant between drops.
 
 ```sheaf
 (step-decay 0.1 25 10 0.5)  ; 25 // 10 = 2 drops -> 0.1 * 0.5^2 = 0.025
@@ -2771,10 +3065,12 @@ Multiplies `lr` by `decay-rate` every `step-size` steps (floor division). The le
 
 #### cosine-decay
 
-**Type:** function  
+**Type:** function\
 **Signature:** `(cosine-decay lr step warmup-steps total-steps)`
 
-Linear warmup over `warmup-steps`, then cosine decay from `lr` down to 0 over the remaining steps (reaches 0 at `total-steps`). `step` is 0-based. The standard schedule for GPT-2 / nanoGPT training.
+Linear warmup over `warmup-steps`, then cosine decay from `lr` down to 0 over
+the remaining steps (reaches 0 at `total-steps`). `step` is 0-based. The
+standard schedule for GPT-2 / nanoGPT training.
 
 ```sheaf
 (cosine-decay 0.1 10 10 100)   ; at peak (end of warmup) -> 0.1
@@ -2786,11 +3082,12 @@ Linear warmup over `warmup-steps`, then cosine decay from `lr` down to 0 over th
 
 ### Macros (macros.shf)
 
-Macros are powerful meta-programming tools that allow allow architectural patterns to be abstracted once and expanded at compile-time.
+Macros are powerful meta-programming tools that allow allow architectural
+patterns to be abstracted once and expanded at compile-time.
 
 #### when
 
-**Type:** macro  
+**Type:** macro\
 **Signature:** `(when condition body)`
 
 Conditional execution without else branch. Expands to `(if condition body nil)`.
@@ -2805,7 +3102,7 @@ Conditional execution without else branch. Expands to `(if condition body nil)`.
 
 #### unless
 
-**Type:** macro  
+**Type:** macro\
 **Signature:** `(unless condition body)`
 
 Negated conditional. Expands to `(if condition nil body)`.
@@ -2820,7 +3117,7 @@ Negated conditional. Expands to `(if condition nil body)`.
 
 #### comment
 
-**Type:** macro  
+**Type:** macro\
 **Signature:** `(comment expr ...)`
 
 Ignores expressions and returns nil. Useful for multi-line comments.
@@ -2836,10 +3133,13 @@ Ignores expressions and returns nil. Useful for multi-line comments.
 
 #### defmodel
 
-**Type:** macro
-**Signature:** `(defmodel name [input-params] (layer :name) (layer :name :activation) ...)`
+**Type:** macro **Signature:**
+`(defmodel name [input-params] (layer :name) (layer :name :activation) ...)`
 
-Defines a neural network as a sequence of named layers with optional activations. Each layer spec generates a `with-params` block that binds `W` and `b` from the parameter dictionary, applies `(+ (@ _ W) b)`, and optionally wraps it in an activation function. The input is threaded through layers via `as->`.
+Defines a neural network as a sequence of named layers with optional
+activations. Each layer spec generates a `with-params` block that binds `W` and
+`b` from the parameter dictionary, applies `(+ (@ _ W) b)`, and optionally wraps
+it in an activation function. The input is threaded through layers via `as->`.
 
 ```sheaf
 (defmodel forward [x]
@@ -2855,10 +3155,10 @@ Defines a neural network as a sequence of named layers with optional activations
 
 #### defbatch
 
-**Type:** macro
-**Signature:** `(defbatch name [params] [axes] & body)`
+**Type:** macro **Signature:** `(defbatch name [params] [axes] & body)`
 
-Defines a function that auto-vectorizes over batch dimensions via `vmap`. The axes spec indicates which arguments are batched (`0`) vs shared (`nil`).
+Defines a function that auto-vectorizes over batch dimensions via `vmap`. The
+axes spec indicates which arguments are batched (`0`) vs shared (`nil`).
 
 ```sheaf
 (defbatch linear-layer [x w b] [0 nil nil]
@@ -2877,10 +3177,10 @@ General-purpose helpers loaded in the prelude.
 
 #### random-range
 
-**Type:** function
-**Signature:** `(random-range key shape lo hi)`
+**Type:** function **Signature:** `(random-range key shape lo hi)`
 
-Uniform random values in `[lo, hi)`. Equivalent to `(+ lo (* (- hi lo) (random-uniform key shape)))`.
+Uniform random values in `[lo, hi)`. Equivalent to
+`(+ lo (* (- hi lo) (random-uniform key shape)))`.
 
 ```sheaf
 (random-range (random-key 0) '[] 0.1 0.9)  ; => scalar in [0.1, 0.9)

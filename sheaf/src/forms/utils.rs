@@ -260,6 +260,31 @@ impl SpecialForm for UseForm {
     }
 }
 
+/// stop-gradient - Block gradient flow: (stop-gradient x) returns x unchanged
+/// in the forward pass, but its derivative is zero (like jax.lax.stop_gradient).
+pub struct StopGradientForm;
+
+impl SpecialForm for StopGradientForm {
+    fn name(&self) -> &'static str {
+        "stop-gradient"
+    }
+
+    fn compile(
+        &self,
+        compiler: &mut CompilerContext,
+        args: &[SheafValue],
+        loc: &SourceLocation,
+    ) -> SheafResult<CompiledExpr> {
+        check_arity("stop-gradient", args, 1, loc)?;
+        let compiled = compiler.compile(&args[0])?;
+        Ok(CompiledExpr::FunctionCall {
+            name: "stop-gradient".to_string(),
+            args: vec![compiled],
+            loc: None,
+        })
+    }
+}
+
 /// Resolve a module name to an absolute path.
 fn resolve_module_path(
     compiler: &CompilerContext,
@@ -336,5 +361,6 @@ mod tests {
         assert_eq!(AssocForm.name(), "assoc");
         assert_eq!(LastForm.name(), "last");
         assert_eq!(UseForm.name(), "use");
+        assert_eq!(StopGradientForm.name(), "stop-gradient");
     }
 }

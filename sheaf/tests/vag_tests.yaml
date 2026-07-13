@@ -141,3 +141,24 @@
     (let [h [[[1.0 1.0] [1.0 1.0]] [[1.0 1.0] [1.0 1.0]]]]
       ((value-and-grad (fn [w] (sum (@ (@ h w) (transpose (@ h w) '[0 2 1]))))) [[1.0 1.0] [1.0 1.0]]))
   expected: "[64.0, [[32. 32.] [32. 32.]]]"
+
+# stop-gradient: forward = identity, backward = zero.
+# Verifies the three AD paths (symbolic grad, reverse-mode ANF, inline VAG codegen)
+# and the interpreter builtin all agree.
+- name: vag-stop-gradient
+  test: ((value-and-grad (fn [x] (sum (stop-gradient x)))) [1.0 2.0 3.0])
+  expected: "[6.0, [0. 0. 0.]]"
+# Gradient flows through the unstopped term, not the stopped one.
+- name: vag-stop-gradient-partial
+  test: ((value-and-grad (fn [x] (sum (+ x (stop-gradient x))))) [1.0 2.0])
+  expected: "[6.0, [1. 1.]]"
+# stop-gradient on a matmul: parameter gradient is zero, forward value is intact.
+- name: vag-stop-gradient-matmul
+  test: >
+    ((value-and-grad (fn [w] (sum (stop-gradient (@ [[1.0 2.0]] w)))))
+     [[1.0 0.0] [0.0 1.0]])
+  expected: "[3.0, [[0. 0.] [0. 0.]]]"
+# Baseline / REINFORCE semantics: d/dx (x * stop_gradient(x)) = stop_gradient(x) = x.
+- name: vag-stop-gradient-baseline
+  test: ((value-and-grad (fn [x] (sum (* x (stop-gradient x))))) [3.0 4.0])
+  expected: "[25.0, [3. 4.]]"

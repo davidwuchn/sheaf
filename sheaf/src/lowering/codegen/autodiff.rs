@@ -138,6 +138,15 @@ impl CodeGenerator {
             return Ok((grad_reg, grad_ty.clone()));
         }
 
+        // Scalar gradient broadcast up to a tensor parameter shape.
+        // Arises for fully stop-gradient'd parameters: no adjoint is accumulated
+        // so the gradient defaults to scalar 0.0. Match JAX semantics by shaping
+        // it to the parameter (a scalar gradient w.r.t. a tensor always broadcasts).
+        if grad_shape.is_empty() && !param_shape.is_empty() {
+            let bcast_reg = self.emitter.emit_broadcast(&grad_reg, grad_ty, param_ty);
+            return Ok((bcast_reg, param_ty.clone()));
+        }
+
         let grad_elems: i64 = grad_shape.iter().product();
         let param_elems: i64 = param_shape.iter().product();
         if grad_elems == param_elems && grad_elems > 0 && grad_shape != param_shape {

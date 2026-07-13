@@ -349,6 +349,9 @@ fn distribute_fn_adjoint_named(
     fwd_lookup: &HashMap<String, String>,
 ) {
     match name {
+        // stop-gradient: forward is identity, but no gradient flows backward.
+        "stop-gradient" => {}
+
         "+" => {
             // da += unbroadcast(adj, shape_a), db += unbroadcast(adj, shape_b)
             let adj_a = maybe_unbroadcast(adj.clone(), &args[0], shapes, bindings);

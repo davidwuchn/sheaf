@@ -93,6 +93,11 @@ impl CodeGenerator {
             return Ok((result_reg, sig.return_type.clone()));
         }
 
+        // stop-gradient: forward is identity; only affects autodiff (gradient = 0)
+        if name == "stop-gradient" && args.len() == 1 {
+            return self.generate(&args[0]);
+        }
+
         // Delegate to specialized modules
         if let Some(result) = self.generate_math_builtin(name, args) {
             return result;
