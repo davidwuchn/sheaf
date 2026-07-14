@@ -199,11 +199,11 @@ tensors, results are undefined for negative inputs.
 **Type:** function\
 **Signature:** `(sin x)`, `(cos x)`, `(tan x)`
 
-Compute the element-wise trigonometric functions (sine, cosine, tangent), with
-angles in radians. Fully differentiable: `sin'(x) = cos(x)`,
-`cos'(x) = -sin(x)`, `tan'(x) = 1 + tan(x)^2`. Required for Rotary Position
-Embeddings (RoPE) and sinusoidal position encodings, as well as cosine
-learning-rate schedules.
+Compute the element-wise trigonometric functions (sine, cosine, and tangent),
+where angles are expressed in radians. All three functions are fully
+differentiable: `sin'(x) = cos(x)`, `cos'(x) = -sin(x)`, and
+`tan'(x) = 1 + tan(x)^2`. They are commonly used for Rotary Position Embeddings
+(RoPE), sinusoidal positional encodings, and cosine learning-rate schedules.
 
 ```sheaf
 (sin 1.0)            ; => 0.84147096
