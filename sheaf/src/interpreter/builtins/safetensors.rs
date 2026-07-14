@@ -212,3 +212,249 @@ fn tree_to_value(node: TreeNode) -> Value {
         }
     }
 }
+
+/// Serialize `Value` to the safetensors format.
+///
+/// Nested values are flattened into dot-separated keys, while tensor leaves
+/// store the raw tensor data.
+///
+/// This is the inverse of `load_safetensors` for tensor-containing values.
+
+pub fn save_safetensors(value: &Value) -> Result<Vec<u8>, SheafError> {
+    let mut entries: Vec<(String, TensorEntry)> = Vec::new();
+    flatten_into(value, "", &mut entries)?;
+    // Deterministic, sorted-by-key output (matches typical HF checkpoints).
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut header = serde_json::Map::new();
+    let mut data_buf: Vec<u8> = Vec::new();
+    for (key, entry) in &entries {
+        let start = data_buf.len();
+        data_buf.extend_from_slice(&entry.bytes);
+        let end = data_buf.len();
+        header.insert(
+            key.clone(),
+            serde_json::json!({
+                "dtype": entry.dtype_str,
+                "shape": entry.shape,
+                "data_offsets": [start, end],
+            }),
+        );
+    }
+
+    let mut header_bytes = serde_json::to_vec(&serde_json::Value::Object(header))
+        .map_err(|e| runtime_error(format!("safetensors: serialize header: {}", e)))?;
+
+    // Pad header with spaces so the data section is 8-byte aligned (safetensors
+    // convention; trailing whitespace is ignored by JSON parsers).
+    while (8 + header_bytes.len()) % 8 != 0 {
+        header_bytes.push(b' ');
+    }
+
+    let mut out = Vec::with_capacity(8 + header_bytes.len() + data_buf.len());
+    out.extend_from_slice(&(header_bytes.len() as u64).to_le_bytes());
+    out.extend_from_slice(&header_bytes);
+    out.extend_from_slice(&data_buf);
+    Ok(out)
+}
+
+struct TensorEntry {
+    dtype_str: &'static str,
+    shape: Vec<usize>,
+    bytes: Vec<u8>,
+}
+
+fn prefixed(prefix: &str, seg: &str) -> String {
+    if prefix.is_empty() {
+        seg.to_string()
+    } else {
+        format!("{}.{}", prefix, seg)
+    }
+}
+
+fn leaf_key(prefix: &str, fallback: &str) -> String {
+    if prefix.is_empty() { fallback.to_string() } else { prefix.to_string() }
+}
+
+fn flatten_into(
+    value: &Value,
+    prefix: &str,
+    out: &mut Vec<(String, TensorEntry)>,
+) -> Result<(), SheafError> {
+    match value {
+        Value::Dict(map) => {
+            for (k, v) in map {
+                flatten_into(v, &prefixed(prefix, k), out)?;
+            }
+            Ok(())
+        }
+        Value::List(items) | Value::Tuple(items) => {
+            for (i, v) in items.iter().enumerate() {
+                flatten_into(v, &prefixed(prefix, &i.to_string()), out)?;
+            }
+            Ok(())
+        }
+        Value::Tensor { data, dtype } => {
+            out.push((leaf_key(prefix, "tensor"), tensor_to_entry(data, *dtype)));
+            Ok(())
+        }
+        Value::DeviceBuffer(db) => {
+            let host = db
+                .to_host()
+                .map_err(|e| runtime_error(format!("safetensors: D2H: {}", e)))?;
+            out.push((leaf_key(prefix, "tensor"), tensor_to_entry(&host, db.dtype)));
+            Ok(())
+        }
+        // Scalars are stored as 0-d tensors so they survive a round trip.
+        Value::Int(n) => {
+            out.push((
+                leaf_key(prefix, "value"),
+                TensorEntry { dtype_str: "I32", shape: vec![], bytes: (*n as i32).to_le_bytes().to_vec() },
+            ));
+            Ok(())
+        }
+        Value::Float(f) => {
+            out.push((
+                leaf_key(prefix, "value"),
+                TensorEntry { dtype_str: "F32", shape: vec![], bytes: f.to_le_bytes().to_vec() },
+            ));
+            Ok(())
+        }
+        Value::Bool(b) => {
+            out.push((
+                leaf_key(prefix, "value"),
+                TensorEntry { dtype_str: "BOOL", shape: vec![], bytes: vec![if *b { 1 } else { 0 }] },
+            ));
+            Ok(())
+        }
+        Value::String(_) | Value::Keyword(_) | Value::Nil | Value::Function { .. } | Value::BuiltinFn { .. } => {
+            Err(runtime_error(format!(
+                "safetensors: cannot serialize {} (only tensors and nested dicts/lists)",
+                value.type_name()
+            )))
+        }
+    }
+}
+
+fn tensor_to_entry(data: &ArrayD<f32>, dtype: Dtype) -> TensorEntry {
+    let shape: Vec<usize> = data.shape().to_vec();
+    let flat: Vec<f32> = data.iter().copied().collect();
+    let (dtype_str, bytes) = match dtype {
+        Dtype::F32 => {
+            let mut b = Vec::with_capacity(flat.len() * 4);
+            for f in &flat {
+                b.extend_from_slice(&f.to_le_bytes());
+            }
+            ("F32", b)
+        }
+        Dtype::BF16 => {
+            let mut b = Vec::with_capacity(flat.len() * 2);
+            for f in &flat {
+                b.extend_from_slice(&f32_to_bf16_bits(*f).to_le_bytes());
+            }
+            ("BF16", b)
+        }
+        Dtype::I32 => {
+            let mut b = Vec::with_capacity(flat.len() * 4);
+            for f in &flat {
+                b.extend_from_slice(&(*f as i32).to_le_bytes());
+            }
+            ("I32", b)
+        }
+        Dtype::Bool => (
+            "BOOL",
+            flat.iter().map(|f| if *f != 0.0 { 1u8 } else { 0u8 }).collect(),
+        ),
+    };
+    TensorEntry { dtype_str, shape, bytes }
+}
+
+/// Round-to-nearest-even conversion f32 -> bf16 bit pattern.
+fn f32_to_bf16_bits(f: f32) -> u16 {
+    let bits = f.to_bits();
+    let lsb = (bits >> 16) & 1;
+    let rounding_bias = 0x7FFF + lsb;
+    (bits.wrapping_add(rounding_bias) >> 16) as u16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tensor(vals: &[f32], shape: &[usize]) -> Value {
+        Value::Tensor {
+            data: Arc::new(ArrayD::from_shape_vec(IxDyn(shape), vals.to_vec()).unwrap()),
+            dtype: Dtype::F32,
+        }
+    }
+
+    fn get<'a>(v: &'a Value, key: &str) -> &'a Value {
+        match v {
+            Value::Dict(m) => m.get(key).expect("missing key"),
+            _ => panic!("expected dict"),
+        }
+    }
+
+    fn at<'a>(v: &'a Value, idx: usize) -> &'a Value {
+        match v {
+            Value::List(items) => &items[idx],
+            _ => panic!("expected list"),
+        }
+    }
+
+    fn tdata(v: &Value) -> &ArrayD<f32> {
+        match v {
+            Value::Tensor { data, .. } => data,
+            _ => panic!("expected tensor"),
+        }
+    }
+
+    /// Checks that a nested pytree can be saved and loaded back correctly.
+    /// Uses a GPT-like pytree {:head {:w [2 2]} :blocks [{:w} {:w}]}.
+    #[test]
+    fn save_load_roundtrip_nested() {
+        let head = Value::Dict(
+            [("w".to_string(), tensor(&[1.0, 2.0, 3.0, 4.0], &[2, 2]))]
+                .into_iter()
+                .collect(),
+        );
+        let block = |a: f32| -> Value {
+            Value::Dict(
+                [("w".to_string(), tensor(&[a, a + 1.0, a + 2.0, a + 3.0], &[2, 2]))]
+                    .into_iter()
+                    .collect(),
+            )
+        };
+        let blocks = Value::List(vec![block(10.0), block(20.0)]);
+        let root = Value::Dict(
+            [("head".to_string(), head), ("blocks".to_string(), blocks)]
+                .into_iter()
+                .collect(),
+        );
+
+        let bytes = save_safetensors(&root).unwrap();
+        assert!(bytes.len() > 8);
+        let loaded = load_safetensors(&bytes).unwrap();
+
+        assert_eq!(tdata(get(get(&loaded, "head"), "w")), tdata(get(get(&root, "head"), "w")));
+        assert_eq!(
+            tdata(get(at(get(&loaded, "blocks"), 0), "w")),
+            tdata(get(at(get(&root, "blocks"), 0), "w"))
+        );
+        assert_eq!(
+            tdata(get(at(get(&loaded, "blocks"), 1), "w")),
+            tdata(get(at(get(&root, "blocks"), 1), "w"))
+        );
+    }
+
+    /// Checks the output is well-formed: 8-byte LE header length, valid JSON, and the
+    /// data section begins on an 8-byte boundary.
+    #[test]
+    fn save_emits_valid_layout() {
+        let bytes = save_safetensors(&tensor(&[1.5, -2.25, 0.0, 7.0], &[4])).unwrap();
+        let n = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+        assert!(8 + n <= bytes.len());
+        let _: serde_json::Value = serde_json::from_slice(&bytes[8..8 + n]).unwrap();
+        assert_eq!((8 + n) % 8, 0, "data section should be 8-byte aligned");
+    }
+}

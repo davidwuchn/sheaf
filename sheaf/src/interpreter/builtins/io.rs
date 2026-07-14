@@ -203,15 +203,20 @@ fn builtin_io(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 Some(v) => v,
                 None => return Err(runtime_error("io save: expected value to save")),
             };
-            let json = value_to_json(value)?;
             if let Some(parent) = std::path::Path::new(path).parent() {
                 if !parent.exists() {
                     std::fs::create_dir_all(parent)
                         .map_err(|e| runtime_error(format!("io save: mkdir '{}': {}", parent.display(), e)))?;
                 }
             }
-            let data = serde_json::to_vec(&json)
-                .map_err(|e| runtime_error(format!("io save: serialize: {}", e)))?;
+            // safetensors has its own binary format; everything else uses JSON.
+            let data = if path.ends_with(".safetensors") {
+                super::safetensors::save_safetensors(value)?
+            } else {
+                let json = value_to_json(value)?;
+                serde_json::to_vec(&json)
+                    .map_err(|e| runtime_error(format!("io save: serialize: {}", e)))?
+            };
             std::fs::write(path, data)
                 .map_err(|e| runtime_error(format!("io save '{}': {}", path, e)))?;
             Ok(Value::Nil)

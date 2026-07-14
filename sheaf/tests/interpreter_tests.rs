@@ -196,3 +196,50 @@ fn test_guard_no_nan() {
     let list = Value::List(vec![Value::Float(1.0), Value::Float(f32::NAN)]);
     assert!(apply_guard_check(&check, &list).is_err());
 }
+
+/// Check that a generated nested pytree can be saved and loaded correctly
+/// as safetensors.
+#[test]
+fn test_io_safetensors_roundtrip() {
+    use sheaf_compiler::interpreter::value::Value;
+
+    let path = std::env::temp_dir().join(format!(
+        "sheaf_io_roundtrip_{}.safetensors",
+        std::process::id()
+    ));
+
+    struct Guard<'a>(&'a std::path::Path);
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(self.0);
+        }
+    }
+    let _cleanup = Guard(&path);
+
+    let src = format!(
+        r#"
+        (let [w {{:blocks [{{:w (reshape (arange 6) '[2 3])}}
+                         {{:w (reshape (arange 4) '[2 2])}}]
+                   :head   {{:b (reshape (arange 8) '[2 4])}}}}
+              _   (io "save" "{path}" w)
+              r   (io "load" "{path}")]
+          (float
+            (+ (sum (abs (- (get-in r [:blocks 0 :w]) (get-in w [:blocks 0 :w]))))
+               (sum (abs (- (get-in r [:blocks 1 :w]) (get-in w [:blocks 1 :w]))))
+               (sum (abs (- (get-in r [:head :b])   (get-in w [:head :b])))))))
+        "#,
+        path = path.display()
+    );
+
+    let val = eval_exprs(&src).expect("io roundtrip eval failed");
+    let diff = match val {
+        Value::Float(f) => f,
+        Value::Tensor { data, .. } => *data.first().expect("expected scalar"),
+        other => panic!("expected scalar, got {}", other.type_name()),
+    };
+    assert!(
+        diff.abs() < 1e-6,
+        "safetensors roundtrip mismatch: total abs diff = {}",
+        diff
+    );
+}
