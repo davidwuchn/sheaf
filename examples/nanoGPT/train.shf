@@ -1,19 +1,18 @@
 ;; -*- mode: clojure -*-
-;; NanoGPT training: fine-tune Shakespeare char-level GPT-2
+;; NanoGPT training: character-level GPT-2 on Shakespeare.
 ;;
 ;; Usage:
 ;;   sheaf train.shf
 ;;
-;; Trains for 100 steps with Adam optimizer and gradient clipping.
-;; Expects pre-trained weights in out-shakespeare-char/
+;; Resumes from out-shakespeare-char/ckpt.safetensors if present;
+;; otherwise initializes GPT-2 weights from scratch and starts training.
 
 (use model)
+
 
 ;; --- Data loading ---
 
 (defn get-batch [data key block-size batch-size]
-  ;; Sample random windows from the training text.
-  ;; Returns {:x input-tokens, :y target-tokens} shifted by one.
   (let [starts  (random-randint key [batch-size] 0 (- (len data) block-size 1))
         offsets (arange block-size)
         idx     (+ (reshape starts  [batch-size 1])
@@ -24,48 +23,61 @@
 
 ;; --- Training step ---
 
-(defn train-step [state x y config]
+(defn train-step [state x y lr config]
   (let [loss-fn   (fn [p] (cross-entropy-loss (gpt-forward x p config) y))
         [loss g]  ((value-and-grad loss-fn) (get state :params))
         g         (clip-by-global-norm g 1.0)
-        [p m v t] (adam-step (get state :params) g
-                             (get state :m) (get state :v) (get state :t)
-                             6e-4 0.9 0.95 1e-8)]
+        [p m v t] (adamw-step (get state :params) g
+                              (get state :m) (get state :v) (get state :t)
+                              lr 0.9 0.95 1e-8 0.1)]
     (assoc state :params p :m m :v v :t t :loss loss)))
 
 
 ;; --- Main ---
 
-(let [config  (-> (io "load" "out-shakespeare-char/config.json")
-                  (get :model_args))
-      params  (do (print "Loading model...")
-                  (io "load" "out-shakespeare-char/model.safetensors"))
-      _       (print "Loaded:" (get config :n_layer) "layers,"
-                     (get config :n_embd) "dim,"
-                     (get config :vocab_size) "vocab")
+(let [config    (-> (io "load" "out-shakespeare-char/config.json")
+                    (get :model_args))
 
-      ;; Encode training data: text -> char IDs -> flat tensor
-      char->id (io "load" "data/shakespeare_char/vocab.json")
-      data     (tensor (map (fn [c] (get char->id c))
-                            (chars (io "read" "data/shakespeare_char/input.txt"))))
-      _        (print "Training data:" (len data) "tokens")
+      char->id  (io "load" "data/shakespeare_char/vocab.json")
+      data      (tensor (map (fn [c] (get char->id c))
+                             (chars (io "read" "data/shakespeare_char/input.txt"))))
+      _         (print "Training data:" (len data) "tokens")
 
-      ;; Optimizer state: zero-initialized moment estimates
-      state    {:params params
-                :m (tree-map-zeros params)
-                :v (tree-map-zeros params)
-                :t 0 :key (random-key (io "entropy"))}
+      ckpt-path "out-shakespeare-char/ckpt.safetensors"
+      state     (if (io "exists" ckpt-path)
+                  (do (print "Resuming from" ckpt-path)
+                      (io "load" ckpt-path))
+                  (let [params (init-gpt-params (random-key (io "entropy")) config)]
+                    (print "No checkpoint; initializing from scratch |"
+                           (get config :n_layer) "layers,"
+                           (get config :n_embd) "dim,"
+                           (get config :vocab_size) "vocab")
+                    {:params params
+                     :m (tree-map-zeros params)
+                     :v (tree-map-zeros params)
+                     :t 0}))
+      state     (assoc state :key (random-key (io "entropy")))
 
-      B  (get config :block_size)
-      bs 4]
+      B         (get config :block_size)
+      bs        4
+      max-lr    6e-4
+      warmup    5
+      n-steps   100]               ; use 5000 for best results
 
-  (print "Training for 100 steps (batch_size={} block_size={})..." bs B)
+  (print "Training for {} steps (batch_size={} block_size={})..." n-steps bs B)
 
-  (reduce (fn [state step]
-            (let [[k1 k2] (random-split (get state :key))
-                  batch   (get-batch data k1 B bs)
-                  state   (train-step state (get batch :x) (get batch :y) config)]
-              (when (== (mod (+ step 1) 10) 0)
-                (print "Step {:>3} | Loss: {:.4f}" (+ step 1) (get state :loss)))
-              (assoc state :key k2)))
-          state (range 100)))
+  (let [final (reduce (fn [state step]
+                        (let [[k1 k2] (random-split (get state :key))
+                              batch   (get-batch data k1 B bs)
+                              lr      (cosine-decay max-lr step warmup n-steps)
+                              state   (train-step state (get batch :x) (get batch :y) lr config)]
+                          (when (== (mod (+ step 1) 10) 0)
+                            (print "Step {:>3} | Loss: {:.4f} | lr: {:.5f}"
+                                   (+ step 1) (get state :loss) lr))
+                          (assoc state :key k2)))
+                      state (range n-steps))]
+    (io "save" ckpt-path {:params (get final :params)
+                          :m      (get final :m)
+                          :v      (get final :v)
+                          :t      (get final :t)})
+    (print "Saved checkpoint to {} | Final loss: {:.4f}" ckpt-path (get final :loss))))

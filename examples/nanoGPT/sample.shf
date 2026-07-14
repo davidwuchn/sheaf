@@ -4,7 +4,7 @@
 ;; Usage:
 ;;   sheaf sample.shf
 ;;
-;; Requires pre-trained weights in out-shakespeare-char/
+;; Requires weights in out-shakespeare-char/
 
 (use model)
 
@@ -15,9 +15,11 @@
   (map (fn [c] (get char->id c)) (chars s)))
 
 (defn encode-prompt [prompt char->id block-size]
-  (let [ids   (encode prompt char->id)
-        zeros (- (arange block-size) (arange block-size))]
-    (reshape (reduce (fn [ctx id] (append-and-roll ctx id)) zeros ids)
+  (let [ids (encode prompt char->id)]
+    ;; Seed the context window with zeros, then roll each prompt token in.
+    ;; append-and-roll shifts the window right by one, keeping length block-size.
+    (reshape (reduce (fn [ctx id] (append-and-roll ctx id))
+                     (zeros [block-size]) ids)
              [1 block-size])))
 
 
@@ -46,13 +48,17 @@
 ;; --- Main ---
 
 (let [config  (get (io "load" "out-shakespeare-char/config.json") :model_args)
-      params  (do (print "Loading model...")
-                  (io "load" "out-shakespeare-char/model.safetensors"))
+      ckpt-path "out-shakespeare-char/ckpt.safetensors"
+      params    (if (io "exists" ckpt-path)
+                  (do (print "Loading trained checkpoint (ckpt.safetensors)...")
+                      (get (io "load" ckpt-path) :params))
+                  (do (print "Loading pretrained weights (model.safetensors)...")
+                      (io "load" "out-shakespeare-char/model.safetensors")))
       _       (print "Loaded:" (get config :n_layer) "layers,"
                      (get config :n_embd) "dim,"
                      (get config :vocab_size) "vocab")
 
-      ;; Character-level vocab
+      ;; Character-level vocab ordered by token id
       char->id (io "load" "data/shakespeare_char/vocab.json")
       vocab    (sort (keys char->id))
 
