@@ -1,0 +1,31 @@
+;; -*- mode: clojure -*-
+;;
+;; Validate the nanoGPT training checkpoint.
+;;
+;; Checks that:
+;;   - the checkpoint has the expected top-level structure
+;;   - the model parameters have the expected GPT-2 layout
+;;   - the expected number of tensors is present
+;;   - weights remain within a reasonable numeric range
+;;   - no NaN or Inf values appear in the parameters.
+;;
+
+(defn check-nanoGPT-train [workdir stdout-path stderr-path]
+  (let [ckpt-path (concat workdir "/out-shakespeare-char/ckpt.safetensors")]
+    (if (not (io "exists" ckpt-path))
+      "FAIL: checkpoint not found: ckpt.safetensors missing"
+      (let [c         (io "load" ckpt-path)
+            p         (get c :params)
+            top-keys  (keys c)
+            p-keys    (keys p)
+            n-leaves  (tree-reduce (fn [a _] (+ a 1)) p 0)
+            max-abs   (tree-reduce (fn [a t] (max a (max (abs t)))) p 0.0)]
+        (if (not (== (len top-keys) 4))
+            (str "FAIL: checkpoint has " (len top-keys) " top keys, expected 4")
+            (if (not (== (len p-keys) 2))
+                (str "FAIL: :params has " (len p-keys) " keys, expected 2 (lm_head, transformer)")
+                (if (not (== n-leaves 40))
+                    (str "FAIL: found " n-leaves " tensor leaves, expected 40")
+                    (if (or (< max-abs 1e-4) (> max-abs 100.0))
+                        (str "FAIL: weight max-abs out of range: " max-abs)
+                        (let [_ (guard :no-nan p)] true)))))))))

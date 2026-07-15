@@ -1,0 +1,33 @@
+# Sheaf examples manifest.
+#
+# Format:
+#   group \t entry \t inputs \t artifacts \t validator \t timeout
+#
+# group       Shared workdir name. Entries sharing a group run in one temp dir
+#             (in manifest order); the later entry sees files created by the
+#             earlier entries. Leave empty for a fresh isolated dir.
+# entry       .shf file path relative to examples/<group>/.
+# inputs      Comma-separated files/dirs (relative to examples/<group>/) to copy
+#             into the workdir, in addition to *.shf (always copied).
+#             Use "none" if nothing extra is needed.
+# artifacts   Comma-separated expected output files (relative to workdir) that
+#             must exist after a successful run. Use "none" if no artifact.
+# validator   Name <NAME>: function check-<NAME> in examples-checks.shf, called as
+#             (check-NAME "." stdout-path stderr-path) from the workdir.
+#             For mlp, hydra, clevr, nanoGPT-sample, the validator is built
+#             into examples-run.sh (bash+awk) under the same name.
+# timeout     Seconds before a run is killed.
+#
+# Lines starting with '#' are comments. Blank lines are ignored.
+# The file MUST be edited with real tabs. Use `cat -t` to inspect (tabs
+# show as ^I). 
+#
+# Execution order: mlp, hydra, clevr, nanoGPT/train, nanoGPT/sample
+# (shortest first, so a breakage surfaces quickly).
+
+# group	entry	inputs	artifacts	validator	timeout
+mlp	run.shf	none	none	mlp	30
+hydra	run.shf	none	none	hydra	30
+clevr	run.shf	params.pkl	none	clevr	30
+nanoGPT	train.shf	out-shakespeare-char/config.json,data/shakespeare_char	out-shakespeare-char/ckpt.safetensors	nanoGPT-train	300
+nanoGPT	sample.shf		none	nanoGPT-sample	120
