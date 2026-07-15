@@ -1,0 +1,17 @@
+;; -*- mode: clojure -*-
+;; XOR MLP training setup: data and parameter initialization
+
+(use mlp)
+
+(defn xor-data []
+  ;; Returns [X Y] for the XOR problem
+  (let [X [[0.0 0.0] [0.0 1.0] [1.0 0.0] [1.0 1.0]]
+        Y [[0.0] [1.0] [1.0] [0.0]]]
+    [X Y]))
+
+(defn init-params [key]
+  (let [[k1 k2] (random-split key 2)]
+    {:l1 {:W (xavier-normal k1 '[2 8])
+          :b (zeros '[8])}
+     :l2 {:W (xavier-normal k2 '[8 1])
+          :b (zeros '[1])}}))
