@@ -1,0 +1,283 @@
+name: Nightly
+
+# Nightly build and validation.
+#
+# Builds the Linux (CUDA) and macOS (Metal) binaries, publishes them to the
+# rolling `nightly` GitHub Release, then validates the Linux build by running
+# the example test suite on CUDA via Modal.
+#
+# Skipped if the last commit is older than 24 hours.
+
+on:
+  schedule:
+    # 02:00 UTC = ~04:00 Paris. Lets the build finish before European
+    # morning.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+env:
+  IREE_REPO: "https://github.com/iree-org/iree.git"
+
+permissions:
+  contents: write   # publish-nightly creates/updates the `nightly` tag+release
+
+jobs:
+  preflight:
+    runs-on: ubuntu-22.04
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+      iree_version: ${{ steps.read.outputs.iree_version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Read IREE version
+        id: read
+        run: |
+          VERSION=$(grep '^iree-version' sheaf/Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          echo "iree_version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if last commit is older than 24h
+        id: check
+        run: |
+          set -euo pipefail
+          # ${{ github.event_name }} is 'schedule' for cron runs; manual
+          # workflow_dispatch should always run.
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "manual run: proceeding"
+            exit 0
+          fi
+          # ISO-8601 UTC timestamps; compare epoch seconds.
+          LAST=$(git log -1 --format=%cI)
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          EPOCH_LAST=$(date -u -d "$LAST" +%s)
+          EPOCH_NOW=$(date -u -d "$NOW" +%s)
+          AGE=$(( (EPOCH_NOW - EPOCH_LAST) / 86400 ))
+          echo "last commit: $LAST  (age=${AGE}d)"
+          if [[ "$AGE" -ge 1 ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No commit in the last 24h: skipping nightly."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Recent commit: running nightly."
+          fi
+
+  build-linux-cuda:
+    needs: preflight
+    if: needs.preflight.outputs.skip != 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install CUDA headers
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y cuda-nvcc-12-6
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build
+
+      - name: Cache IREE runtime
+        id: cache-iree
+        uses: actions/cache@v5
+        with:
+          path: iree-install
+          key: iree-runtime-${{ needs.preflight.outputs.iree_version }}-linux-x86_64-cuda-v1
+
+      - name: Clone IREE
+        if: steps.cache-iree.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch v${{ needs.preflight.outputs.iree_version }} ${{ env.IREE_REPO }}
+          cd iree
+          git submodule update --init --depth 1
+
+      - name: Build IREE runtime
+        if: steps.cache-iree.outputs.cache-hit != 'true'
+        run: |
+          cmake -G Ninja -B iree-build -S iree \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/iree-install \
+            -DIREE_BUILD_COMPILER=OFF \
+            -DIREE_BUILD_TESTS=OFF \
+            -DIREE_BUILD_SAMPLES=OFF \
+            -DIREE_HAL_DRIVER_LOCAL_SYNC=ON \
+            -DIREE_HAL_DRIVER_LOCAL_TASK=ON \
+            -DIREE_HAL_DRIVER_VULKAN=OFF \
+            -DIREE_HAL_DRIVER_CUDA=ON
+          cmake --build iree-build --target iree_runtime_unified flatcc_parsing flatcc_runtime || \
+          cmake --build iree-build --target iree_runtime_unified
+          mkdir -p iree-install/lib
+          find iree-build -name "libiree_runtime_unified.a" -exec cp {} iree-install/lib/ \;
+          find iree-build -name "libflatcc*" -type f -exec cp {} iree-install/lib/ \; 2>/dev/null || true
+          ls -la iree-install/lib/
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build sheaf
+        env:
+          IREE_RUNTIME_LIB_DIR: ${{ github.workspace }}/iree-install/lib
+        run: |
+          cd sheaf
+          cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Strip and package
+        run: |
+          BIN=sheaf/target/x86_64-unknown-linux-gnu/release/sheaf
+          strip "$BIN"
+          tar czf sheaf-linux-x86_64.tar.gz -C sheaf/target/x86_64-unknown-linux-gnu/release sheaf
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: sheaf-linux-x86_64
+          path: sheaf-linux-x86_64.tar.gz
+          retention-days: 7
+
+  build-macos-metal:
+    needs: preflight
+    if: needs.preflight.outputs.skip != 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build tools
+        run: brew install cmake ninja
+
+      - name: Cache IREE runtime
+        id: cache-iree
+        uses: actions/cache@v5
+        with:
+          path: iree-install
+          key: iree-runtime-${{ needs.preflight.outputs.iree_version }}-macos-aarch64-metal-v1
+
+      - name: Clone IREE
+        if: steps.cache-iree.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch v${{ needs.preflight.outputs.iree_version }} ${{ env.IREE_REPO }}
+          cd iree
+          git submodule update --init --depth 1
+
+      - name: Build IREE runtime
+        if: steps.cache-iree.outputs.cache-hit != 'true'
+        run: |
+          cmake -G Ninja -B iree-build -S iree \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/iree-install \
+            -DIREE_BUILD_COMPILER=OFF \
+            -DIREE_BUILD_TESTS=OFF \
+            -DIREE_BUILD_SAMPLES=OFF \
+            -DIREE_HAL_DRIVER_LOCAL_SYNC=ON \
+            -DIREE_HAL_DRIVER_LOCAL_TASK=ON \
+            -DIREE_HAL_DRIVER_VULKAN=OFF \
+            -DIREE_HAL_DRIVER_METAL=ON
+          cmake --build iree-build --target iree_runtime_unified flatcc_parsing flatcc_runtime || \
+          cmake --build iree-build --target iree_runtime_unified
+          mkdir -p iree-install/lib
+          find iree-build -name "libiree_runtime_unified.a" -exec cp {} iree-install/lib/ \;
+          find iree-build -name "libflatcc*" -type f -exec cp {} iree-install/lib/ \; 2>/dev/null || true
+          ls -la iree-install/lib/
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build sheaf
+        env:
+          IREE_RUNTIME_LIB_DIR: ${{ github.workspace }}/iree-install/lib
+        run: |
+          cd sheaf
+          cargo build --release --target aarch64-apple-darwin
+
+      - name: Strip and package
+        run: |
+          BIN=sheaf/target/aarch64-apple-darwin/release/sheaf
+          strip "$BIN"
+          tar czf sheaf-macos-aarch64.tar.gz -C sheaf/target/aarch64-apple-darwin/release sheaf
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: sheaf-macos-aarch64
+          path: sheaf-macos-aarch64.tar.gz
+          retention-days: 7
+
+  publish-nightly:
+    needs: [build-linux-cuda, build-macos-metal]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: sheaf-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la sheaf-*.tar.gz
+
+      - name: Create / overwrite rolling `nightly` prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly build
+          body: |
+            Automated nightly build of Sheaf from `main`.
+
+            These binaries reflect the latest commit and
+            are **not** a stable release. See the commit
+            history for what changed.
+           
+
+          prerelease: true
+          files: sheaf-*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  gpu-test-cuda:
+    needs: publish-nightly
+    runs-on: ubuntu-22.04
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Bail out if Modal token is not configured
+        run: |
+          if [[ -z "$MODAL_TOKEN_ID" || -z "$MODAL_TOKEN_SECRET" ]]; then
+            echo "MODAL_TOKEN_ID / MODAL_TOKEN_SECRET repo secrets are not set."
+            echo "Modal credentials are missing; skipping GPU validation."
+            echo "skip=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Setup Python
+        if: env.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Modal
+        if: env.skip != 'true'
+        run: pip install "modal==1.3.5"
+
+      - name: Run examples test-suite on CUDA via Modal
+        if: env.skip != 'true'
+        run: |
+          # The Modal app is a local entrypoint (`modal run ...`). Credentials
+          # come from MODAL_TOKEN_ID / MODAL_TOKEN_SECRET env (repo secrets).
+          # examples_modal.py pulls by default:
+          #   - binary from the rolling `nightly` release (just published
+          #     by the publish-nightly job)
+          #   - examples from a fresh git clone (clean-room, no weights)
+          modal run sheaf/tests/examples_modal.py --device cuda
