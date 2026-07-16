@@ -1,0 +1,92 @@
+name: CUDA test
+
+# Validate the sheaf example suite on NVIDIA CUDA via Modal.
+#
+# Either:
+#   binary_url: download a release binary.
+#   binary_artifact: upload a workflow artifact built by build.yml.
+#
+# The job is skipped when Modal credentials are unavailable.
+
+on:
+  workflow_call:
+    inputs:
+      binary_url:
+        description: "GitHub release tarball URL (URL mode)"
+        type: string
+        required: false
+        default: ""
+      binary_artifact:
+        description: "Workflow artifact name containing sheaf-linux-x86_64.tar.gz (artifact mode)"
+        type: string
+        required: false
+        default: ""
+
+jobs:
+  gpu-test-cuda:
+    runs-on: ubuntu-22.04
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - name: Validate inputs
+        run: |
+          url="${{ inputs.binary_url }}"
+          art="${{ inputs.binary_artifact }}"
+          if [[ -z "$url" && -z "$art" ]]; then
+            echo "::error::either binary_url or binary_artifact must be provided"
+            exit 1
+          fi
+          if [[ -n "$url" && -n "$art" ]]; then
+            echo "::error::binary_url and binary_artifact are mutually exclusive"
+            exit 1
+          fi
+          if [[ -n "$url" ]]; then
+            echo "mode=url"
+          else
+            echo "mode=artifact"
+          fi
+
+      - uses: actions/checkout@v5
+
+      - name: Bail out if Modal token is not configured
+        run: |
+          if [[ -z "$MODAL_TOKEN_ID" || -z "$MODAL_TOKEN_SECRET" ]]; then
+            echo "MODAL_TOKEN_ID / MODAL_TOKEN_SECRET repo secrets are not set."
+            echo "Modal credentials are missing; skipping GPU validation."
+            echo "skip=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Setup Python
+        if: env.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Modal
+        if: env.skip != 'true'
+        run: pip install "modal==1.3.5"
+
+      - name: Download binary artifact (artifact mode)
+        if: env.skip != 'true' && inputs.binary_artifact != ''
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ inputs.binary_artifact }}
+          path: binary
+
+      - name: Run examples test-suite on CUDA via Modal
+        if: env.skip != 'true'
+        run: |
+          if [[ -n "${{ inputs.binary_url }}" ]]; then
+            # URL mode: clean-room, binary fetched from the release URL.
+            SHEAF_BINARY_URL="${{ inputs.binary_url }}" \
+            modal run sheaf/tests/examples_modal.py --device cuda
+          else
+            # Artifact mode: upload the freshly built tarball to Modal.
+            TARBALL="$(ls binary/sheaf-linux-x86_64.tar.gz)"
+            test -f "$TARBALL" || { echo "::error::$TARBALL not found"; ls -la binary; exit 1; }
+            SHEAF_SOURCES=local \
+            SHEAF_LOCAL_BINARY="$PWD/$TARBALL" \
+            SHEAF_BINARY_URL="unused" \
+            modal run sheaf/tests/examples_modal.py --device cuda
+          fi

@@ -15,18 +15,29 @@ REPO_ROOT = SHEAF_DIR.parent                     # repo root
 EXAMPLES_DIR = REPO_ROOT / "examples"
 
 # Sources (remote)
-#   SHEAF_SOURCES   = remote | local   (default remote)
-#   SHEAF_BINARY_URL= <github release url>  (default: rolling nightly)
+#   SHEAF_SOURCES    = remote | local   (default remote)
+#   SHEAF_BINARY_URL = <github release url>  (default: rolling nightly)
+#   SHEAF_LOCAL_BINARY = <path to a local sheaf-linux-x86_64.tar.gz>
+# When set (and SHEAF_SOURCES=local), upload the local tarball to Modal for
+# try-builds instead of downloading it from SHEAF_BINARY_URL.
 DEFAULT_BINARY_URL = (
     "https://github.com/sheaf-lang/sheaf/releases/download/nightly/"
     "sheaf-linux-x86_64.tar.gz"
 )
 BINARY_URL = os.environ.get("SHEAF_BINARY_URL", DEFAULT_BINARY_URL)
+LOCAL_BINARY = os.environ.get("SHEAF_LOCAL_BINARY") or ""
+if LOCAL_BINARY:
+    LOCAL_BINARY = str(Path(LOCAL_BINARY).resolve())
+    if not Path(LOCAL_BINARY).is_file():
+        raise SystemExit(
+            f"examples_modal: SHEAF_LOCAL_BINARY={LOCAL_BINARY!r} not found"
+        )
 GIT_URL = "https://github.com/sheaf-lang/sheaf.git"
 
 # Remote layout
 REMOTE_ROOT = "/work"
 REMOTE_SHEAF_DIR = f"{REMOTE_ROOT}/sheaf"
+REMOTE_TARBALL = "/tmp/sheaf.tar.gz"
 REMOTE_TESTS_DIR = f"{REMOTE_SHEAF_DIR}/tests"
 REMOTE_BIN = f"{REMOTE_SHEAF_DIR}/target/release/sheaf"
 
@@ -49,11 +60,23 @@ def _local_ignore(p) -> bool:
 def _download_binary_step(binary_url: str) -> str:
     return (
         f"mkdir -p {REMOTE_SHEAF_DIR}/target/release && "
-        f"curl -fsSL -o /tmp/sheaf.tar.gz {binary_url} && "
-        f"tar xzf /tmp/sheaf.tar.gz -C /tmp && "
+        f"curl -fsSL -o {REMOTE_TARBALL} {binary_url} && "
+        f"tar xzf {REMOTE_TARBALL} -C /tmp && "
         f"mv /tmp/sheaf {REMOTE_BIN} && "
         f"chmod +x {REMOTE_BIN} && "
-        f"rm -f /tmp/sheaf.tar.gz && "
+        f"rm -f {REMOTE_TARBALL} && "
+        f"test -x {REMOTE_BIN}"
+    )
+
+
+def _extract_local_binary_step() -> str:
+    """Extract a tarball already staged in the image at REMOTE_TARBALL."""
+    return (
+        f"mkdir -p {REMOTE_SHEAF_DIR}/target/release && "
+        f"tar xzf {REMOTE_TARBALL} -C /tmp && "
+        f"mv /tmp/sheaf {REMOTE_BIN} && "
+        f"chmod +x {REMOTE_BIN} && "
+        f"rm -f {REMOTE_TARBALL} && "
         f"test -x {REMOTE_BIN}"
     )
 
@@ -110,15 +133,39 @@ def _image_remote(binary_url: str) -> modal.Image:
 
 
 def _image_local(binary_url: str) -> modal.Image:
-    """Debug: upload local examples + harness, download binary from URL."""
-    return (
+    """Debug: upload local examples + harness.
+
+    Binary origin:
+      - SHEAF_LOCAL_BINARY set: upload the local tarball (try-build path).
+      - otherwise: download from binary_url (release/nightly URL).
+
+    Modal layers image instructions in order, so a locally uploaded tarball
+    (add_local_file) must be staged before the run_command that extracts it.
+    """
+    use_local = bool(LOCAL_BINARY)
+    image = (
         _base_image()
         .run_commands(
             f"mkdir -p {REMOTE_TESTS_DIR} {REMOTE_SHEAF_DIR}/target/release "
-            f"{REMOTE_ROOT}/examples && "
-            + _download_binary_step(binary_url) + " && "
+            f"{REMOTE_ROOT}/examples"
+        )
+    )
+    if use_local:
+        image = (
+            image
+            .add_local_file(LOCAL_BINARY, remote_path=REMOTE_TARBALL)
+            .run_commands(
+                _extract_local_binary_step() + " && "
+                + _warmup_toolchain_step()
+            )
+        )
+    else:
+        image = image.run_commands(
+            _download_binary_step(binary_url) + " && "
             + _warmup_toolchain_step()
         )
+    return (
+        image
         .add_local_dir(
             str(EXAMPLES_DIR),
             remote_path=f"{REMOTE_ROOT}/examples",
@@ -180,7 +227,8 @@ def run_cpu():
 def main(device: str = "cuda"):
     print(
         f"examples_modal: device={device} sources="
-        f"{os.environ.get('SHEAF_SOURCES','remote')} binary={BINARY_URL}",
+        f"{os.environ.get('SHEAF_SOURCES','remote')} binary="
+        f"{LOCAL_BINARY or BINARY_URL}",
         file=sys.stderr,
     )
     if device == "cuda":
