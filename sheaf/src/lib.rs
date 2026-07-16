@@ -6,6 +6,10 @@
 //! A functional language for differentiable programming,
 //! compiling directly to StableHLO and running on IREE.
 
+// Build-time stamped version. Releases use the Cargo package version;
+// nightly builds override it via SHEAF_BUILD_VERSION (see build.rs).
+include!(concat!(env!("OUT_DIR"), "/generated_version.rs"));
+
 pub mod autodiff;
 pub mod core;
 pub mod forms;

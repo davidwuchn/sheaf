@@ -54,6 +54,36 @@ fn main() {
     println!("cargo:rerun-if-env-changed=IREE_RUNTIME_LIB_DIR");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=iree-runtime");
+
+    stamp_version();
+}
+
+/// Stamp the binary with a version string.
+///
+/// By default this is the Cargo package version. Nightly builds can override
+/// it with `SHEAF_BUILD_VERSION`.
+///
+/// Generates `OUT_DIR/generated_version.rs` with a `SHEAF_VERSION` constant.
+fn stamp_version() {
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
+    let dest = Path::new(&out_dir).join("generated_version.rs");
+
+    let version = match env::var("SHEAF_BUILD_VERSION") {
+        Ok(v) if !v.trim().is_empty() => v,
+        // Fall back to the Cargo package version
+        _ => env!("CARGO_PKG_VERSION").to_string(),
+    };
+
+    let src = format!("pub const SHEAF_VERSION: &str = {version:?};\n");
+
+    println!("cargo:rerun-if-env-changed=SHEAF_BUILD_VERSION");
+
+    // Only rewrite if the content changed, so we don't needlessly invalidate
+    // downstream caches.
+    if std::fs::read_to_string(&dest).unwrap_or_default() != src {
+        std::fs::write(&dest, src)
+            .unwrap_or_else(|e| panic!("cannot write {dest:?}: {e}"));
+    }
 }
 
 /// CMake build tree layout: IREE_BUILD_DIR/runtime/src/iree/runtime/libiree_runtime_unified.a
@@ -124,10 +154,10 @@ fn try_conventional_dir() -> bool {
     }
 }
 
-/// Link iree_runtime_unified + flatcc_parsing from a single directory.
-/// We use +whole-archive to ensure all driver modules (Metal, CUDA, etc.)
-/// are included even when not directly referenced — IREE discovers them
-/// at runtime via its driver registry.
+/// Link `iree_runtime_unified` and `flatcc_parsing` from a single directory.
+///
+/// Use `+whole-archive` so driver modules (Metal, CUDA, etc.) aren't dropped
+/// by the linker. IREE discovers them through its driver registry at runtime.
 fn link_from_dir(lib_dir: &Path) -> bool {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static:+whole-archive=iree_runtime_unified");

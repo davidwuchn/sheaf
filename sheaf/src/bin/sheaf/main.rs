@@ -25,7 +25,7 @@ fn main() {
         return;
     }
     if tail.iter().any(|a| a == "--version") {
-        println!("Sheaf {}", env!("CARGO_PKG_VERSION"));
+        println!("Sheaf {}", sheaf_compiler::SHEAF_VERSION);
         return;
     }
 
@@ -164,7 +164,7 @@ Examples:
     sheaf --guard no-nan train.shf
     sheaf --mem-profile gpt2.shf
     sheaf train.shf --guard loss:range:0:20",
-        env!("CARGO_PKG_VERSION")
+        sheaf_compiler::SHEAF_VERSION
     );
 }
 

@@ -340,7 +340,7 @@ fn is_silent_result(val: &Value) -> bool {
 }
 
 pub fn run() {
-    eprintln!("Sheaf {} (:h for help)", env!("CARGO_PKG_VERSION"));
+    eprintln!("Sheaf {} (:h for help)", sheaf_compiler::SHEAF_VERSION);
 
     let history_file = std::env::var_os("HOME")
         .map(|h| std::path::PathBuf::from(h).join(".sheaf_history"));
