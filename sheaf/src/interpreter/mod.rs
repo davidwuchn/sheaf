@@ -20,6 +20,7 @@ use crate::core::expr::{BindingPattern, CompiledExpr, CompilerContext};
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::Value;
+use crate::sheaf_msg;
 use ndarray::{ArrayD, IxDyn};
 use std::collections::BTreeMap;
 
@@ -564,6 +565,11 @@ let has_kwargs = matches!(name,
                     fd.vmfb_session_idx = None;
                     fd.signature = None;
                 }
+                // The cached VMFB no longer matches the current arguments. Clear any recorded
+                // JIT failure so the function can be compiled again for the new shapes.
+                if let Some(jit) = &mut env.jit_compiler {
+                    jit.clear_failure(name);
+                }
             }
 
             let mut recompiled = false;
@@ -587,14 +593,14 @@ let has_kwargs = matches!(name,
                 }
             }
 
-            // Had a compiled version but recompilation failed -> internal error
+            // Recompilation failed, but we already have an interpreted body. Fall back to
+            // the interpreter rather than treating this as an internal error. Only a
+            // failure to dispatch after successful recompilation is a genuine bug.
             if was_stale && !recompiled {
-                if let Some(ref mut p) = env.profiler { p.exit(); }
-                let got = pos_args.iter().map(|a| a.short_desc()).collect::<Vec<_>>().join(", ");
-                return Err(runtime_error(format!(
-                    "{}: runtime error.\n  Called with: ({})\n  This is a bug in Sheaf. Please report it at https://github.com/sheaf-lang/sheaf/issues",
-                    func_def.name, got
-                )));
+                sheaf_msg!(
+                    "jit: {} recompile failed after stale session; interpreting",
+                    func_def.name
+                );
             }
 
             // Recompiled but dispatch still fails -> internal error

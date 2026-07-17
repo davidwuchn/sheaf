@@ -156,6 +156,13 @@ impl JitCompiler {
     }
 
 
+    /// Failed compilations are remembered indefinitely. Call this after
+    /// invalidating a cached VMFB session so the function can be retried.
+    pub fn clear_failure(&mut self, name: &str) {
+        self.failed_fns.remove(name);
+    }
+
+
     pub fn try_jit_compile(
         &mut self,
         func_def: &FunctionDef,
