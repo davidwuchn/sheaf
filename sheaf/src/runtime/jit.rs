@@ -48,6 +48,7 @@ use crate::core::expr::{CompiledExpr, FunctionDef, VmfbSession};
 use crate::lowering::codegen::{collect_tuple_leaves, expand_tuple_to_symbols, CodeGenerator};
 use crate::lowering::config::{layout_to_index_map, lower_get_calls};
 use crate::lowering::effects::{collect_effects, collect_hof_calls};
+use crate::lowering::jit_eligibility;
 use crate::lowering::stablehlo::{Register, StableHLOEmitter};
 use crate::lowering::transforms::{
     extract_scalar_constants, filter_constants_for_shape_positions, lower_inlined_gets,
@@ -154,6 +155,7 @@ impl JitCompiler {
         "llvm-cpu".to_string()
     }
 
+
     pub fn try_jit_compile(
         &mut self,
         func_def: &FunctionDef,
@@ -168,15 +170,14 @@ impl JitCompiler {
             return None;
         }
 
-        let body_compiled = func_def.body_compiled.as_ref()?;
 
-        // Skip impure functions and functions using higher-order calls
-        if !collect_effects(body_compiled).is_empty() {
-            self.jit_fail(name, "has effects");
+        // Reject functions whose compiled body is unavailable, or whose call graph
+        // contains a cycle, an effect, or a higher-order call.
+        if func_def.body_compiled.is_none() {
             return None;
         }
-        if !collect_hof_calls(body_compiled).is_empty() {
-            self.jit_fail(name, "has HOF calls");
+        if let Err(reason) = jit_eligibility(name, registry) {
+            self.jit_fail(name, &reason);
             return None;
         }
 
