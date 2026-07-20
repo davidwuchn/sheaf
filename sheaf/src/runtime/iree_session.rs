@@ -1,11 +1,45 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Cached target backend string, set once on first IreeSession creation.
 static CACHED_BACKEND: OnceLock<String> = OnceLock::new();
+
+/// Cumulative number of attempts to construct an IREE session.
+///
+/// Incremented once for every call to `IreeSession::new()`, including calls
+/// that fail. It never decreases.
+static SESSION_CREATION_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Number of successfully constructed IREE sessions that have not been
+/// dropped. This never underflows.
+static LIVE_SESSION_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Returns the cumulative number of `IreeSession::new()` attempts.
+pub fn session_creation_attempt_count() -> usize {
+    SESSION_CREATION_ATTEMPTS.load(Ordering::Relaxed)
+}
+
+/// Returns the number of successfully constructed sessions that are live.
+pub fn live_session_count() -> usize {
+    LIVE_SESSION_COUNT.load(Ordering::Relaxed)
+}
+
+fn record_session_creation_attempt() {
+    SESSION_CREATION_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+}
+
+fn record_live_session() {
+    LIVE_SESSION_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+fn record_session_drop() {
+    let _ = LIVE_SESSION_COUNT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+        count.checked_sub(1)
+    });
+}
 
 use crate::core::error::SheafError;
 use crate::sheaf_msg;
@@ -51,6 +85,7 @@ unsafe impl Sync for IreeSession {}
 
 impl IreeSession {
     pub fn new() -> Result<Self, SheafError> {
+        record_session_creation_attempt();
         unsafe {
             let alloc = system_allocator();
 
@@ -140,7 +175,7 @@ impl IreeSession {
                 return Err(iree_err("failed to create IREE session"));
             }
 
-            Ok(IreeSession {
+            let result = IreeSession {
                 instance,
                 device_handle,
                 session,
@@ -155,7 +190,9 @@ impl IreeSession {
                 n_calls: AtomicU64::new(0),
                 n_cache_hits: AtomicU64::new(0),
                 n_cache_misses: AtomicU64::new(0),
-            })
+            };
+            record_live_session();
+            Ok(result)
         }
     }
 
@@ -594,8 +631,56 @@ impl IreeSession {
     }
 }
 
+
+#[cfg(test)]
+mod lifetime_counter_tests {
+    use super::{
+        LIVE_SESSION_COUNT, SESSION_CREATION_ATTEMPTS, live_session_count, record_live_session,
+        record_session_creation_attempt, record_session_drop, session_creation_attempt_count,
+    };
+    use std::sync::atomic::Ordering;
+    use std::sync::{Mutex, OnceLock};
+
+    fn counter_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct CounterRestore {
+        attempts: usize,
+        live: usize,
+    }
+
+    impl Drop for CounterRestore {
+        fn drop(&mut self) {
+            SESSION_CREATION_ATTEMPTS.store(self.attempts, Ordering::Relaxed);
+            LIVE_SESSION_COUNT.store(self.live, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn lifetime_counters_use_deltas_and_live_count_does_not_underflow() {
+        let _lock = counter_test_lock().lock().unwrap();
+        let restore = CounterRestore {
+            attempts: session_creation_attempt_count(),
+            live: live_session_count(),
+        };
+        record_session_creation_attempt();
+        assert_eq!(session_creation_attempt_count(), restore.attempts + 1);
+        assert_eq!(live_session_count(), restore.live);
+        record_live_session();
+        assert_eq!(live_session_count(), restore.live + 1);
+        record_session_drop();
+        assert_eq!(live_session_count(), restore.live);
+        LIVE_SESSION_COUNT.store(0, Ordering::Relaxed);
+        record_session_drop();
+        assert_eq!(live_session_count(), 0);
+    }
+}
+
 impl Drop for IreeSession {
     fn drop(&mut self) {
+        record_session_drop();
         if self.profile {
             let n = self.n_calls.load(Ordering::Relaxed);
             if n > 0 {
