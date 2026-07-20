@@ -97,8 +97,8 @@ pub(super) unsafe fn value_to_buffer_view(
                 value_to_buffer_view(device, allocator, &tensor)
             }
             Value::DeviceBuffer(db) => {
-                // Already an IREE buffer view, pass through directly.
-                // Caller must not cache/release this pointer (not owned by cache).
+                // The caller owns the returned reference and may cache it.
+                iree_hal_buffer_view_retain(db.buffer_view());
                 Ok(db.buffer_view())
             }
             _ => Err(iree_err(&format!(

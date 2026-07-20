@@ -207,6 +207,7 @@ unsafe extern "C" {
         initial_data: iree_const_byte_span_t,
         out: *mut *mut iree_hal_buffer_view_t,
     ) -> iree_status_t;
+    pub fn iree_hal_buffer_view_retain(view: *mut iree_hal_buffer_view_t);
     pub fn iree_hal_buffer_view_release(view: *mut iree_hal_buffer_view_t);
     pub fn iree_hal_buffer_view_buffer(
         view: *const iree_hal_buffer_view_t,
