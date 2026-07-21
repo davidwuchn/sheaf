@@ -95,13 +95,27 @@ use crate::core::trace::{value_to_param_layout, value_to_stablehlo_type};
 use crate::interpreter::value::Value;
 use crate::StableHLOType;
 
+/// Returns the IREE module scope used for a JIT-compiled function.
+pub(crate) fn jit_module_name(name: &str) -> String {
+    let safe_name = name.replace('-', "_").replace('?', "_q").replace('!', "_b");
+    format!("jit_{safe_name}")
+}
+
+fn vag_module_name(key: &str) -> String {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    format!("vag_{:016x}", hasher.finish())
+}
+
 pub struct JitCompiler {
     iree_compile_path: Option<String>,
     target_backend: String,
     failed_fns: HashSet<String>,
     last_vag_fail_reason: Option<String>,
-    /// Cache compiled VAG sessions: vag_key -> (session_idx, signature, param_names)
-    vag_cache: HashMap<String, (usize, FunctionSignature, Vec<String>)>,
+    /// Cache compiled VAG sessions: vag_key -> (session_idx, module_name, signature, param_names)
+    vag_cache: HashMap<String, (usize, String, FunctionSignature, Vec<String>)>,
 }
 
 impl JitCompiler {
@@ -169,9 +183,10 @@ impl JitCompiler {
         args: &[Value],
         registry: &HashMap<String, FunctionDef>,
         vmfb_sessions: &mut Vec<VmfbSession>,
-    ) -> Option<(usize, FunctionSignature)> {
+    ) -> Option<(usize, String, FunctionSignature)> {
         let iree_compile = self.iree_compile_path.clone()?;
         let name = &func_def.name;
+        let module_name = jit_module_name(name);
 
         if self.failed_fns.contains(name) {
             return None;
@@ -205,7 +220,9 @@ impl JitCompiler {
             registry,
             vmfb_sessions,
             &backend,
+            &module_name,
         )
+        .map(|(session_idx, signature)| (session_idx, module_name, signature))
     }
 
     fn compile_function(
@@ -216,6 +233,7 @@ impl JitCompiler {
         registry: &HashMap<String, FunctionDef>,
         vmfb_sessions: &mut Vec<VmfbSession>,
         target_backend: &str,
+        module_name: &str,
     ) -> Option<(usize, FunctionSignature)> {
         let name = &func_def.name;
         let mut body = func_def.body_compiled.clone()?;
@@ -495,8 +513,7 @@ impl JitCompiler {
             }
         }
 
-        // Emit MLIR module
-        let mlir = StableHLOEmitter::emit_module(&[mlir_decl]);
+        let mlir = StableHLOEmitter::emit_module_named(Some(module_name), &[mlir_decl]);
 
         if crate::core::config::verbosity() >= 2 {
             sheaf_msg!("jit: {} | MLIR {} lines", name, mlir.lines().count());
@@ -606,15 +623,15 @@ impl JitCompiler {
     /// We promote tensor captures to MLIR parameters, resolve scalar captures as constants,
     /// then generate forward + backward passes in a single MLIR function.
     ///
-    /// Returns `(session_idx, signature, param_order)` where `param_order` lists
-    /// the combined parameter names (fn params first, then tensor captures) for dispatch.
+    /// Returns `(session_idx, module_name, signature, param_order)`, where
+    /// `param_order` lists function parameters followed by tensor captures.
     pub fn try_jit_value_and_grad(
         &mut self,
         func: &Value,
         wrt_arg: &Value,
         registry: &HashMap<String, FunctionDef>,
         vmfb_sessions: &mut Vec<VmfbSession>,
-    ) -> Option<(usize, FunctionSignature, Vec<String>)> {
+    ) -> Option<(usize, String, FunctionSignature, Vec<String>)> {
         let iree_compile = self.iree_compile_path.clone()?;
 
         let (fn_params, body, closure) = match func {
@@ -652,6 +669,7 @@ impl JitCompiler {
             .collect::<Vec<_>>()
             .join(",");
         let vag_key = format!("__vag_{:?}_{}_{}", body, wrt_type_str, scalars_suffix);
+        let module_name = vag_module_name(&vag_key);
         if self.failed_fns.contains(&vag_key) {
             return None;
         }
@@ -712,6 +730,7 @@ impl JitCompiler {
                             body_compiled: Some(fb.clone()),
                             signature: None,
                             vmfb_session_idx: None,
+                            vmfb_module_name: None,
                             known_param_types: Vec::new(),
                             compile_error: None,
                         }
@@ -1175,8 +1194,7 @@ impl JitCompiler {
         sig.return_type = return_type;
         sig.return_dict_keys = None;
 
-        // Emit MLIR module
-        let mlir = StableHLOEmitter::emit_module(&[mlir_decl]);
+        let mlir = StableHLOEmitter::emit_module_named(Some(&module_name), &[mlir_decl]);
 
         if crate::core::config::verbosity() >= 2 {
             sheaf_msg!("jit: value-and-grad | MLIR {} lines", mlir.lines().count());
@@ -1259,7 +1277,7 @@ impl JitCompiler {
         let session_idx = vmfb_sessions.len();
         vmfb_sessions.push(Arc::new(session));
 
-        let result = (session_idx, sig, all_param_names);
+        let result = (session_idx, module_name, sig, all_param_names);
         self.vag_cache.insert(vag_key, result.clone());
         Some(result)
     }
@@ -1672,4 +1690,15 @@ fn preprocess_body(
 
     // Arity mismatch and other destructuring errors bubble up as SheafError::Compile.
     crate::lowering::transforms::lower_tuples_and_destructuring(body, param_shapes)
+}
+
+#[cfg(test)]
+mod module_name_tests {
+    use super::{jit_module_name, vag_module_name};
+
+    #[test]
+    fn module_names_are_qualified_and_distinct() {
+        assert_eq!(jit_module_name("foo-bar?"), "jit_foo_bar_q");
+        assert_ne!(vag_module_name("first"), vag_module_name("second"));
+    }
 }

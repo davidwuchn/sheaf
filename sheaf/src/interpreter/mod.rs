@@ -563,6 +563,7 @@ let has_kwargs = matches!(name,
                 // Clear stale session so JIT recompiles for current arg shapes.
                 if let Some(fd) = env.registry.get_mut(name) {
                     fd.vmfb_session_idx = None;
+                    fd.vmfb_module_name = None;
                     fd.signature = None;
                 }
                 // The cached VMFB no longer matches the current arguments. Clear any recorded
@@ -574,7 +575,7 @@ let has_kwargs = matches!(name,
 
             let mut recompiled = false;
             if let Some(jit) = &mut env.jit_compiler {
-                if let Some((session_idx, sig)) = jit.try_jit_compile(
+                if let Some((session_idx, module_name, sig)) = jit.try_jit_compile(
                     &mut func_def,
                     &pos_args,
                     &env.registry,
@@ -582,6 +583,7 @@ let has_kwargs = matches!(name,
                 ) {
                     if let Some(fd) = env.registry.get_mut(name) {
                         fd.vmfb_session_idx = Some(session_idx);
+                        fd.vmfb_module_name = Some(module_name);
                         fd.signature = Some(sig);
                     }
                     recompiled = true;

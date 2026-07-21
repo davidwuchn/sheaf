@@ -117,6 +117,7 @@ pub fn try_load_vmfb(
     for fn_name in &valid_fns {
         if let Some(fd) = compiler.registry.get_mut(fn_name) {
             fd.vmfb_session_idx = Some(session_idx);
+            fd.vmfb_module_name = Some("module".to_string());
             if let Some(sig) = signatures.get(fn_name) {
                 fd.signature = Some(sig.clone());
             }

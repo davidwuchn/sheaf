@@ -74,6 +74,7 @@ pub(super) fn try_iree_dispatch(
     let iree_session = session.downcast_ref::<crate::runtime::iree_session::IreeSession>()?;
 
     let sig = func_def.signature.as_ref()?;
+    let module_name = func_def.vmfb_module_name.as_deref().unwrap_or("module");
 
     // Validate tensor count AND shapes before calling into IREE.
     // This prevents the C runtime from printing ugly diagnostics to stderr.
@@ -100,7 +101,11 @@ pub(super) fn try_iree_dispatch(
         }
     }
 
-    let full_name = format!("module.{}", func_def.name.replace('-', "_").replace('?', "_q").replace('!', "_b"));
+    let full_name = format!(
+        "{}.{}",
+        module_name,
+        func_def.name.replace('-', "_").replace('?', "_q").replace('!', "_b")
+    );
     let result = match iree_session.call_typed_device(&full_name, args, &sig.return_type) {
         Ok(v) => v,
         Err(e) => {
@@ -142,7 +147,7 @@ pub(super) fn try_jit_vag(
         None => return JitVagOutcome::Unsupported,
     };
 
-    let (session_idx, sig, param_names) = match jit.try_jit_value_and_grad(
+    let (session_idx, module_name, sig, param_names) = match jit.try_jit_value_and_grad(
         &augmented_func,
         params,
         &env.registry,
@@ -182,7 +187,8 @@ pub(super) fn try_jit_vag(
         None => return JitVagOutcome::Bug("downcast to IreeSession failed".to_string()),
     };
 
-    let result = match iree_session.call_typed_device("module.value_and_grad", &args, &sig.return_type) {
+    let full_name = format!("{}.value_and_grad", module_name);
+    let result = match iree_session.call_typed_device(&full_name, &args, &sig.return_type) {
         Ok(v) => v,
         Err(e) => return JitVagOutcome::Success(Err(e)),
     };

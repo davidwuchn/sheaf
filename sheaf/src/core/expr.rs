@@ -101,6 +101,8 @@ pub struct FunctionDef {
     pub body_compiled: Option<CompiledExpr>,
     pub signature: Option<crate::core::inference::FunctionSignature>,
     pub vmfb_session_idx: Option<usize>,
+    /// IREE module name used with `vmfb_session_idx` for qualified dispatch.
+    pub vmfb_module_name: Option<String>,
     /// Known parameter types from annotations (shape annotations + traced layouts).
     /// Used by the tracing compiler to create dummy inputs.
     pub known_param_types: Vec<(String, crate::lowering::stablehlo::StableHLOType)>,

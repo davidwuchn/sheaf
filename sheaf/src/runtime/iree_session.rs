@@ -62,7 +62,9 @@ pub struct IreeSession {
     instance: *mut iree_runtime_instance_t,
     device_handle: Arc<IreeDeviceHandle>,
     session: *mut iree_runtime_session_t,
-    _vmfb_data: Option<Vec<u8>>,
+    /// Source buffers remain live because IREE may retain the input span after
+    /// appending a bytecode module.
+    _vmfb_data: Vec<Vec<u8>>,
     /// HAL driver name: "metal", "local-task", etc.
     driver_name: String,
     /// Per-function buffer view cache: fn_name -> per-position cached buffer views.
@@ -179,7 +181,7 @@ impl IreeSession {
                 instance,
                 device_handle,
                 session,
-                _vmfb_data: None,
+                _vmfb_data: Vec::new(),
                 driver_name: chosen_driver.to_string(),
                 buffer_cache: Mutex::new(HashMap::new()),
                 profile: crate::core::config::jit_profile(),
@@ -229,8 +231,11 @@ impl IreeSession {
 
     pub fn load_vmfb(&mut self, data: Vec<u8>) -> Result<(), SheafError> {
         unsafe {
-            self._vmfb_data = Some(data);
-            let bytes = self._vmfb_data.as_ref().unwrap();
+            self._vmfb_data.push(data);
+            let bytes = self
+                ._vmfb_data
+                .last()
+                .ok_or_else(|| iree_err("failed to retain VMFB source data"))?;
             let span = iree_const_byte_span_t::from_slice(bytes);
             let null_alloc = iree_allocator_t {
                 self_: std::ptr::null_mut(),
@@ -249,6 +254,7 @@ impl IreeSession {
                 if crate::core::config::verbosity() >= 2 {
                     iree_status_fprint(libc_stderr(), status);
                 }
+                self._vmfb_data.pop();
                 return Err(iree_err("failed to load compiled module"));
             }
 
