@@ -111,16 +111,96 @@ pub struct FunctionDef {
 }
 
 impl FunctionDef {
-    /// Stable hash of the original AST body, for change detection in manifests.
-    /// Uses Display (not Debug) to exclude SourceLocations from the hash.
+    /// Stable identity of the original AST body for manifest validation.
+    /// Source locations do not affect compiled output and are excluded.
     pub fn body_hash(&self) -> String {
-        use std::hash::{Hash, Hasher};
-        use std::collections::hash_map::DefaultHasher;
-        let repr = format!("{}", self.body);
-        let mut hasher = DefaultHasher::new();
-        repr.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        canonical_ast_hash(&self.body)
     }
+}
+
+fn canonical_ast_hash(value: &SheafValue) -> String {
+    use std::fmt::Write;
+
+    fn write_text(output: &mut String, tag: char, text: &str) {
+        let _ = write!(output, "{tag}{}:", text.len());
+        output.push_str(text);
+    }
+
+    fn write_value(output: &mut String, value: &SheafValue) {
+        use std::fmt::Write;
+
+        match value {
+            SheafValue::Symbol(value, _) => write_text(output, 'S', value),
+            SheafValue::Keyword(value, _) => write_text(output, 'K', value),
+            SheafValue::Integer(value, _) => {
+                let _ = write!(output, "I{value};");
+            }
+            SheafValue::Float(value, _) => {
+                let _ = write!(output, "F{:016x};", value.to_bits());
+            }
+            SheafValue::String(value, _) => write_text(output, 'T', value),
+            SheafValue::Boolean(value, _) => {
+                output.push_str(if *value { "B1;" } else { "B0;" });
+            }
+            SheafValue::Nil(_) => output.push_str("N;"),
+            SheafValue::List(values, _) => {
+                let _ = write!(output, "L{}[", values.len());
+                for value in values {
+                    write_value(output, value);
+                }
+                output.push(']');
+            }
+            SheafValue::Vector(values, _) => {
+                let _ = write!(output, "V{}[", values.len());
+                for value in values {
+                    write_value(output, value);
+                }
+                output.push(']');
+            }
+            SheafValue::Dict(entries, _) => {
+                let _ = write!(output, "D{}[", entries.len());
+                for (key, value) in entries {
+                    write_value(output, key);
+                    write_value(output, value);
+                }
+                output.push(']');
+            }
+            SheafValue::Quote(value, _) => {
+                output.push_str("Q[");
+                write_value(output, value);
+                output.push(']');
+            }
+            SheafValue::Quasiquote(value, _) => {
+                output.push_str("QQ[");
+                write_value(output, value);
+                output.push(']');
+            }
+            SheafValue::Unquote(value, _) => {
+                output.push_str("U[");
+                write_value(output, value);
+                output.push(']');
+            }
+            SheafValue::UnquoteSplicing(value, _) => {
+                output.push_str("US[");
+                write_value(output, value);
+                output.push(']');
+            }
+        }
+    }
+
+    let mut encoded = String::new();
+    write_value(&mut encoded, value);
+
+    fn fnv1a(text: &str, seed: u64) -> u64 {
+        text.bytes().fold(seed, |mut hash, byte| {
+            hash ^= u64::from(byte);
+            hash.wrapping_mul(0x100000001b3)
+        })
+    }
+
+    let first = fnv1a(&encoded, 0xcbf29ce484222325);
+    let second = fnv1a(&encoded, 0x84222325cbf29ce4);
+    format!("{first:016x}{second:016x}")
 }
 
 /// Lower a runtime quasiquote into plain AST.
@@ -818,6 +898,41 @@ mod tests {
 
     fn make_list(elems: Vec<SheafValue>) -> SheafValue {
         SheafValue::List(elems, SourceLocation::unknown())
+    }
+
+    #[test]
+    fn canonical_ast_hash_ignores_source_locations() {
+        let first = SheafValue::List(
+            vec![SheafValue::String("x".into(), SourceLocation::new(1, 1, "a".into()))],
+            SourceLocation::new(1, 1, "a".into()),
+        );
+        let second = SheafValue::List(
+            vec![SheafValue::String("x".into(), SourceLocation::new(9, 4, "b".into()))],
+            SourceLocation::new(9, 4, "b".into()),
+        );
+
+        assert_eq!(canonical_ast_hash(&first), canonical_ast_hash(&second));
+    }
+
+    #[test]
+    fn canonical_ast_hash_distinguishes_equal_displayed_nans() {
+        let first = SheafValue::Float(
+            f64::from_bits(0x7ff8_0000_0000_0001),
+            SourceLocation::unknown(),
+        );
+        let second = SheafValue::Float(
+            f64::from_bits(0x7ff8_0000_0000_0002),
+            SourceLocation::unknown(),
+        );
+
+        assert_eq!(first.to_string(), second.to_string());
+        assert_ne!(canonical_ast_hash(&first), canonical_ast_hash(&second));
+    }
+
+    #[test]
+    fn canonical_ast_hash_is_stable() {
+        let body = make_list(vec![make_symbol("f"), make_int(1)]);
+        assert_eq!(canonical_ast_hash(&body), canonical_ast_hash(&body));
     }
 
     #[test]
