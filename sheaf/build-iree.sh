@@ -4,7 +4,7 @@
 # against, and drop them where build.rs expects them.
 #
 # Usage:
-#   scripts/build-iree.sh        # native build + install to sheaf/iree-runtime/
+#   sheaf/build-iree.sh          # native build + install to sheaf/iree-runtime/
 #
 # Environment variables:
 #   IREE_INSTALL_DIR   where the .a files are copied
@@ -26,14 +26,14 @@ usage() {
 
 [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && usage
 
-# Locate the repo root (this script lives in <repo>/scripts/).
+# Locate the repo root (this script lives in <repo>/sheaf/).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 CARGO_TOML="$REPO_ROOT/sheaf/Cargo.toml"
 if [[ ! -f "$CARGO_TOML" ]]; then
   echo "error: cannot find sheaf/Cargo.toml relative to $SCRIPT_DIR" >&2
-  echo "       (expected repo layout: <repo>/scripts/build-iree.sh and <repo>/sheaf/Cargo.toml)" >&2
+  echo "       (expected repo layout: <repo>/sheaf/build-iree.sh and <repo>/sheaf/Cargo.toml)" >&2
   exit 1
 fi
 
@@ -128,11 +128,26 @@ fi
 echo
 
 # --- configure with CMake / Ninja -------------------------------------------
+# CMake does not reliably detect host changes on its own, so discard the cache
+# when running on a different OS.
+PLATFORM_MARKER="$BUILD_DIR/.sheaf-iree-platform"
+PLATFORM_ID="$OS-$ARCH"
+if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+  cached_platform=""
+  [[ -f "$PLATFORM_MARKER" ]] && cached_platform="$(<"$PLATFORM_MARKER")"
+  if [[ "$cached_platform" != "$PLATFORM_ID" ]]; then
+    echo "==> Removing stale CMake build tree (cached platform: ${cached_platform:-unknown}; current: $PLATFORM_ID)"
+    rm -rf "$BUILD_DIR"
+  fi
+fi
+
+mkdir -p "$BUILD_DIR"
 echo "==> Configuring CMake"
 cmake -G Ninja -B "$BUILD_DIR" -S "$SRC_DIR" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
   "${CMAKE_FLAGS[@]}"
+printf '%s\n' "$PLATFORM_ID" > "$PLATFORM_MARKER"
 
 # --- build the runtime static libs ------------------------------------------
 echo "==> Building iree_runtime_unified + flatcc (this takes a while)"
