@@ -299,7 +299,14 @@ impl IreeSession {
                     cached_fn[i][0].bv
                 } else {
                     if self.profile { self.n_cache_misses.fetch_add(1, Ordering::Relaxed); }
-                    let new_bv = value_to_buffer_view(device, device_alloc, val)?;
+                    let new_bv = match value_to_buffer_view(device, device_alloc, val) {
+                        Ok(view) => view,
+                        Err(error) => {
+                            // The VM list owns retained references for earlier arguments.
+                            iree_vm_list_release(input_list);
+                            return Err(error);
+                        }
+                    };
                     if let Some(fp) = TensorFingerprint::from_value(val) {
                         if cached_fn[i].len() >= MAX_CACHE_ENTRIES {
                             let evicted = cached_fn[i].pop().unwrap();
@@ -363,7 +370,14 @@ impl IreeSession {
                     return Err(iree_err("failed to get output from list"));
                 }
                 let bv = ref_.ptr as *mut iree_hal_buffer_view_t;
-                let val = buffer_view_to_value(device, bv)?;
+                let val = match buffer_view_to_value(device, bv) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        iree_vm_ref_release(&mut ref_);
+                        iree_vm_list_release(output_list);
+                        return Err(error);
+                    }
+                };
                 iree_vm_ref_release(&mut ref_);
                 results.push(val);
             }
@@ -466,7 +480,14 @@ impl IreeSession {
                                 cached_fn[i][0].bv
                             } else {
                                 if self.profile { self.n_cache_misses.fetch_add(1, Ordering::Relaxed); }
-                                let new_bv = value_to_buffer_view(device, device_alloc, val)?;
+                                let new_bv = match value_to_buffer_view(device, device_alloc, val) {
+                                    Ok(view) => view,
+                                    Err(error) => {
+                                        // The VM list owns retained references for earlier arguments.
+                                        iree_vm_list_release(input_list);
+                                        return Err(error);
+                                    }
+                                };
                                 if let Some(fp) = TensorFingerprint::from_value(val) {
                                     if cached_fn[i].len() >= MAX_CACHE_ENTRIES {
                                         let evicted = cached_fn[i].pop().unwrap();

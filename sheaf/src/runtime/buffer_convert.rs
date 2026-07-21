@@ -22,7 +22,9 @@ pub(super) unsafe fn value_to_buffer_view(
                 let shape: Vec<iree_hal_dim_t> =
                     data.shape().iter().map(|&d| d as iree_hal_dim_t).collect();
 
-                let f32_slice = data.as_slice().unwrap();
+                let f32_slice = data
+                    .as_slice()
+                    .ok_or_else(|| iree_err("cannot convert non-contiguous tensor to IREE buffer"))?;
                 let (byte_data, element_type) = match dtype {
                     Dtype::BF16 => {
                         // f32 -> bf16: truncate to top 16 bits
@@ -70,7 +72,7 @@ pub(super) unsafe fn value_to_buffer_view(
                     span,
                     &mut bv,
                 );
-                if !iree_status_is_ok(status) {
+                if !iree_status_is_ok(status) || bv.is_null() {
                     return Err(iree_err("failed to allocate IREE buffer view"));
                 }
                 Ok(bv)
@@ -262,5 +264,43 @@ pub(crate) fn iree_err(msg: &str) -> SheafError {
     SheafError::Runtime {
         message: msg.to_string(),
         location: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::value_to_buffer_view;
+    use crate::interpreter::value::{Dtype, Value};
+    use ndarray::{ArrayD, IxDyn};
+    use std::sync::Arc;
+
+    #[test]
+    fn rejects_unsupported_values_without_a_buffer_view() {
+        let result = unsafe {
+            value_to_buffer_view(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &Value::String("not a tensor".to_string()),
+            )
+        };
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_non_contiguous_tensors_without_panicking() {
+        let data = ArrayD::from_shape_vec(IxDyn(&[2, 2]), vec![1.0, 2.0, 3.0, 4.0])
+            .expect("test tensor shape")
+            .reversed_axes();
+        let value = Value::Tensor {
+            data: Arc::new(data),
+            dtype: Dtype::F32,
+        };
+
+        let result = unsafe {
+            value_to_buffer_view(std::ptr::null_mut(), std::ptr::null_mut(), &value)
+        };
+
+        assert!(result.is_err());
     }
 }
