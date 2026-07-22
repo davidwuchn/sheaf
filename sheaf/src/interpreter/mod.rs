@@ -20,7 +20,6 @@ use crate::core::expr::{BindingPattern, CompiledExpr, CompilerContext};
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::Value;
-use crate::sheaf_msg;
 use ndarray::{ArrayD, IxDyn};
 use std::collections::BTreeMap;
 
@@ -493,7 +492,7 @@ let has_kwargs = matches!(name,
     }
 
     // Try user-defined function from registry
-    if let Some(mut func_def) = env.registry.get(name).cloned() {
+    if let Some(func_def) = env.registry.get(name).cloned() {
         // Arity check before any JIT or interpreter dispatch
         if pos_args.len() != func_def.params.len() {
             let got = pos_args.iter().map(|a| a.short_desc()).collect::<Vec<_>>().join(", ");
@@ -551,58 +550,22 @@ let has_kwargs = matches!(name,
         // and exposes the full call tree
         #[cfg(iree_runtime)]
         if env.tracer.is_none() {
-            // VMFB dispatch: try compiled version first
-            if let Some(result) = iree_dispatch::try_iree_dispatch(&func_def, &pos_args) {
+            if let Some(result) = iree_dispatch::try_iree_dispatch(&func_def, &pos_args, env) {
                 if let Some(ref mut p) = env.profiler { p.exit(); }
                 return result;
             }
 
-            // Dispatch failed: either no compiled version, or shape/tensor mismatch.
-            let was_stale = func_def.vmfb_module_name.is_some();
-            if was_stale {
-                // Clear stale session so JIT recompiles for current arg shapes.
-                if let Some(fd) = env.registry.get_mut(name) {
-                    fd.vmfb_module_name = None;
-                    fd.signature = None;
-                }
-                // The cached VMFB no longer matches the current arguments. Clear any recorded
-                // JIT failure so the function can be compiled again for the new shapes.
-                if let Some(jit) = &mut env.jit_compiler {
-                    jit.clear_failure(name);
-                }
-            }
-
             let mut recompiled = false;
             if let Some(jit) = &mut env.jit_compiler {
-                if let Some((module_name, sig)) = jit.try_jit_compile(
-                    &mut func_def,
-                    &pos_args,
-                    &env.registry,
-                ) {
-                    if let Some(fd) = env.registry.get_mut(name) {
-                        fd.vmfb_module_name = Some(module_name);
-                        fd.signature = Some(sig);
-                    }
+                if jit.try_jit_compile(&func_def, &pos_args, &env.registry).is_some() {
                     recompiled = true;
-                    let func_def = env.registry.get(name).unwrap().clone();
-                    if let Some(result) = iree_dispatch::try_iree_dispatch(&func_def, &pos_args) {
+                    if let Some(result) = iree_dispatch::try_iree_dispatch(&func_def, &pos_args, env) {
                         if let Some(ref mut p) = env.profiler { p.exit(); }
                         return result;
                     }
                 }
             }
 
-            // Recompilation failed, but we already have an interpreted body. Fall back to
-            // the interpreter rather than treating this as an internal error. Only a
-            // failure to dispatch after successful recompilation is a genuine bug.
-            if was_stale && !recompiled {
-                sheaf_msg!(
-                    "jit: {} recompile failed after stale session; interpreting",
-                    func_def.name
-                );
-            }
-
-            // Recompiled but dispatch still fails -> internal error
             if recompiled {
                 if let Some(ref mut p) = env.profiler { p.exit(); }
                 let got = pos_args.iter().map(|a| a.short_desc()).collect::<Vec<_>>().join(", ");

@@ -10,55 +10,7 @@ use crate::runtime::jit::JitVagOutcome;
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
 use crate::interpreter::value::Value;
-use std::collections::{BTreeMap, HashSet};
-use std::sync::{Mutex, OnceLock};
-
-static STALE_WARNINGS: OnceLock<Mutex<HashSet<(String, String, String)>>> = OnceLock::new();
-
-fn warn_stale_scalars_once(name: &str, diffs: &[ (String, String, f64, f64) ]) {
-    let warnings = STALE_WARNINGS.get_or_init(|| Mutex::new(HashSet::new()));
-    let mut lock = warnings.lock().unwrap();
-
-    for (param, path, baked, current) in diffs {
-        if lock.insert((name.to_string(), param.clone(), path.clone())) {
-            sheaf_msg!("WARN {}: scalar {}.{} is baked into the compiled VMFB (value {}) but the current call passed {}. The runtime value is ignored. Delete __sheaf__/ and re-run if you need this to change, or pass this value as a positional argument instead of inside a dict.", 
-                name, param, path, baked, current);
-        }
-    }
-}
-
-fn find_scalar_with_path(args: &[Value], param_names: &[String], param: &str, indices: &[usize]) -> Option<(f64, String)> {
-    let arg_idx = param_names.iter().position(|p| p == param)?;
-    let mut current = &args[arg_idx];
-    let mut path_parts = Vec::new();
-
-    for &idx in indices {
-        match current {
-            Value::Tuple(elems) => {
-                if idx < elems.len() {
-                    current = &elems[idx];
-                } else {
-                    return None;
-                }
-            }
-            Value::Dict(map) => {
-                let entry = map.iter().nth(idx)?;
-                path_parts.push(entry.0.clone());
-                current = entry.1;
-            }
-            _ => return None,
-        }
-    }
-
-    let val = current.to_f64()?;
-    let path_str = if path_parts.is_empty() {
-        format!("{:?}", indices)
-    } else {
-        path_parts.join(".")
-    };
-
-    Some((val, path_str))
-}
+use std::collections::BTreeMap;
 
 /// Try to dispatch a function call to IREE.
 /// Returns `Some(result)` if IREE handled it, `None` to fall through to the interpreter.
@@ -67,39 +19,28 @@ fn find_scalar_with_path(args: &[Value], param_names: &[String], param: &str, in
 pub(super) fn try_iree_dispatch(
     func_def: &crate::core::expr::FunctionDef,
     args: &[Value],
+    env: &Env,
 ) -> Option<Result<Value, SheafError>> {
-    let module_name = func_def.vmfb_module_name.as_deref()?;
+    let aot_variant = func_def.vmfb_module_name.as_ref().and_then(|module_name| {
+        let signature = func_def.signature.as_ref()?;
+        if crate::runtime::iree_session::args_match_signature(args, &signature.param_types)
+            && crate::runtime::iree_session::check_shapes_match(args, &signature.param_types).is_ok()
+        {
+            Some((module_name.clone(), signature.clone()))
+        } else {
+            None
+        }
+    });
+    let (module_name, sig) = aot_variant.or_else(|| {
+        let jit = env.jit_compiler.as_ref()?;
+        let key = crate::runtime::jit::cache_key_for_function(func_def, args, &env.registry)?;
+        jit.variant_for(&key).cloned()
+    })?;
+
     let iree_session = match crate::runtime::iree_session::shared_session() {
         Ok(session) => session,
         Err(e) => return Some(Err(e)),
     };
-    let sig = func_def.signature.as_ref()?;
-
-    // Validate tensor count AND shapes before calling into IREE.
-    // This prevents the C runtime from printing ugly diagnostics to stderr.
-    // No warning: the caller handles recompilation and warns only if that fails too.
-    if !crate::runtime::iree_session::args_match_signature(args, &sig.param_types) {
-        return None;
-    }
-    if crate::runtime::iree_session::check_shapes_match(args, &sig.param_types).is_err() {
-        return None;
-    }
-
-    // Check for stale baked scalars in dict arguments
-    if !sig.captured_scalars.is_empty() {
-        let mut diffs = Vec::new();
-        for ((param, indices), baked) in &sig.captured_scalars {
-            if let Some((current, path)) = find_scalar_with_path(args, &func_def.params, param, indices) {
-                if (current - *baked).abs() > 1e-6 {
-                    diffs.push((param.clone(), path, *baked, current));
-                }
-            }
-        }
-        if !diffs.is_empty() {
-            warn_stale_scalars_once(func_def.name.as_str(), &diffs);
-        }
-    }
-
     let full_name = format!(
         "{}.{}",
         module_name,
@@ -107,9 +48,7 @@ pub(super) fn try_iree_dispatch(
     );
     let result = match iree_session.call_typed_device(&full_name, args, &sig.return_type) {
         Ok(v) => v,
-        Err(e) => {
-            return Some(Err(e));
-        }
+        Err(e) => return Some(Err(e)),
     };
 
     // Reconstruct nested dicts/lists from flat tuples using arg type layouts

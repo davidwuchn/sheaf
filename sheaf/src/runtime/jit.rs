@@ -59,6 +59,135 @@ use crate::lowering::transforms::{
 };
 use crate::sheaf_msg;
 
+/// Identity of one JIT-compiled runtime variant.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct JitCacheKey {
+    definition_identity: String,
+    function_name: String,
+    argument_types: Vec<String>,
+    argument_layouts: Vec<Vec<(Vec<String>, Vec<i64>, Vec<usize>)>>,
+    shape_scalars: Vec<(String, Vec<usize>, u64)>,
+}
+
+impl JitCacheKey {
+    fn suffix(&self) -> String {
+        use std::hash::{Hash, Hasher};
+
+        let mut first = StableHasher(0xcbf29ce484222325);
+        let mut second = StableHasher(0x84222325cbf29ce4);
+        self.hash(&mut first);
+        self.hash(&mut second);
+        format!("{:016x}{:016x}", first.finish(), second.finish())
+    }
+}
+
+struct StableHasher(u64);
+
+impl std::hash::Hasher for StableHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x100000001b3);
+        }
+    }
+}
+
+fn function_definition_identity(func_def: &FunctionDef, registry: &HashMap<String, FunctionDef>) -> String {
+    let mut pending = vec![func_def.name.clone()];
+    let mut seen = HashSet::new();
+    let mut identities = Vec::new();
+
+    while let Some(name) = pending.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let Some(definition) = registry.get(&name) else {
+            continue;
+        };
+        identities.push((name, definition.body_hash()));
+        if let Some(body) = &definition.body_compiled {
+            let mut callees: Vec<_> = crate::lowering::call_graph::direct_callees(body)
+                .into_iter()
+                .filter(|callee| registry.contains_key(callee))
+                .collect();
+            callees.sort();
+            pending.extend(callees);
+        }
+    }
+    identities.sort();
+    format!("{:?}", identities)
+}
+
+fn runtime_layouts(args: &[Value], params: &[String]) -> Vec<Vec<(Vec<String>, Vec<i64>, Vec<usize>)>> {
+    args.iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            let param = params.get(index).map(String::as_str).unwrap_or("");
+            value_to_param_layout(param, arg)
+                .map(|layout| {
+                    layout.fields.into_iter().map(|field| {
+                        (field.path, field.shape, field.tuple_index)
+                    }).collect()
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Builds the identity used for both JIT lookup and compilation.
+pub fn cache_key_for_function(
+    func_def: &FunctionDef,
+    args: &[Value],
+    registry: &HashMap<String, FunctionDef>,
+) -> Option<JitCacheKey> {
+    let mut body = func_def.body_compiled.clone()?;
+    let mut constants = HashMap::new();
+    let mut index_maps = Vec::new();
+
+    for (index, arg) in args.iter().enumerate() {
+        let param = func_def.params.get(index)?.clone();
+        let index_map = value_to_param_layout(&param, arg)
+            .map(|layout| layout_to_index_map(&layout))
+            .unwrap_or_else(|| std::iter::once((Vec::new(), Vec::new())).collect());
+        extract_scalar_constants(arg, &param, &index_map, &mut constants);
+        body = lower_get_calls(&body, &param, &index_map);
+        index_maps.push((param, index_map));
+    }
+    body = crate::autodiff::inline_function_calls(&body, registry);
+    for (param, index_map) in &index_maps {
+        body = lower_get_calls(&body, param, index_map);
+    }
+    body = lower_inlined_gets(&body, &index_maps);
+
+    let shape_scalars = filter_constants_for_shape_positions(&constants, &body)
+        .into_iter()
+        .collect::<BTreeMap<_, _>>()
+        .into_iter()
+        .map(|((param, indices), value)| (param, indices, value.to_bits()))
+        .collect();
+    let argument_types = args.iter().map(|arg| {
+        value_to_stablehlo_type(arg).map(|ty| ty.to_mlir()).unwrap_or_else(|_| "<invalid>".to_string())
+    }).collect();
+
+    Some(JitCacheKey {
+        definition_identity: function_definition_identity(func_def, registry),
+        function_name: func_def.name.clone(),
+        argument_types,
+        argument_layouts: runtime_layouts(args, &func_def.params),
+        shape_scalars,
+    })
+}
+
+/// Returns an MLIR-safe module name for a JIT variant.
+pub fn module_name_for(key: &JitCacheKey) -> String {
+    let safe_name = key.function_name.replace('-', "_").replace('?', "_q").replace('!', "_b");
+    format!("jit_{}__{}", safe_name, key.suffix())
+}
+
 /// Count AST nodes in an expression tree. Used to bail out of JIT
 /// when inlining or unrolling produces a graph that is too large.
 fn expr_node_count(expr: &CompiledExpr) -> usize {
@@ -98,12 +227,6 @@ use crate::core::trace::{value_to_param_layout, value_to_stablehlo_type};
 use crate::interpreter::value::Value;
 use crate::StableHLOType;
 
-/// Returns the IREE module scope used for a JIT-compiled function.
-pub(crate) fn jit_module_name(name: &str) -> String {
-    let safe_name = name.replace('-', "_").replace('?', "_q").replace('!', "_b");
-    format!("jit_{safe_name}")
-}
-
 fn vag_module_name(key: &str) -> String {
     use std::hash::{Hash, Hasher};
 
@@ -116,6 +239,7 @@ pub struct JitCompiler {
     iree_compile_path: Option<String>,
     target_backend: String,
     failed_fns: HashSet<String>,
+    variants: HashMap<JitCacheKey, (String, FunctionSignature)>,
     last_vag_fail_reason: Option<String>,
     /// Cache compiled VAG metadata: vag_key -> (module_name, signature, param_names)
     vag_cache: HashMap<String, (String, FunctionSignature, Vec<String>)>,
@@ -146,6 +270,7 @@ impl JitCompiler {
             iree_compile_path,
             target_backend,
             failed_fns: HashSet::new(),
+            variants: HashMap::new(),
             last_vag_fail_reason: None,
             vag_cache: HashMap::new(),
         }
@@ -180,15 +305,23 @@ impl JitCompiler {
     }
 
 
+    pub(crate) fn variant_for(&self, key: &JitCacheKey) -> Option<&(String, FunctionSignature)> {
+        self.variants.get(key)
+    }
+
     pub fn try_jit_compile(
         &mut self,
         func_def: &FunctionDef,
         args: &[Value],
         registry: &HashMap<String, FunctionDef>,
-    ) -> Option<(String, FunctionSignature)> {
+    ) -> Option<FunctionSignature> {
         let iree_compile = self.iree_compile_path.clone()?;
         let name = &func_def.name;
-        let module_name = jit_module_name(name);
+        let cache_key = cache_key_for_function(func_def, args, registry)?;
+        if let Some((_, signature)) = self.variants.get(&cache_key) {
+            return Some(signature.clone());
+        }
+        let module_name = module_name_for(&cache_key);
 
         if self.failed_fns.contains(name) {
             return None;
@@ -230,10 +363,14 @@ impl JitCompiler {
             registry,
             &backend,
             &module_name,
-        )
-        .map(|signature| (module_name, signature));
+        );
         drop(transaction);
-        result
+        if let Some(signature) = result {
+            self.variants.insert(cache_key, (module_name, signature.clone()));
+            Some(signature)
+        } else {
+            None
+        }
     }
 
     fn compile_function(
@@ -264,12 +401,12 @@ impl JitCompiler {
                     return None;
                 }
             };
-            if let Some(layout) = value_to_param_layout(param_name, arg_val) {
-                let imap = layout_to_index_map(&layout);
-                extract_scalar_constants(arg_val, param_name, &imap, &mut constants);
-                body = lower_get_calls(&body, param_name, &imap);
-                param_index_maps.push((param_name.clone(), imap));
-            }
+            let imap = value_to_param_layout(param_name, arg_val)
+                .map(|layout| layout_to_index_map(&layout))
+                .unwrap_or_else(|| std::iter::once((Vec::new(), Vec::new())).collect());
+            extract_scalar_constants(arg_val, param_name, &imap, &mut constants);
+            body = lower_get_calls(&body, param_name, &imap);
+            param_index_maps.push((param_name.clone(), imap));
 
             known_types.push((param_name.clone(), ty));
         }
@@ -538,13 +675,13 @@ impl JitCompiler {
         let content_hash = format!("{:016x}", hasher.finish());
 
         let cache_dir = PathBuf::from("__sheaf__");
-        let safe_name = name.replace('?', "_q").replace('!', "_b");
         let backend_suffix = target_backend.replace('-', "_");
-        let cached_vmfb = cache_dir.join(format!("{}.{}.vmfb", safe_name, backend_suffix));
+        let artifact_identity = format!("{}.{}", module_name, backend_suffix);
+        let cached_vmfb = cache_dir.join(format!("{artifact_identity}.vmfb"));
 
         // Check manifest for staleness (-vv forces recompile for full debug output)
         let force_recompile = crate::core::config::verbosity() >= 2;
-        let vmfb_data = if !force_recompile && cached_vmfb.exists() && manifest_hash_matches(&cache_dir, name, &content_hash) {
+        let vmfb_data = if !force_recompile && cached_vmfb.exists() && manifest_hash_matches(&cache_dir, &artifact_identity, &content_hash) {
             match std::fs::read(&cached_vmfb) {
                 Ok(d) => {
                     if crate::core::config::verbosity() >= 2 {
@@ -571,7 +708,7 @@ impl JitCompiler {
             // Cache: named VMFB + manifest entry
             let _ = std::fs::create_dir_all(&cache_dir);
             let _ = std::fs::write(&cached_vmfb, &data);
-            update_manifest(&cache_dir, name, &content_hash);
+            update_manifest(&cache_dir, &artifact_identity, &content_hash);
 
             data
         };
@@ -1715,13 +1852,138 @@ fn preprocess_body(
 }
 
 #[cfg(test)]
-mod module_name_tests {
-    use super::{JIT_COMPILATION_LOCK, jit_module_name, vag_module_name};
+mod cache_key_tests {
+    use super::{cache_key_for_function, module_name_for, JIT_COMPILATION_LOCK};
+    use crate::core::ast::SheafValue;
+    use crate::core::error::SourceLocation;
+    use crate::core::expr::{CompiledExpr, FunctionDef};
+    use crate::interpreter::value::{Dtype, Value};
+    use ndarray::ArrayD;
+    use std::collections::{BTreeMap, HashMap};
+    use std::sync::Arc;
+
+    fn tensor(shape: Vec<usize>, fill: f32, dtype: Dtype) -> Value {
+        Value::Tensor {
+            data: Arc::new(ArrayD::from_elem(shape, fill)),
+            dtype,
+        }
+    }
+
+    fn definition(name: &str, params: &[&str], source: &str, body: CompiledExpr) -> FunctionDef {
+        FunctionDef {
+            name: name.to_string(),
+            params: params.iter().map(|param| (*param).to_string()).collect(),
+            body: SheafValue::String(source.to_string(), SourceLocation::unknown()),
+            body_compiled: Some(body),
+            signature: None,
+            vmfb_module_name: None,
+            known_param_types: Vec::new(),
+            compile_error: None,
+        }
+    }
+
+    fn passthrough() -> CompiledExpr {
+        CompiledExpr::Symbol("x".to_string())
+    }
+
+    fn reshape_body() -> CompiledExpr {
+        CompiledExpr::FunctionCall {
+            name: "reshape".to_string(),
+            args: vec![
+                CompiledExpr::Symbol("x".to_string()),
+                CompiledExpr::Vector(vec![CompiledExpr::Symbol("n".to_string())]),
+            ],
+            loc: None,
+        }
+    }
+
+    fn key(definition: &FunctionDef, args: &[Value], registry: &HashMap<String, FunctionDef>) -> super::JitCacheKey {
+        cache_key_for_function(definition, args, registry).unwrap()
+    }
 
     #[test]
-    fn module_names_are_qualified_and_distinct() {
-        assert_eq!(jit_module_name("foo-bar?"), "jit_foo_bar_q");
-        assert_ne!(vag_module_name("first"), vag_module_name("second"));
+    fn cache_key_distinguishes_shapes_but_not_tensor_data() {
+        let definition = definition("f", &["x"], "f", passthrough());
+        let registry = HashMap::from([("f".to_string(), definition.clone())]);
+        let first = key(&definition, &[tensor(vec![2, 3], 0.0, Dtype::F32)], &registry);
+        let same_shape = key(&definition, &[tensor(vec![2, 3], 9.0, Dtype::F32)], &registry);
+        let different_shape = key(&definition, &[tensor(vec![3, 2], 0.0, Dtype::F32)], &registry);
+        assert_eq!(first, same_shape);
+        assert_ne!(first, different_shape);
+    }
+
+    #[test]
+    fn cache_key_distinguishes_dtype_and_nested_layout() {
+        let definition = definition("f", &["x"], "f", passthrough());
+        let registry = HashMap::from([("f".to_string(), definition.clone())]);
+        let f32_key = key(&definition, &[tensor(vec![2], 0.0, Dtype::F32)], &registry);
+        let bf16_key = key(&definition, &[tensor(vec![2], 0.0, Dtype::BF16)], &registry);
+        let nested_key = key(
+            &definition,
+            &[Value::Tuple(vec![tensor(vec![2], 0.0, Dtype::F32)])],
+            &registry,
+        );
+        assert_ne!(f32_key, bf16_key);
+        assert_ne!(f32_key, nested_key);
+    }
+
+    #[test]
+    fn cache_key_tracks_only_shape_scalars() {
+        let reshape = definition("reshape-it", &["x", "n"], "reshape", reshape_body());
+        let registry = HashMap::from([("reshape-it".to_string(), reshape.clone())]);
+        let first = key(&reshape, &[tensor(vec![4], 0.0, Dtype::F32), Value::Int(2)], &registry);
+        let second = key(&reshape, &[tensor(vec![4], 0.0, Dtype::F32), Value::Int(4)], &registry);
+        assert_ne!(first, second);
+
+        let scale = definition(
+            "scale",
+            &["x", "n"],
+            "scale",
+            CompiledExpr::FunctionCall {
+                name: "multiply".to_string(),
+                args: vec![CompiledExpr::Symbol("x".to_string()), CompiledExpr::Symbol("n".to_string())],
+                loc: None,
+            },
+        );
+        let registry = HashMap::from([("scale".to_string(), scale.clone())]);
+        let first = key(&scale, &[tensor(vec![4], 0.0, Dtype::F32), Value::Int(2)], &registry);
+        let second = key(&scale, &[tensor(vec![4], 0.0, Dtype::F32), Value::Int(4)], &registry);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn cache_key_tracks_transitive_callee_identity() {
+        let callee = definition("callee", &["x"], "one", passthrough());
+        let caller = definition(
+            "caller",
+            &["x"],
+            "caller",
+            CompiledExpr::FunctionCall {
+                name: "callee".to_string(),
+                args: vec![CompiledExpr::Symbol("x".to_string())],
+                loc: None,
+            },
+        );
+        let mut registry = HashMap::from([
+            ("callee".to_string(), callee),
+            ("caller".to_string(), caller.clone()),
+        ]);
+        let first = key(&caller, &[tensor(vec![2], 0.0, Dtype::F32)], &registry);
+        registry.get_mut("callee").unwrap().body = SheafValue::String("two".to_string(), SourceLocation::unknown());
+        let second = key(&caller, &[tensor(vec![2], 0.0, Dtype::F32)], &registry);
+        assert_ne!(first, second);
+        assert_ne!(module_name_for(&first), module_name_for(&second));
+    }
+
+    #[test]
+    fn cache_key_preserves_dict_field_order() {
+        let definition = definition("f", &["x"], "f", passthrough());
+        let registry = HashMap::from([("f".to_string(), definition.clone())]);
+        let mut first = BTreeMap::new();
+        first.insert("a".to_string(), tensor(vec![2], 0.0, Dtype::F32));
+        let mut second = BTreeMap::new();
+        second.insert("b".to_string(), tensor(vec![2], 0.0, Dtype::F32));
+        assert_ne!(key(&definition, &[Value::Dict(first)], &registry), key(&definition, &[Value::Dict(second)], &registry));
     }
 
     #[test]
