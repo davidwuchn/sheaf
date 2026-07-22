@@ -13,7 +13,10 @@
 use crate::SheafError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+
+/// Serializes cache publication and module loading for the shared IREE session.
+static JIT_COMPILATION_LOCK: Mutex<()> = Mutex::new(());
 
 /// Cached CUDA target architecture (e.g. "sm_75"), detected once via NVML.
 static CUDA_TARGET: OnceLock<Option<String>> = OnceLock::new();
@@ -211,8 +214,16 @@ impl JitCompiler {
             return None;
         }
 
+        let transaction = match JIT_COMPILATION_LOCK.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                self.jit_fail(name, "JIT compilation lock is poisoned");
+                return None;
+            }
+        };
+
         let backend = self.target_backend.clone();
-        self.compile_function(
+        let result = self.compile_function(
             iree_compile.clone(),
             func_def,
             args,
@@ -220,7 +231,9 @@ impl JitCompiler {
             &backend,
             &module_name,
         )
-        .map(|signature| (module_name, signature))
+        .map(|signature| (module_name, signature));
+        drop(transaction);
+        result
     }
 
     fn compile_function(
@@ -627,6 +640,26 @@ impl JitCompiler {
     ) -> Option<(String, FunctionSignature, Vec<String>)> {
         let iree_compile = self.iree_compile_path.clone()?;
 
+        let transaction = match JIT_COMPILATION_LOCK.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                self.jit_fail("__vag_", "JIT compilation lock is poisoned");
+                return None;
+            }
+        };
+
+        let result = self.try_jit_value_and_grad_locked(iree_compile, func, wrt_arg, registry);
+        drop(transaction);
+        result
+    }
+
+    fn try_jit_value_and_grad_locked(
+        &mut self,
+        iree_compile: String,
+        func: &Value,
+        wrt_arg: &Value,
+        registry: &HashMap<String, FunctionDef>,
+    ) -> Option<(String, FunctionSignature, Vec<String>)> {
         let (fn_params, body, closure) = match func {
             Value::Function {
                 params,
@@ -1683,11 +1716,19 @@ fn preprocess_body(
 
 #[cfg(test)]
 mod module_name_tests {
-    use super::{jit_module_name, vag_module_name};
+    use super::{JIT_COMPILATION_LOCK, jit_module_name, vag_module_name};
 
     #[test]
     fn module_names_are_qualified_and_distinct() {
         assert_eq!(jit_module_name("foo-bar?"), "jit_foo_bar_q");
         assert_ne!(vag_module_name("first"), vag_module_name("second"));
+    }
+
+    #[test]
+    fn compilation_transaction_excludes_another_compiler() {
+        let first = JIT_COMPILATION_LOCK.lock().unwrap();
+        assert!(JIT_COMPILATION_LOCK.try_lock().is_err());
+        drop(first);
+        assert!(JIT_COMPILATION_LOCK.try_lock().is_ok());
     }
 }
