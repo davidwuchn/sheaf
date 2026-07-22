@@ -67,14 +67,13 @@ fn find_scalar_with_path(args: &[Value], param_names: &[String], param: &str, in
 pub(super) fn try_iree_dispatch(
     func_def: &crate::core::expr::FunctionDef,
     args: &[Value],
-    env: &mut Env,
 ) -> Option<Result<Value, SheafError>> {
-    let session_idx = func_def.vmfb_session_idx?;
-    let session = env.vmfb_sessions.get(session_idx)?;
-    let iree_session = session.downcast_ref::<crate::runtime::iree_session::IreeSession>()?;
-
+    let module_name = func_def.vmfb_module_name.as_deref()?;
+    let iree_session = match crate::runtime::iree_session::shared_session() {
+        Ok(session) => session,
+        Err(e) => return Some(Err(e)),
+    };
     let sig = func_def.signature.as_ref()?;
-    let module_name = func_def.vmfb_module_name.as_deref().unwrap_or("module");
 
     // Validate tensor count AND shapes before calling into IREE.
     // This prevents the C runtime from printing ugly diagnostics to stderr.
@@ -147,11 +146,10 @@ pub(super) fn try_jit_vag(
         None => return JitVagOutcome::Unsupported,
     };
 
-    let (session_idx, module_name, sig, param_names) = match jit.try_jit_value_and_grad(
+    let (module_name, sig, param_names) = match jit.try_jit_value_and_grad(
         &augmented_func,
         params,
         &env.registry,
-        &mut env.vmfb_sessions,
     ) {
         Some(x) => x,
         None => return jit.classify_vag_skip(),
@@ -178,13 +176,9 @@ pub(super) fn try_jit_vag(
         }
     }
 
-    let session = match env.vmfb_sessions.get(session_idx) {
-        Some(s) => s,
-        None => return JitVagOutcome::Bug("vmfb session lost".to_string()),
-    };
-    let iree_session = match session.downcast_ref::<crate::runtime::iree_session::IreeSession>() {
-        Some(s) => s,
-        None => return JitVagOutcome::Bug("downcast to IreeSession failed".to_string()),
+    let iree_session = match crate::runtime::iree_session::shared_session() {
+        Ok(session) => session,
+        Err(e) => return JitVagOutcome::Success(Err(e)),
     };
 
     let full_name = format!("{}.value_and_grad", module_name);

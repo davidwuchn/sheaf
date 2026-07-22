@@ -13,7 +13,7 @@
 use crate::SheafError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 /// Cached CUDA target architecture (e.g. "sm_75"), detected once via NVML.
 static CUDA_TARGET: OnceLock<Option<String>> = OnceLock::new();
@@ -44,7 +44,7 @@ pub fn detect_cuda_target() -> Option<String> {
 use super::toolchain::{ensure_toolchain, find_iree_compile, IREE_COMPILER_VERSION};
 
 use crate::autodiff::{reverse::{reverse_grad, to_anf}, simplify, transforms::cse};
-use crate::core::expr::{CompiledExpr, FunctionDef, VmfbSession};
+use crate::core::expr::{CompiledExpr, FunctionDef};
 use crate::lowering::codegen::{collect_tuple_leaves, expand_tuple_to_symbols, CodeGenerator};
 use crate::lowering::config::{layout_to_index_map, lower_get_calls};
 use crate::lowering::effects::{collect_effects, collect_hof_calls};
@@ -114,8 +114,8 @@ pub struct JitCompiler {
     target_backend: String,
     failed_fns: HashSet<String>,
     last_vag_fail_reason: Option<String>,
-    /// Cache compiled VAG sessions: vag_key -> (session_idx, module_name, signature, param_names)
-    vag_cache: HashMap<String, (usize, String, FunctionSignature, Vec<String>)>,
+    /// Cache compiled VAG metadata: vag_key -> (module_name, signature, param_names)
+    vag_cache: HashMap<String, (String, FunctionSignature, Vec<String>)>,
 }
 
 impl JitCompiler {
@@ -158,12 +158,12 @@ impl JitCompiler {
                 _ => "llvm-cpu",
             }.to_string();
         }
-        // Use cached backend from the first IreeSession::new() call
+        // Use the backend selected by the shared session when available
         if let Some(backend) = crate::runtime::iree_session::IreeSession::cached_target_backend() {
             return backend.to_string();
         }
         // Fallback: create a session to probe available drivers
-        if let Ok(session) = crate::runtime::iree_session::IreeSession::new() {
+        if let Ok(session) = crate::runtime::iree_session::shared_session() {
             return session.target_backend().to_string();
         }
         "llvm-cpu".to_string()
@@ -182,8 +182,7 @@ impl JitCompiler {
         func_def: &FunctionDef,
         args: &[Value],
         registry: &HashMap<String, FunctionDef>,
-        vmfb_sessions: &mut Vec<VmfbSession>,
-    ) -> Option<(usize, String, FunctionSignature)> {
+    ) -> Option<(String, FunctionSignature)> {
         let iree_compile = self.iree_compile_path.clone()?;
         let name = &func_def.name;
         let module_name = jit_module_name(name);
@@ -218,11 +217,10 @@ impl JitCompiler {
             func_def,
             args,
             registry,
-            vmfb_sessions,
             &backend,
             &module_name,
         )
-        .map(|(session_idx, signature)| (session_idx, module_name, signature))
+        .map(|signature| (module_name, signature))
     }
 
     fn compile_function(
@@ -231,10 +229,9 @@ impl JitCompiler {
         func_def: &FunctionDef,
         args: &[Value],
         registry: &HashMap<String, FunctionDef>,
-        vmfb_sessions: &mut Vec<VmfbSession>,
         target_backend: &str,
         module_name: &str,
-    ) -> Option<(usize, FunctionSignature)> {
+    ) -> Option<FunctionSignature> {
         let name = &func_def.name;
         let mut body = func_def.body_compiled.clone()?;
 
@@ -566,8 +563,8 @@ impl JitCompiler {
             data
         };
 
-        // Load into IREE session
-        let mut session = match crate::runtime::iree_session::IreeSession::new() {
+        // Load into the process-wide IREE session.
+        let session = match crate::runtime::iree_session::shared_session() {
             Ok(s) => s,
             Err(e) => {
                 self.jit_fail(name, &format!("JIT engine init: {}", e));
@@ -580,13 +577,10 @@ impl JitCompiler {
             return None;
         }
 
-        let session_idx = vmfb_sessions.len();
-        vmfb_sessions.push(Arc::new(session));
-
         // Populate captured_scalars so the dispatcher knows which scalars were baked.
         sig.captured_scalars = filtered_constants.clone();
 
-        Some((session_idx, sig))
+        Some(sig)
     }
 
     /// Preprocess VAG lambda bodies found in a function body.
@@ -623,15 +617,14 @@ impl JitCompiler {
     /// We promote tensor captures to MLIR parameters, resolve scalar captures as constants,
     /// then generate forward + backward passes in a single MLIR function.
     ///
-    /// Returns `(session_idx, module_name, signature, param_order)`, where
-    /// `param_order` lists function parameters followed by tensor captures.
+    /// Returns `(module_name, signature, param_order)`, where `param_order`
+    /// lists function parameters followed by tensor captures.
     pub fn try_jit_value_and_grad(
         &mut self,
         func: &Value,
         wrt_arg: &Value,
         registry: &HashMap<String, FunctionDef>,
-        vmfb_sessions: &mut Vec<VmfbSession>,
-    ) -> Option<(usize, String, FunctionSignature, Vec<String>)> {
+    ) -> Option<(String, FunctionSignature, Vec<String>)> {
         let iree_compile = self.iree_compile_path.clone()?;
 
         let (fn_params, body, closure) = match func {
@@ -729,7 +722,6 @@ impl JitCompiler {
                             ),
                             body_compiled: Some(fb.clone()),
                             signature: None,
-                            vmfb_session_idx: None,
                             vmfb_module_name: None,
                             known_param_types: Vec::new(),
                             compile_error: None,
@@ -1260,8 +1252,8 @@ impl JitCompiler {
             data
         };
 
-        // Load into session
-        let mut session = match crate::runtime::iree_session::IreeSession::new() {
+        // Load into the process-wide IREE session.
+        let session = match crate::runtime::iree_session::shared_session() {
             Ok(s) => s,
             Err(e) => {
                 self.jit_fail(&vag_key, &format!("JIT engine init: {}", e));
@@ -1274,10 +1266,7 @@ impl JitCompiler {
             return None;
         }
 
-        let session_idx = vmfb_sessions.len();
-        vmfb_sessions.push(Arc::new(session));
-
-        let result = (session_idx, module_name, sig, all_param_names);
+        let result = (module_name, sig, all_param_names);
         self.vag_cache.insert(vag_key, result.clone());
         Some(result)
     }

@@ -41,6 +41,34 @@ fn record_session_drop() {
     });
 }
 
+static SHARED_SESSION: OnceLock<Arc<IreeSession>> = OnceLock::new();
+static SHARED_SESSION_INIT: Mutex<()> = Mutex::new(());
+
+/// Returns the lazily initialized process-wide IREE session.
+pub fn shared_session() -> Result<Arc<IreeSession>, SheafError> {
+    if let Some(session) = SHARED_SESSION.get() {
+        return Ok(Arc::clone(session));
+    }
+    let _init = SHARED_SESSION_INIT.lock().map_err(|_| SheafError::Runtime {
+        message: "IREE shared session initialization lock is poisoned".to_string(),
+        location: None,
+    })?;
+    if let Some(session) = SHARED_SESSION.get() {
+        return Ok(Arc::clone(session));
+    }
+    let session = Arc::new(IreeSession::new()?);
+    SHARED_SESSION.set(Arc::clone(&session)).map_err(|_| SheafError::Runtime {
+        message: "failed to publish IREE shared session".to_string(),
+        location: None,
+    })?;
+    Ok(session)
+}
+
+/// Returns the shared session without initializing it.
+pub fn initialized_shared_session() -> Option<Arc<IreeSession>> {
+    SHARED_SESSION.get().map(Arc::clone)
+}
+
 use crate::core::error::SheafError;
 use crate::sheaf_msg;
 use crate::interpreter::value::{Dtype, Value};
@@ -64,7 +92,7 @@ pub struct IreeSession {
     session: *mut iree_runtime_session_t,
     /// Source buffers remain live because IREE may retain the input span after
     /// appending a bytecode module.
-    _vmfb_data: Vec<Vec<u8>>,
+    _vmfb_data: Mutex<Vec<Vec<u8>>>,
     /// HAL driver name: "metal", "local-task", etc.
     driver_name: String,
     /// Per-function buffer view cache: fn_name -> per-position cached buffer views.
@@ -181,7 +209,7 @@ impl IreeSession {
                 instance,
                 device_handle,
                 session,
-                _vmfb_data: Vec::new(),
+                _vmfb_data: Mutex::new(Vec::new()),
                 driver_name: chosen_driver.to_string(),
                 buffer_cache: Mutex::new(HashMap::new()),
                 profile: crate::core::config::jit_profile(),
@@ -229,11 +257,14 @@ impl IreeSession {
         unsafe { iree_runtime_session_device_allocator(self.session) }
     }
 
-    pub fn load_vmfb(&mut self, data: Vec<u8>) -> Result<(), SheafError> {
+    pub fn load_vmfb(&self, data: Vec<u8>) -> Result<(), SheafError> {
+        let mut vmfb_data = self._vmfb_data.lock().map_err(|_| SheafError::Runtime {
+            message: "IREE VMFB retention lock is poisoned".to_string(),
+            location: None,
+        })?;
+        vmfb_data.push(data);
         unsafe {
-            self._vmfb_data.push(data);
-            let bytes = self
-                ._vmfb_data
+            let bytes = vmfb_data
                 .last()
                 .ok_or_else(|| iree_err("failed to retain VMFB source data"))?;
             let span = iree_const_byte_span_t::from_slice(bytes);
@@ -254,7 +285,7 @@ impl IreeSession {
                 if crate::core::config::verbosity() >= 2 {
                     iree_status_fprint(libc_stderr(), status);
                 }
-                self._vmfb_data.pop();
+                vmfb_data.pop();
                 return Err(iree_err("failed to load compiled module"));
             }
 

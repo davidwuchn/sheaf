@@ -104,7 +104,6 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
                         ),
                         body_compiled: Some(fb.clone()),
                         signature: None,
-                        vmfb_session_idx: None,
                         vmfb_module_name: None,
                         known_param_types: Vec::new(),
                         compile_error: None,

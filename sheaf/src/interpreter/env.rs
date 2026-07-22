@@ -3,7 +3,7 @@
 
 //! Environment for the Sheaf interpreter: scoped variable bindings.
 
-use crate::core::expr::{FunctionDef, VmfbSession};
+use crate::core::expr::FunctionDef;
 use crate::core::error::SheafError;
 use crate::interpreter::value::{BuiltinFnPtr, Value};
 use std::collections::HashMap;
@@ -55,7 +55,6 @@ pub struct CallRecord {
 pub struct Env {
     scopes: Vec<HashMap<String, Value>>,
     pub registry: HashMap<String, FunctionDef>,
-    pub vmfb_sessions: Vec<VmfbSession>,
     /// When set, records the first call to each registry function.
     /// Used by `sheaf build --trace-with` to discover concrete param shapes.
     pub call_records: Option<HashMap<String, CallRecord>>,
@@ -85,7 +84,6 @@ impl Env {
         Self {
             scopes: vec![HashMap::new()],
             registry: HashMap::new(),
-            vmfb_sessions: Vec::new(),
             call_records: None,
             tracer: None,
             profiler: None,
@@ -103,7 +101,6 @@ impl Env {
         Self {
             scopes: vec![HashMap::new()],
             registry,
-            vmfb_sessions: Vec::new(),
             call_records: None,
             tracer: None,
             profiler: None,

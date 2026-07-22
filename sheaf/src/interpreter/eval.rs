@@ -50,7 +50,6 @@ pub fn eval_source_with_path(
     }
 
     let mut env = Env::with_registry(compiler.registry.clone());
-    env.vmfb_sessions = compiler.vmfb_sessions.clone();
     register_builtins(&mut env);
     let mut last = Value::Nil;
     for c in &compiled {
@@ -91,7 +90,6 @@ pub fn eval_source_with_tracing(
     }
 
     let mut env = Env::with_registry(compiler.registry.clone());
-    env.vmfb_sessions = compiler.vmfb_sessions.clone();
     env.tracer = Some(Tracer::from_config(config));
     register_builtins(&mut env);
     let mut last = Value::Nil;
@@ -166,7 +164,6 @@ fn eval_source_with_blame_internal(
     }
 
     let mut env = Env::with_registry(compiler.registry.clone());
-    env.vmfb_sessions = compiler.vmfb_sessions.clone();
     register_builtins(&mut env);
     // Only create blame profiler when caller wants blame report
     if blame_report {
@@ -195,10 +192,8 @@ fn eval_source_with_blame_internal(
     #[cfg(iree_runtime)]
     if mem_profile {
         if let Some(ref mut mp) = env.mem_profiler {
-            for session in &env.vmfb_sessions {
-                if let Some(iree_session) = session.downcast_ref::<crate::runtime::iree_session::IreeSession>() {
-                    mp.sample_iree(iree_session.device_allocator_ptr());
-                }
+            if let Some(session) = crate::runtime::iree_session::initialized_shared_session() {
+                mp.sample_iree(session.device_allocator_ptr());
             }
         }
     }
@@ -241,9 +236,8 @@ impl Interpreter {
         let mut last = Value::Nil;
         for expr in &exprs {
             let compiled = self.compiler.compile(expr)?;
-            // Sync any newly registered functions and VMFB sessions into env
+            // Sync newly registered functions into the environment
             self.env.registry = self.compiler.registry.clone();
-            self.env.vmfb_sessions = self.compiler.vmfb_sessions.clone();
             if !matches!(compiled, CompiledExpr::Nil) {
                 last = interpreter::eval(&compiled, &mut self.env)?;
             }

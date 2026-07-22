@@ -96,7 +96,7 @@ fn iree_session_creation_memory_attribution() {
 
     eprintln!("IREE session creation memory attribution");
     for i in 1..=n {
-        let mut session = IreeSession::new().expect("IreeSession::new()");
+        let session = IreeSession::new().expect("IreeSession::new()");
         if let Some(bytes) = &vmfb {
             session.load_vmfb(bytes.clone()).expect("load_vmfb()");
         }
@@ -156,7 +156,7 @@ fn iree_session_drop_memory_attribution() {
 
     eprintln!("IREE session drop memory attribution ({n} iterations)");
     for i in 1..=n {
-        let mut session = IreeSession::new().expect("IreeSession::new()");
+        let session = IreeSession::new().expect("IreeSession::new()");
         session.load_vmfb(vmfb.clone()).expect("load_vmfb()");
         let _ = session.call("module.sigmoid", &[input.clone()]);
         drop(session);

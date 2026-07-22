@@ -262,7 +262,6 @@ impl SpecialForm for DefnForm {
                 body: body_ast,
                 body_compiled: body_compiled_opt,
                 signature: signature_opt,
-                vmfb_session_idx: None,
                 vmfb_module_name: None,
                 known_param_types,
                 compile_error: compile_err,

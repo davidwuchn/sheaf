@@ -6,12 +6,9 @@
 //! Used by both `eval_source_with_path` (sheaf run) and the `(use)` form.
 
 use std::path::Path;
-use std::sync::Arc;
-
 use crate::lowering::effects::has_side_effects;
 use crate::core::expr::CompilerContext;
 use crate::core::inference::FunctionSignature;
-use crate::runtime::iree_session::IreeSession;
 
 /// Try to load a module.vmfb from the directory of a Sheaf source file.
 ///
@@ -90,7 +87,7 @@ pub fn try_load_vmfb(
         return false;
     }
 
-    // Load the VMFB into an IREE session
+    // Load the VMFB into the process-wide IREE session.
     let vmfb_data = match std::fs::read(&vmfb_path) {
         Ok(data) => data,
         Err(e) => {
@@ -98,25 +95,21 @@ pub fn try_load_vmfb(
             return false;
         }
     };
-    let mut session = match IreeSession::new() {
+    let session = match crate::runtime::iree_session::shared_session() {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("warning: JIT engine init failed: {}", e);
+            crate::sheaf_msg!("warning: JIT engine init failed: {}", e);
             return false;
         }
     };
     if let Err(e) = session.load_vmfb(vmfb_data) {
-        eprintln!("warning: failed to load '{}': {}", vmfb_path.display(), e);
+        crate::sheaf_msg!("warning: failed to load '{}': {}", vmfb_path.display(), e);
         return false;
     }
-
-    let session_idx = compiler.vmfb_sessions.len();
-    compiler.vmfb_sessions.push(Arc::new(session));
 
     // Tag functions for IREE dispatch and load signatures from manifest
     for fn_name in &valid_fns {
         if let Some(fd) = compiler.registry.get_mut(fn_name) {
-            fd.vmfb_session_idx = Some(session_idx);
             fd.vmfb_module_name = Some("module".to_string());
             if let Some(sig) = signatures.get(fn_name) {
                 fd.signature = Some(sig.clone());

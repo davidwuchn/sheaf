@@ -364,7 +364,6 @@ mod tests {
             body: nil_body(),
             body_compiled: Some(body),
             signature: None,
-            vmfb_session_idx: None,
             vmfb_module_name: None,
             known_param_types: Vec::new(),
             compile_error: None,

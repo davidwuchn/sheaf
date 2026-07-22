@@ -552,17 +552,16 @@ let has_kwargs = matches!(name,
         #[cfg(iree_runtime)]
         if env.tracer.is_none() {
             // VMFB dispatch: try compiled version first
-            if let Some(result) = iree_dispatch::try_iree_dispatch(&func_def, &pos_args, env) {
+            if let Some(result) = iree_dispatch::try_iree_dispatch(&func_def, &pos_args) {
                 if let Some(ref mut p) = env.profiler { p.exit(); }
                 return result;
             }
 
             // Dispatch failed: either no compiled version, or shape/tensor mismatch.
-            let was_stale = func_def.vmfb_session_idx.is_some();
+            let was_stale = func_def.vmfb_module_name.is_some();
             if was_stale {
                 // Clear stale session so JIT recompiles for current arg shapes.
                 if let Some(fd) = env.registry.get_mut(name) {
-                    fd.vmfb_session_idx = None;
                     fd.vmfb_module_name = None;
                     fd.signature = None;
                 }
@@ -575,20 +574,18 @@ let has_kwargs = matches!(name,
 
             let mut recompiled = false;
             if let Some(jit) = &mut env.jit_compiler {
-                if let Some((session_idx, module_name, sig)) = jit.try_jit_compile(
+                if let Some((module_name, sig)) = jit.try_jit_compile(
                     &mut func_def,
                     &pos_args,
                     &env.registry,
-                    &mut env.vmfb_sessions,
                 ) {
                     if let Some(fd) = env.registry.get_mut(name) {
-                        fd.vmfb_session_idx = Some(session_idx);
                         fd.vmfb_module_name = Some(module_name);
                         fd.signature = Some(sig);
                     }
                     recompiled = true;
                     let func_def = env.registry.get(name).unwrap().clone();
-                    if let Some(result) = iree_dispatch::try_iree_dispatch(&func_def, &pos_args, env) {
+                    if let Some(result) = iree_dispatch::try_iree_dispatch(&func_def, &pos_args) {
                         if let Some(ref mut p) = env.profiler { p.exit(); }
                         return result;
                     }

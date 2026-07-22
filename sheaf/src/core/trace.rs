@@ -75,9 +75,12 @@ pub fn trace_function_signature(
         })
         .collect();
 
-    // Set up interpreter environment WITHOUT vmfb_sessions
-    // (forces all function calls to interpret, not dispatch to IREE)
-    let mut env = Env::with_registry(compiler.registry.clone());
+    // Disable compiled dispatch so tracing observes the interpreted call tree.
+    let mut registry = compiler.registry.clone();
+    for function in registry.values_mut() {
+        function.vmfb_module_name = None;
+    }
+    let mut env = Env::with_registry(registry);
     register_builtins(&mut env);
     register_trace_overrides(&mut env);
 

@@ -10,9 +10,6 @@ use crate::core::error::{SheafError, SheafResult};
 use crate::core::macro_engine::MacroEngine;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
-
-pub type VmfbSession = Arc<dyn std::any::Any + Send + Sync>;
 
 /// A leaf field in a parameter layout: a named tensor with its shape
 #[derive(Debug, Clone)]
@@ -79,9 +76,6 @@ pub struct CompilerContext {
     /// Directory of the file currently being compiled (for relative use paths)
     pub current_dir: Option<PathBuf>,
 
-    /// Loaded IREE VMFB sessions (indexed by FunctionDef.vmfb_session_idx)
-    pub vmfb_sessions: Vec<VmfbSession>,
-
     /// When true, skip VMFB loading (used during sheaf build --trace-with)
     pub disable_vmfb: bool,
 
@@ -100,8 +94,7 @@ pub struct FunctionDef {
     pub body: SheafValue,
     pub body_compiled: Option<CompiledExpr>,
     pub signature: Option<crate::core::inference::FunctionSignature>,
-    pub vmfb_session_idx: Option<usize>,
-    /// IREE module name used with `vmfb_session_idx` for qualified dispatch.
+    /// IREE module name used for qualified dispatch.
     pub vmfb_module_name: Option<String>,
     /// Known parameter types from annotations (shape annotations + traced layouts).
     /// Used by the tracing compiler to create dummy inputs.
@@ -275,7 +268,6 @@ impl CompilerContext {
             loaded_modules: HashSet::new(),
             prelude_modules: HashSet::new(),
             current_dir: None,
-            vmfb_sessions: Vec::new(),
             disable_vmfb: false,
             checked_vmfb_dirs: HashSet::new(),
             macro_engine: MacroEngine::new(),
