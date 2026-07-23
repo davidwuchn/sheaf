@@ -67,7 +67,7 @@ jobs:
     if: needs.preflight.outputs.skip != 'true'
     uses: ./.github/workflows/build.yml
     with:
-      targets: '["linux-x86_64", "macos-aarch64"]'
+      targets: '["linux-aarch64", "linux-x86_64", "macos-aarch64"]'
       build_version: ${{ needs.preflight.outputs.nightly_version }}
 
   publish-nightly:
@@ -91,11 +91,10 @@ jobs:
           tag_name: nightly
           name: Nightly build
           body: |
-            Automated nightly build of Sheaf from `main`.
-
-            These binaries reflect the latest commit and
-            are **not** a stable release. See the commit
-            history for what changed.
+            Nightly build of Sheaf from the main branch.
+            These binaries are built from the latest commit and may be unstable. The Linux x86_64 build is covered by daily CUDA CI validation.
+            Nightly builds have not gone through release validation, and performance has not been benchmarked against release builds.
+            See the commit history for details of the included changes.
 
           prerelease: true
           files: sheaf-*.tar.gz
