@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -86,6 +86,62 @@ pub use super::signature::{
     args_match_signature, check_shapes_match, count_arg_tensors, count_signature_tensors,
 };
 
+type PrecompiledFunctionKey = (String, String);
+
+#[derive(Default)]
+struct PrecompiledModuleRegistry {
+    modules: HashMap<PrecompiledFunctionKey, String>,
+    module_names: HashSet<String>,
+    reservations: HashMap<PrecompiledFunctionKey, String>,
+}
+
+impl PrecompiledModuleRegistry {
+    fn reserve(&mut self, module_name: &str, keys: &[PrecompiledFunctionKey]) -> bool {
+        if self.module_names.contains(module_name)
+            || keys
+                .iter()
+                .any(|key| self.modules.contains_key(key) || self.reservations.contains_key(key))
+        {
+            return false;
+        }
+
+        self.module_names.insert(module_name.to_string());
+        for key in keys {
+            self.reservations
+                .insert(key.clone(), module_name.to_string());
+        }
+        true
+    }
+
+    fn release(&mut self, module_name: &str) {
+        self.module_names.remove(module_name);
+        self.reservations
+            .retain(|_, reserved_name| reserved_name != module_name);
+    }
+
+    fn publish(&mut self, module_name: &str, keys: &[PrecompiledFunctionKey]) -> bool {
+        if keys
+            .iter()
+            .any(|key| self.reservations.get(key).map(String::as_str) != Some(module_name))
+        {
+            return false;
+        }
+
+        for key in keys {
+            self.modules.insert(key.clone(), module_name.to_string());
+        }
+        self.reservations
+            .retain(|_, reserved_name| reserved_name != module_name);
+        true
+    }
+
+    fn module_for(&self, function_name: &str, body_hash: &str) -> Option<String> {
+        self.modules
+            .get(&(function_name.to_string(), body_hash.to_string()))
+            .cloned()
+    }
+}
+
 pub struct IreeSession {
     instance: *mut iree_runtime_instance_t,
     device_handle: Arc<IreeDeviceHandle>,
@@ -99,6 +155,7 @@ pub struct IreeSession {
     /// Each position holds up to MAX_CACHE_ENTRIES entries to avoid thrashing when
     /// the same function is called with different weight sets (e.g. transformer layers).
     buffer_cache: Mutex<HashMap<String, Vec<Vec<CachedBufferView>>>>,
+    precompiled_modules: Mutex<PrecompiledModuleRegistry>,
     /// Dispatch timing (nanoseconds, accumulated). Enabled by --jit-profile.
     profile: bool,
     t_flatten_ns: AtomicU64,
@@ -212,6 +269,7 @@ impl IreeSession {
                 _vmfb_data: Mutex::new(Vec::new()),
                 driver_name: chosen_driver.to_string(),
                 buffer_cache: Mutex::new(HashMap::new()),
+                precompiled_modules: Mutex::new(PrecompiledModuleRegistry::default()),
                 profile: crate::core::config::jit_profile(),
                 t_flatten_ns: AtomicU64::new(0),
                 t_buffers_ns: AtomicU64::new(0),
@@ -255,6 +313,61 @@ impl IreeSession {
     /// Returns the raw IREE device allocator pointer for memory statistics queries.
     pub fn device_allocator_ptr(&self) -> *mut crate::runtime::iree_ffi::iree_hal_allocator_t {
         unsafe { iree_runtime_session_device_allocator(self.session) }
+    }
+
+    pub fn reserve_precompiled_module(
+        &self,
+        module_name: &str,
+        keys: &[PrecompiledFunctionKey],
+    ) -> Result<bool, SheafError> {
+        let mut registry = self
+            .precompiled_modules
+            .lock()
+            .map_err(|_| precompiled_registry_error())?;
+        Ok(registry.reserve(module_name, keys))
+    }
+
+    pub fn release_precompiled_module(&self, module_name: &str) -> Result<(), SheafError> {
+        let mut registry = self
+            .precompiled_modules
+            .lock()
+            .map_err(|_| precompiled_registry_error())?;
+        registry.release(module_name);
+        Ok(())
+    }
+
+    pub fn register_precompiled_functions(
+        &self,
+        module_name: &str,
+        keys: &[PrecompiledFunctionKey],
+    ) -> Result<(), SheafError> {
+        let mut registry = self
+            .precompiled_modules
+            .lock()
+            .map_err(|_| precompiled_registry_error())?;
+        if registry.publish(module_name, keys) {
+            Ok(())
+        } else {
+            Err(SheafError::Runtime {
+                message: format!(
+                    "IREE precompiled module '{}' has no matching reservation",
+                    module_name
+                ),
+                location: None,
+            })
+        }
+    }
+
+    pub fn precompiled_module_for(
+        &self,
+        function_name: &str,
+        body_hash: &str,
+    ) -> Result<Option<String>, SheafError> {
+        let registry = self
+            .precompiled_modules
+            .lock()
+            .map_err(|_| precompiled_registry_error())?;
+        Ok(registry.module_for(function_name, body_hash))
     }
 
     pub fn load_vmfb(&self, data: Vec<u8>) -> Result<(), SheafError> {
@@ -690,6 +803,13 @@ impl IreeSession {
 }
 
 
+fn precompiled_registry_error() -> SheafError {
+    SheafError::Runtime {
+        message: "IREE precompiled module registry lock is poisoned".to_string(),
+        location: None,
+    }
+}
+
 #[cfg(test)]
 mod lifetime_counter_tests {
     use super::{
@@ -714,6 +834,49 @@ mod lifetime_counter_tests {
             SESSION_CREATION_ATTEMPTS.store(self.attempts, Ordering::Relaxed);
             LIVE_SESSION_COUNT.store(self.live, Ordering::Relaxed);
         }
+    }
+
+    #[test]
+    fn precompiled_registry_distinguishes_bodies_with_the_same_name() {
+        let mut registry = super::PrecompiledModuleRegistry::default();
+        let first = vec![("predict".to_string(), "first".to_string())];
+        let second = vec![("predict".to_string(), "second".to_string())];
+
+        assert!(registry.reserve("aot_first", &first));
+        assert!(registry.publish("aot_first", &first));
+        assert!(registry.reserve("aot_second", &second));
+        assert!(registry.publish("aot_second", &second));
+        assert_eq!(
+            registry.module_for("predict", "first"),
+            Some("aot_first".to_string())
+        );
+        assert_eq!(
+            registry.module_for("predict", "second"),
+            Some("aot_second".to_string())
+        );
+    }
+
+    #[test]
+    fn precompiled_registry_rejects_name_and_function_collisions() {
+        let mut registry = super::PrecompiledModuleRegistry::default();
+        let first = vec![("predict".to_string(), "first".to_string())];
+        let second = vec![("predict".to_string(), "second".to_string())];
+
+        assert!(registry.reserve("aot_first", &first));
+        assert!(!registry.reserve("aot_first", &second));
+        assert!(!registry.reserve("aot_second", &first));
+        assert!(registry.publish("aot_first", &first));
+        assert!(!registry.reserve("aot_third", &first));
+    }
+
+    #[test]
+    fn precompiled_registry_release_restores_reservations() {
+        let mut registry = super::PrecompiledModuleRegistry::default();
+        let keys = vec![("predict".to_string(), "first".to_string())];
+
+        assert!(registry.reserve("aot_first", &keys));
+        registry.release("aot_first");
+        assert!(registry.reserve("aot_first", &keys));
     }
 
     #[test]

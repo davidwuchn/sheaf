@@ -21,16 +21,27 @@ pub(super) fn try_iree_dispatch(
     args: &[Value],
     env: &Env,
 ) -> Option<Result<Value, SheafError>> {
-    let aot_variant = func_def.vmfb_module_name.as_ref().and_then(|module_name| {
-        let signature = func_def.signature.as_ref()?;
-        if crate::runtime::iree_session::args_match_signature(args, &signature.param_types)
-            && crate::runtime::iree_session::check_shapes_match(args, &signature.param_types).is_ok()
+    let aot_variant = match func_def.signature.as_ref() {
+        Some(signature)
+            if crate::runtime::iree_session::args_match_signature(args, &signature.param_types)
+                && crate::runtime::iree_session::check_shapes_match(
+                    args,
+                    &signature.param_types,
+                )
+                .is_ok() =>
         {
-            Some((module_name.clone(), signature.clone()))
-        } else {
-            None
+            match crate::runtime::iree_session::initialized_shared_session() {
+                Some(session) => {
+                    match session.precompiled_module_for(&func_def.name, &func_def.body_hash()) {
+                        Ok(module_name) => module_name.map(|name| (name, signature.clone())),
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                None => None,
+            }
         }
-    });
+        _ => None,
+    };
     let (module_name, sig) = aot_variant.or_else(|| {
         let jit = env.jit_compiler.as_ref()?;
         let key = crate::runtime::jit::cache_key_for_function(func_def, args, &env.registry)?;
@@ -41,11 +52,7 @@ pub(super) fn try_iree_dispatch(
         Ok(session) => session,
         Err(e) => return Some(Err(e)),
     };
-    let full_name = format!(
-        "{}.{}",
-        module_name,
-        func_def.name.replace('-', "_").replace('?', "_q").replace('!', "_b")
-    );
+    let full_name = dispatch_name(&module_name, &func_def.name);
     let result = match iree_session.call_typed_device(&full_name, args, &sig.return_type) {
         Ok(v) => v,
         Err(e) => return Some(Err(e)),
@@ -67,6 +74,30 @@ pub(super) fn try_iree_dispatch(
     };
 
     Some(Ok(result))
+}
+
+fn dispatch_name(module_name: &str, function_name: &str) -> String {
+    format!(
+        "{}.{}",
+        module_name,
+        function_name
+            .replace('-', "_")
+            .replace('?', "_q")
+            .replace('!', "_b")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dispatch_name;
+
+    #[test]
+    fn dispatch_name_uses_registered_module_name() {
+        assert_eq!(
+            dispatch_name("aot_model_42", "predict-value?"),
+            "aot_model_42.predict_value_q"
+        );
+    }
 }
 
 /// Try to JIT-compile a value-and-grad call into a single VMFB (forward + backward).

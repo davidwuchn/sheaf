@@ -14,7 +14,7 @@ use crate::core::inference::FunctionSignature;
 ///
 /// Looks for `module.json` in the same directory as `shf_path` to determine
 /// which VMFB to load and validates freshness via content hashes.
-/// Falls back to `module.vmfb` with timestamp check if no manifest.
+/// Requires a manifest with the module name exported by the VMFB.
 ///
 /// `candidate_fns`: function names to consider for IREE dispatch.
 /// Only pure (side-effect-free) functions among these will be tagged.
@@ -54,34 +54,22 @@ pub fn try_load_vmfb(
         return false;
     }
 
-    // Try module.json first, then fallback to bare VMFB with timestamp check
     let manifest_path = dir.join("module.json");
-    let (vmfb_path, valid_fns, signatures) = match std::fs::read_to_string(&manifest_path) {
-        Ok(manifest_str) => {
-            match validate_manifest(&manifest_str, dir, compiler, &pure_fns) {
-                Some((vmfb, fns, sigs)) => (vmfb, fns, sigs),
+    let (vmfb_path, module_name, valid_fns, signatures) =
+        match std::fs::read_to_string(&manifest_path) {
+            Ok(manifest_str) => match validate_manifest(&manifest_str, dir, compiler, &pure_fns) {
+                Some(validated) => validated,
                 None => return false,
-            }
-        }
-        Err(_) => {
-            // No manifest: try module.vmfb with timestamp fallback
-            let vmfb_path = dir.join("module.vmfb");
-            if !vmfb_path.exists() {
+            },
+            Err(_) => {
+                if dir.join("module.vmfb").exists() {
+                    crate::sheaf_msg!(
+                        "warning: refusing module.vmfb without module.json module_name"
+                    );
+                }
                 return false;
             }
-            let is_fresh = match (
-                std::fs::metadata(shf_path).and_then(|m| m.modified()),
-                std::fs::metadata(&vmfb_path).and_then(|m| m.modified()),
-            ) {
-                (Ok(shf_time), Ok(vmfb_time)) => vmfb_time >= shf_time,
-                _ => false,
-            };
-            if !is_fresh {
-                return false;
-            }
-            (vmfb_path, pure_fns, std::collections::HashMap::new())
-        }
-    };
+        };
 
     if valid_fns.is_empty() {
         return false;
@@ -91,7 +79,7 @@ pub fn try_load_vmfb(
     let vmfb_data = match std::fs::read(&vmfb_path) {
         Ok(data) => data,
         Err(e) => {
-            eprintln!("warning: cannot read '{}': {}", vmfb_path.display(), e);
+            crate::sheaf_msg!("warning: cannot read '{}': {}", vmfb_path.display(), e);
             return false;
         }
     };
@@ -102,7 +90,46 @@ pub fn try_load_vmfb(
             return false;
         }
     };
+    let function_keys: Vec<(String, String)> = valid_fns
+        .iter()
+        .filter_map(|name| {
+            compiler
+                .registry
+                .get(name)
+                .map(|function| (name.clone(), function.body_hash()))
+        })
+        .collect();
+    if function_keys.len() != valid_fns.len() {
+        return false;
+    }
+
+    match session.reserve_precompiled_module(&module_name, &function_keys) {
+        Ok(true) => {}
+        Ok(false) => {
+            crate::sheaf_msg!(
+                "warning: precompiled module '{}' conflicts with a loaded or pending AOT module",
+                module_name
+            );
+            return false;
+        }
+        Err(e) => {
+            crate::sheaf_msg!(
+                "warning: failed to reserve precompiled module '{}': {}",
+                module_name,
+                e
+            );
+            return false;
+        }
+    }
+
     if let Err(e) = session.load_vmfb(vmfb_data) {
+        if let Err(release_error) = session.release_precompiled_module(&module_name) {
+            crate::sheaf_msg!(
+                "warning: failed to release precompiled module '{}': {}",
+                module_name,
+                release_error
+            );
+        }
         crate::sheaf_msg!("warning: failed to load '{}': {}", vmfb_path.display(), e);
         return false;
     }
@@ -110,7 +137,6 @@ pub fn try_load_vmfb(
     // Tag functions for IREE dispatch and load signatures from manifest
     for fn_name in &valid_fns {
         if let Some(fd) = compiler.registry.get_mut(fn_name) {
-            fd.vmfb_module_name = Some("module".to_string());
             if let Some(sig) = signatures.get(fn_name) {
                 fd.signature = Some(sig.clone());
             }
@@ -133,25 +159,56 @@ pub fn try_load_vmfb(
         }
     }
 
-    eprintln!(
-        "using module.vmfb: {}",
-        valid_fns.join(", ")
-    );
+    if let Err(e) = session.register_precompiled_functions(&module_name, &function_keys) {
+        // IREE cannot unload an appended module, so this module remains unused.
+        if let Err(release_error) = session.release_precompiled_module(&module_name) {
+            crate::sheaf_msg!(
+                "warning: failed to release unusable precompiled module '{}': {}",
+                module_name,
+                release_error
+            );
+        }
+        crate::sheaf_msg!(
+            "warning: loaded but could not register precompiled module '{}': {}",
+            module_name,
+            e
+        );
+        return false;
+    }
+
+    crate::sheaf_msg!("using module.vmfb: {}", valid_fns.join(", "));
     true
 }
 
-/// Validate a module.json and return (vmfb_path, valid_fns, signatures).
+/// Validate a module.json and return its path, module name, functions, and signatures.
 /// Returns None if stale or invalid.
 fn validate_manifest(
     manifest_str: &str,
     dir: &Path,
     compiler: &CompilerContext,
     candidate_fns: &[String],
-) -> Option<(std::path::PathBuf, Vec<String>, std::collections::HashMap<String, FunctionSignature>)> {
+) -> Option<(
+    std::path::PathBuf,
+    String,
+    Vec<String>,
+    std::collections::HashMap<String, FunctionSignature>,
+)> {
     let manifest: serde_json::Value = match serde_json::from_str(manifest_str) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("warning: invalid module.json: {}", e);
+            crate::sheaf_msg!("warning: invalid module.json: {}", e);
+            return None;
+        }
+    };
+
+    let module_name = match manifest.get("module_name").and_then(|value| value.as_str()) {
+        Some(name) if is_safe_module_name(name) => name.to_string(),
+        Some(name) => {
+            crate::sheaf_msg!("warning: invalid module.json module_name '{}'", name);
+            return None;
+        }
+        None => {
+            crate::sheaf_msg!("warning: module.json is missing module_name");
             return None;
         }
     };
@@ -162,7 +219,10 @@ fn validate_manifest(
         .unwrap_or("module.vmfb");
     let vmfb_path = dir.join(vmfb_name);
     if !vmfb_path.exists() {
-        eprintln!("warning: '{}' referenced by module.json not found", vmfb_path.display());
+        crate::sheaf_msg!(
+            "warning: '{}' referenced by module.json not found",
+            vmfb_path.display()
+        );
         return None;
     }
 
@@ -177,7 +237,7 @@ fn validate_manifest(
         match compiler.registry.get(name) {
             Some(fd) => {
                 if fd.body_hash() != expected_hash {
-                    eprintln!(
+                    crate::sheaf_msg!(
                         "warning: module.json is stale ('{}' changed), run `sheaf build`",
                         name
                     );
@@ -185,7 +245,7 @@ fn validate_manifest(
                 }
             }
             None => {
-                eprintln!(
+                crate::sheaf_msg!(
                     "warning: module.json is stale ('{}' not found), run `sheaf build`",
                     name
                 );
@@ -211,7 +271,38 @@ fn validate_manifest(
         .cloned()
         .collect();
 
-    Some((vmfb_path, valid, signatures))
+    Some((vmfb_path, module_name, valid, signatures))
+}
+
+fn is_safe_module_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_safe_module_name, validate_manifest};
+    use crate::core::expr::CompilerContext;
+    use std::path::Path;
+
+    #[test]
+    fn validates_module_names() {
+        for name in ["module", "aot_model_42", "_private"] {
+            assert!(is_safe_module_name(name));
+        }
+        for name in ["", "42model", "module.name", "module-name", "module name"] {
+            assert!(!is_safe_module_name(name));
+        }
+    }
+
+    #[test]
+    fn rejects_manifest_without_module_name_before_loading() {
+        let manifest = r#"{"vmfb":"missing.vmfb","functions":{}}"#;
+        assert!(
+            validate_manifest(manifest, Path::new("."), &CompilerContext::new(), &[]).is_none()
+        );
+    }
 }
 
 /// Parse a FunctionSignature from a manifest entry's params/returns fields.
