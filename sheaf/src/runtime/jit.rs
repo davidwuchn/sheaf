@@ -13,7 +13,7 @@
 use crate::SheafError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 
 /// Serializes cache publication and module loading for the shared IREE session.
 static JIT_COMPILATION_LOCK: Mutex<()> = Mutex::new(());
@@ -54,8 +54,9 @@ use crate::lowering::effects::{collect_effects, collect_hof_calls};
 use crate::lowering::jit_eligibility;
 use crate::lowering::stablehlo::{Register, StableHLOEmitter};
 use crate::lowering::transforms::{
-    extract_scalar_constants, filter_constants_for_shape_positions, lower_inlined_gets,
-    propagate_let_layouts, resolve_static_constants, substitute_scalar_param, unroll_reduces,
+    collect_shape_gtes, extract_scalar_constants, filter_constants_for_shape_positions,
+    lower_inlined_gets, propagate_let_layouts, resolve_static_constants, substitute_scalar_param,
+    unroll_reduces,
 };
 use crate::sheaf_msg;
 
@@ -122,7 +123,70 @@ fn function_definition_identity(func_def: &FunctionDef, registry: &HashMap<Strin
     format!("{:?}", identities)
 }
 
-fn runtime_layouts(args: &[Value], params: &[String]) -> Vec<Vec<(Vec<String>, Vec<i64>, Vec<usize>)>> {
+type ScalarPosition = (String, Vec<usize>);
+type RuntimeLayout = Vec<(Vec<String>, Vec<i64>, Vec<usize>)>;
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct ShapeAnalysisCacheKey {
+    definition_identity: String,
+    argument_types: Vec<String>,
+    argument_layouts: Vec<RuntimeLayout>,
+}
+
+enum ShapeAnalysisState {
+    Computing,
+    Ready(Vec<ScalarPosition>),
+}
+
+struct ShapeAnalysisCache {
+    entries: Mutex<HashMap<ShapeAnalysisCacheKey, ShapeAnalysisState>>,
+    ready: Condvar,
+}
+
+struct ShapeAnalysisReservation {
+    key: ShapeAnalysisCacheKey,
+    active: bool,
+}
+
+impl ShapeAnalysisReservation {
+    fn finish(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for ShapeAnalysisReservation {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let cache = shape_analysis_cache();
+        if let Ok(mut entries) = cache.entries.lock() {
+            entries.remove(&self.key);
+            cache.ready.notify_all();
+        }
+    }
+}
+
+/// Process-local cache of sorted scalar positions consumed by shape expressions.
+static SHAPE_ANALYSIS_CACHE: OnceLock<ShapeAnalysisCache> = OnceLock::new();
+
+fn shape_analysis_cache() -> &'static ShapeAnalysisCache {
+    SHAPE_ANALYSIS_CACHE.get_or_init(|| ShapeAnalysisCache {
+        entries: Mutex::new(HashMap::new()),
+        ready: Condvar::new(),
+    })
+}
+
+fn shape_analysis_lock(
+    cache: &ShapeAnalysisCache,
+) -> Result<MutexGuard<'_, HashMap<ShapeAnalysisCacheKey, ShapeAnalysisState>>, SheafError> {
+    cache.entries.lock().map_err(|_| SheafError::Compile {
+        message: "JIT cache key construction failed: shape analysis cache lock is poisoned".to_string(),
+        location: crate::core::error::SourceLocation::unknown(),
+    })
+}
+
+fn runtime_layouts(args: &[Value], params: &[String]) -> Vec<RuntimeLayout> {
     args.iter()
         .enumerate()
         .map(|(index, arg)| {
@@ -144,42 +208,98 @@ pub fn cache_key_for_function(
     args: &[Value],
     registry: &HashMap<String, FunctionDef>,
 ) -> Option<JitCacheKey> {
-    let mut body = func_def.body_compiled.clone()?;
+    let body = func_def.body_compiled.clone()?;
+    let definition_identity = function_definition_identity(func_def, registry);
+    let argument_types = args.iter().map(|arg| {
+        value_to_stablehlo_type(arg).map(|ty| ty.to_mlir()).unwrap_or_else(|_| "<invalid>".to_string())
+    }).collect::<Vec<_>>();
+    let argument_layouts = runtime_layouts(args, &func_def.params);
+    let analysis_key = ShapeAnalysisCacheKey {
+        definition_identity: definition_identity.clone(),
+        argument_types: argument_types.clone(),
+        argument_layouts: argument_layouts.clone(),
+    };
+
     let mut constants = HashMap::new();
     let mut index_maps = Vec::new();
-
     for (index, arg) in args.iter().enumerate() {
         let param = func_def.params.get(index)?.clone();
         let index_map = value_to_param_layout(&param, arg)
             .map(|layout| layout_to_index_map(&layout))
             .unwrap_or_else(|| std::iter::once((Vec::new(), Vec::new())).collect());
         extract_scalar_constants(arg, &param, &index_map, &mut constants);
-        body = lower_get_calls(&body, &param, &index_map);
         index_maps.push((param, index_map));
     }
-    body = crate::autodiff::inline_function_calls(&body, registry);
-    for (param, index_map) in &index_maps {
-        body = lower_get_calls(&body, param, index_map);
-    }
-    body = lower_inlined_gets(&body, &index_maps);
 
-    let shape_scalars = filter_constants_for_shape_positions(&constants, &body)
-        .into_iter()
+    let shape_positions = match cached_shape_positions(&analysis_key, body, registry, &index_maps) {
+        Ok(positions) => positions,
+        Err(error) => {
+            sheaf_msg!("jit: cache key construction failed: {}", error);
+            return None;
+        }
+    };
+    let shape_scalars = constants.into_iter()
+        .filter(|(position, _)| shape_positions.binary_search(position).is_ok())
         .collect::<BTreeMap<_, _>>()
         .into_iter()
         .map(|((param, indices), value)| (param, indices, value.to_bits()))
         .collect();
-    let argument_types = args.iter().map(|arg| {
-        value_to_stablehlo_type(arg).map(|ty| ty.to_mlir()).unwrap_or_else(|_| "<invalid>".to_string())
-    }).collect();
 
     Some(JitCacheKey {
-        definition_identity: function_definition_identity(func_def, registry),
+        definition_identity,
         function_name: func_def.name.clone(),
         argument_types,
-        argument_layouts: runtime_layouts(args, &func_def.params),
+        argument_layouts,
         shape_scalars,
     })
+}
+
+fn cached_shape_positions(
+    key: &ShapeAnalysisCacheKey,
+    mut body: CompiledExpr,
+    registry: &HashMap<String, FunctionDef>,
+    index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+) -> Result<Vec<ScalarPosition>, SheafError> {
+    let cache = shape_analysis_cache();
+    let mut reservation = loop {
+        let entries = shape_analysis_lock(cache)?;
+        match entries.get(key) {
+            Some(ShapeAnalysisState::Ready(positions)) => return Ok(positions.clone()),
+            Some(ShapeAnalysisState::Computing) => {
+                let entries = cache.ready.wait(entries).map_err(|_| SheafError::Compile {
+                    message: "JIT cache key construction failed: shape analysis cache lock is poisoned".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })?;
+                drop(entries);
+            }
+            None => {
+                drop(entries);
+                let mut entries = shape_analysis_lock(cache)?;
+                if entries.contains_key(key) {
+                    continue;
+                }
+                entries.insert(key.clone(), ShapeAnalysisState::Computing);
+                break ShapeAnalysisReservation { key: key.clone(), active: true };
+            }
+        }
+    };
+
+    for (param, index_map) in index_maps {
+        body = lower_get_calls(&body, param, index_map);
+    }
+    body = crate::autodiff::inline_function_calls(&body, registry);
+    for (param, index_map) in index_maps {
+        body = lower_get_calls(&body, param, index_map);
+    }
+    body = lower_inlined_gets(&body, index_maps);
+    let mut positions = collect_shape_gtes(&body).into_iter().collect::<Vec<_>>();
+    positions.sort();
+
+    let mut entries = shape_analysis_lock(cache)?;
+    entries.insert(key.clone(), ShapeAnalysisState::Ready(positions.clone()));
+    cache.ready.notify_all();
+    reservation.finish();
+    Ok(positions)
 }
 
 /// Returns an MLIR-safe module name for a JIT variant.
@@ -1949,6 +2069,31 @@ mod cache_key_tests {
         let first = key(&scale, &[tensor(vec![4], 0.0, Dtype::F32), Value::Int(2)], &registry);
         let second = key(&scale, &[tensor(vec![4], 0.0, Dtype::F32), Value::Int(4)], &registry);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn cache_key_tracks_shape_scalar_used_by_inlined_function() {
+        let callee = definition("reshape-it", &["x", "n"], "reshape", reshape_body());
+        let caller = definition(
+            "caller",
+            &["x", "n"],
+            "caller",
+            CompiledExpr::FunctionCall {
+                name: "reshape-it".to_string(),
+                args: vec![
+                    CompiledExpr::Symbol("x".to_string()),
+                    CompiledExpr::Symbol("n".to_string()),
+                ],
+                loc: None,
+            },
+        );
+        let registry = HashMap::from([
+            ("reshape-it".to_string(), callee),
+            ("caller".to_string(), caller.clone()),
+        ]);
+        let first = key(&caller, &[tensor(vec![4], 0.0, Dtype::F32), Value::Int(2)], &registry);
+        let second = key(&caller, &[tensor(vec![4], 0.0, Dtype::F32), Value::Int(4)], &registry);
+        assert_ne!(first, second);
     }
 
     #[test]
