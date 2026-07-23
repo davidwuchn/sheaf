@@ -152,6 +152,9 @@ validate_nanoGPT_sample () {
     if ! grep -q -- "Generating 500 tokens..." "$stdout"; then
         echo "FAIL: 'Generating 500 tokens...' missing"; return 0
     fi
+    if ! grep -Eq -- 'jit: compiling gpt-forward \[|jit: gpt-forward \(cached\)' "$stdout"; then
+        echo "FAIL: gpt-forward did not compile through JIT"; return 0
+    fi
     local sep_count
     sep_count="$(grep -c -- '^---$' "$stdout" || true)"
     if [[ $sep_count -lt 2 ]]; then
@@ -255,9 +258,15 @@ run_example () {
 
     log_info "→ $group/$entry  (device=$DEVICE, timeout=${timeout}s)"
 
+    local -a sheaf_args=(--device "$DEVICE")
+    # Ensure the transformer forward pass is JIT-compiled, otherwise this is a regression.
+    if [[ "$validator" == "nanoGPT-sample" ]]; then
+        sheaf_args+=(-v)
+    fi
+
     local exit_code
     ( cd "$workdir" && timeout --foreground "$timeout" \
-        "$SHEAF_BIN" --device "$DEVICE" "$entry" \
+        "$SHEAF_BIN" "${sheaf_args[@]}" "$entry" \
             >"$stdout_log" 2>"$stderr_log" ) ; exit_code=$?
 
     if [[ $exit_code -eq 124 ]]; then
