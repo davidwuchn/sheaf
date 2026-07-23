@@ -18,10 +18,12 @@ expressiveness of Lisp with the performance of modern ML compilers.
 - **GPU-first**: compiles to [StableHLO](https://github.com/openxla/stablehlo)
   and runs on CUDA, Metal, Vulkan, and CPUs through
   [IREE](https://github.com/iree-org/iree)
-- **Reverse-mode autodiff**: ahead-of-time automatic differentiation
-- **JIT compilation**: pure functions are automatically JIT-compiled
-- **Single native binary**: runs on Linux (x86_64, aarch64) and macOS (Apple
-  Silicon) with no runtime dependencies
+- **Reverse-mode autodiff**: differentiates supported tensor programs before
+  StableHLO code generation
+- **JIT compilation**: eligible pure functions are automatically compiled from
+  runtime shapes
+- **Single native binary**: the Sheaf runtime ships as one executable for Linux
+  and Apple Silicon, with no Python environment required
 - **LLM-native**: built-in context generation for AI assistants
 
 ### Sample code
@@ -76,6 +78,9 @@ for more code samples.
 
 ### Install
 
+Note: Sheaf is under active development. The langage and compiler interfaces may
+still change between releases.
+
 - Download the binary tarball from https://github.com/sheaf-lang/sheaf/releases
 - Download the examples:
   https://github.com/sheaf-lang/sheaf/releases/download/v2.2.0/sheaf-examples.tar.gz
@@ -110,6 +115,9 @@ On macOS, the Xcode Command Line Tools are required. Install them with:
 ```bash
 xcode-select --install
 ```
+
+Sheaf requires Rust 1.85 or later. If your distribution ships an older version,
+either build from a container, or [upgrade your compiler](https://rustup.rs).
 
 ### Links
 

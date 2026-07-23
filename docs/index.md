@@ -14,7 +14,8 @@ hide:
 
 <p  style="text-align: center; size: 1rem; max-width: 40rem; margin-left: auto; margin-right: auto; margin-top: 1rem;"  markdown="1">
 
-Sheaf brings Clojure’s code-as-data to machine learning, with models as inspectable, composable, and compiled data structures.
+Sheaf brings Clojure’s code-as-data to machine learning, with models as
+inspectable, composable, and compiled data structures.
 
 </p>
 
@@ -27,8 +28,10 @@ Sheaf brings Clojure’s code-as-data to machine learning, with models as inspec
 ## For ML Researchers
 
 - **No classes, no boilerplate** — Write math, not plumbing
-- **Runtime Observability** — Catch NaN, trace shapes and profile performance without code changes
-- **Single binary framework** — One executable, no dependencies. Train and run on GPU out of the box
+- **Runtime Observability** — Catch NaN, trace shapes and profile performance
+  without code changes
+- **Single binary framework** — One executable, no dependencies. Train and run
+  on GPU out of the box
 
 </div>
 
@@ -36,9 +39,12 @@ Sheaf brings Clojure’s code-as-data to machine learning, with models as inspec
 
 ## For Agentic AI
 
-- **Context Density** — 60-75% fewer tokens than equivalent Python for the same architecture
-- **Uniform Syntax** — Single syntactic form for all operations reduces ambiguity and generation errors
-- **Immediate Onboarding** — Built-in context generator for Claude Code, Cursor, and Copilot
+- **Context Density** — 60-75% fewer tokens than equivalent Python for the same
+  architecture
+- **Uniform Syntax** — Single syntactic form for all operations reduces
+  ambiguity and generation errors
+- **Immediate Onboarding** — Built-in context generator for Claude Code, Cursor,
+  and Copilot
 
 </div>
 
@@ -49,9 +55,12 @@ Sheaf brings Clojure’s code-as-data to machine learning, with models as inspec
 <div class="flex-section" markdown="1">
 <div markdown="1">
 
-In Sheaf, a neural network is a composition of mathematical functions over a parameter tree.
+In Sheaf, a neural network is a composition of mathematical functions over a
+parameter tree.
 
-Sheaf is purely functional, so differentiation and compilation require no annotations. Any pure function can be differentiated with value-and-grad and is automatically compiled to GPU code.
+Sheaf's functional core makes differentiation and compilation possible without
+graph annotations. Supported tensor functions can be differentiated with
+value-and-grad and compiled automatically for CPU or GPU.
 
 </div>
 <div markdown="1">
@@ -63,14 +72,6 @@ Sheaf is purely functional, so differentiation and compilation require no annota
       (as-> x h
         (with-params [p :l1] (relu    (+ (@ h W) b)))
         (with-params [p :l2] (softmax (+ (@ h W) b)))))
-
-
-
-
-
-
-
-
     ```
 
 === "Composite"
@@ -100,9 +101,12 @@ Sheaf is purely functional, so differentiation and compilation require no annota
 <div class="flex-section" markdown="1">
 <div markdown="1">
 
-Because models are data, Sheaf requires no module classes, registration, or parameter groups. Even structural operations like pruning, freezing, or weight sharing are expressed as regular data transformations.
+Because models are data, Sheaf requires no module classes, registration, or
+parameter groups. Even structural operations like pruning, freezing, or weight
+sharing are expressed as regular data transformations.
 
-Sheaf brings compile-time macros to the computation graph itself, generating architecture variants from a single template.
+Sheaf brings compile-time macros to the computation graph itself, generating
+architecture variants from a single template.
 
 </div>
 
@@ -117,7 +121,6 @@ Sheaf brings compile-time macros to the computation graph itself, generating arc
 ;; Swap the output head for a different task
 (defn hot-swap-head [model task-id heads]
   (assoc model :head (get heads task-id)))
-
 ```
 
 </div>
@@ -128,9 +131,12 @@ Sheaf brings compile-time macros to the computation graph itself, generating arc
 <div class="flex-section" markdown="1">
 <div markdown="1">
 
-In Sheaf, every function call, tensor shape, and numerical statistic is observable at runtime.
+In Sheaf, every function call, tensor shape, and numerical statistic is
+observable at runtime.
 
-A tracer logs the full call hierarchy with tensor statistics. Guards halt execution on numerical invariants like NaN or range violations. A profiler attributes wall time to each function in the call tree.
+A tracer logs the full call hierarchy with tensor statistics. Guards halt
+execution on numerical invariants like NaN or range violations. A profiler
+attributes wall time to each function in the call tree.
 
 </div>
 
@@ -173,47 +179,53 @@ A tracer logs the full call hierarchy with tensor statistics. Guards halt execut
 === "Profiler"
 
     ```css
-    Profiler: 3.63s wall
+    Profiler: 3.78s wall
 
-      Function                          Calls      Total       Self   Avg/call
-      ------------------------------------------------------------------------
-      gpt-forward                         100      1.72s      3.72s    37.23ms
-      reshape                             301   900.57ms   900.57ms     2.99ms
-      choice                              100   622.85ms   622.85ms     6.23ms
-      softmax                             100   158.67ms   158.67ms     1.59ms
-      generate-token                      100      5.56s   158.37ms    55.65ms
-      io                                    4    45.11ms    45.11ms    11.28ms
-      <lambda>                            102      5.58s    12.88ms    54.71ms
-      ... 23 others                      1728                5.42ms
+    Function                          Calls      Total       Self   Avg/call
+     ------------------------------------------------------------------------
+     gpt-forward                         500      3.17s      3.17s     6.35ms
+     softmax                             500   184.70ms   184.70ms    369.4μs
+     slide-window                        500   142.79ms   142.79ms    285.6μs
+     reshape                             501   109.23ms   109.23ms    218.0μs
+     choice                              500    92.11ms    92.11ms    184.2μs
+     generate-token                      500      3.59s    28.62ms     7.18ms
+     io                                    5    26.76ms    26.76ms     5.35ms
+     <lambda>                            502      3.75s    11.83ms     7.46ms
+     ... 21 others                      7527                4.86ms
 
-      Call tree:
+     Call tree:
 
-      ├── generate (3.58s, 1 call)
-      │   ├── reduce (3.58s, 1 call)
-      │   │   └── <lambda> (3.58s, 101 calls)
-      │   │       ├── generate-token (3.56s, 100 calls)
-      │   │       │   ├── gpt-forward (1.72s, 100 calls)
-      │   │       │   ├── reshape (900.16ms, 100 calls)
-      │   │       │   ├── choice (622.85ms, 100 calls)
-      │   │       │   ├── softmax (158.67ms, 100 calls)
-      │   │       │   └── ... 8 others (1.47ms, 900 calls)
-      │   │       └── ... 5 others (3.37ms, 1002 calls)
-      │   └── ... 2 others (1.9μs, 2 calls)
-      └── ... 7 others (45.64ms, 19 calls)
+     ├── generate (3.75s, 1 call)
+     │   ├── reduce (3.75s, 1 call)
+     │   │   └── <lambda> (3.75s, 501 calls)
+     │   │       ├── generate-token (3.59s, 500 calls)
+     │   │       │   ├── gpt-forward (3.17s, 500 calls)
+     │   │       │   ├── softmax (184.70ms, 500 calls)
+     │   │       │   ├── reshape (109.22ms, 500 calls)
+     │   │       │   ├── choice (92.11ms, 500 calls)
+     │   │       │   └── ... 7 others (1.69ms, 4000 calls)
+     │   │       ├── slide-window (142.79ms, 500 calls)
+     │   │       └── ... 4 others (2.04ms, 3502 calls)
+     │   └── ... 2 others (1.5μs, 2 calls)
+     └── ... 7 others (26.86ms, 21 calls)
     ```
 
 </div>
 </div>
 
-## **Resource Efficiency**
+## **Compact by Construction**
 
 <div class="flex-section">
 <div markdown="1">
 
-A complete GPT-2 124M implementation in Sheaf is 1,908 tokens, while the equivalent PyTorch is 7,486. Sheaf's uniform syntax keeps the code concise and unambiguous.
+A complete GPT-2 124M implementation in Sheaf is 1,908 tokens, while the
+equivalent PyTorch is 7,486. Sheaf's uniform syntax keeps the code concise and
+unambiguous.
 <br/><br/>
 
-Context usage counts GPT-4 tokens (tiktoken) across model, training, and sampling code. Deploy size is the minimal runtime required to train and run a model on a CUDA GPU.
+Context usage counts GPT-4 tokens (tiktoken) across model, training, and
+sampling code. Deploy size is the minimal runtime required to train and run a
+model on a CUDA GPU.
 
 </div>
 <div>
@@ -249,15 +261,16 @@ Context usage counts GPT-4 tokens (tiktoken) across model, training, and samplin
 </div>
 </div>
 
-## **Clean Implementation**
+## **Native Runtime**
 
 <div class="flex-section" markdown="1">
 <div markdown="1">
 
-Sheaf is written in Rust. The complete runtime with GPU backends ships
-as a single 4 MB executable.
+Sheaf is written in Rust. The complete runtime with GPU backends ships as a
+single 4 MB executable.
 
-The compiler toolchain is downloaded on first use and is not required to run a compiled model.
+The compiler toolchain is downloaded on first use and is not required to run a
+compiled model.
 
 </div>
 
@@ -279,6 +292,6 @@ $ du -h *
 
 ---
 
-<div style="text-align: center; margin-bottom: 3rem;" class="intro-text"; markdown="1">
+<div style="text-align: center; margin-bottom: 3rem;" class="intro-text" markdown="1">
 [Get started](quickstart.md){ .md-button }
 </div>
