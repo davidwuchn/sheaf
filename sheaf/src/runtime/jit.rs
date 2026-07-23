@@ -18,6 +18,16 @@ use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 /// Serializes cache publication and module loading for the shared IREE session.
 static JIT_COMPILATION_LOCK: Mutex<()> = Mutex::new(());
 
+/// Metadata for a module loaded in the process-wide IREE session.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledModuleInfo {
+    pub module_name: String,
+    pub signature: FunctionSignature,
+}
+
+/// Maps JIT variant identities to metadata for modules loaded in the shared session.
+static JIT_MODULE_CATALOG: OnceLock<Mutex<HashMap<JitCacheKey, CompiledModuleInfo>>> = OnceLock::new();
+
 /// Cached CUDA target architecture (e.g. "sm_75"), detected once via NVML.
 static CUDA_TARGET: OnceLock<Option<String>> = OnceLock::new();
 
@@ -429,6 +439,43 @@ impl JitCompiler {
         self.variants.get(key)
     }
 
+    /// Returns cloned metadata for a module loaded by any JIT compiler in this process.
+    pub fn module_for_key(
+        &self,
+        key: &JitCacheKey,
+    ) -> Result<Option<CompiledModuleInfo>, SheafError> {
+        let catalog = JIT_MODULE_CATALOG.get_or_init(|| Mutex::new(HashMap::new()));
+        let catalog = catalog.lock().map_err(|_| SheafError::Runtime {
+            message: "JIT module catalog lock is poisoned".to_string(),
+            location: None,
+        })?;
+        Ok(catalog.get(key).cloned())
+    }
+
+    fn publish_module(
+        &self,
+        key: JitCacheKey,
+        module: CompiledModuleInfo,
+    ) -> Result<(), SheafError> {
+        let catalog = JIT_MODULE_CATALOG.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut catalog = catalog.lock().map_err(|_| SheafError::Runtime {
+            message: "JIT module catalog lock is poisoned".to_string(),
+            location: None,
+        })?;
+        catalog.insert(key, module);
+        Ok(())
+    }
+
+    fn register_module(
+        &mut self,
+        key: JitCacheKey,
+        module: CompiledModuleInfo,
+    ) -> Result<(), SheafError> {
+        self.publish_module(key.clone(), module.clone())?;
+        self.variants.insert(key, (module.module_name, module.signature));
+        Ok(())
+    }
+
     pub fn try_jit_compile(
         &mut self,
         func_def: &FunctionDef,
@@ -486,7 +533,14 @@ impl JitCompiler {
         );
         drop(transaction);
         if let Some(signature) = result {
-            self.variants.insert(cache_key, (module_name, signature.clone()));
+            let module = CompiledModuleInfo {
+                module_name: module_name.clone(),
+                signature: signature.clone(),
+            };
+            if let Err(error) = self.register_module(cache_key, module) {
+                self.jit_fail(name, error.short_message());
+                return None;
+            }
             Some(signature)
         } else {
             None
@@ -1973,8 +2027,12 @@ fn preprocess_body(
 
 #[cfg(test)]
 mod cache_key_tests {
-    use super::{cache_key_for_function, module_name_for, JIT_COMPILATION_LOCK};
+    use super::{
+        cache_key_for_function, module_name_for, CompiledModuleInfo, JitCompiler,
+        JIT_COMPILATION_LOCK,
+    };
     use crate::core::ast::SheafValue;
+    use crate::core::inference::FunctionSignature;
     use crate::core::error::SourceLocation;
     use crate::core::expr::{CompiledExpr, FunctionDef};
     use crate::interpreter::value::{Dtype, Value};
@@ -2019,6 +2077,34 @@ mod cache_key_tests {
 
     fn key(definition: &FunctionDef, args: &[Value], registry: &HashMap<String, FunctionDef>) -> super::JitCacheKey {
         cache_key_for_function(definition, args, registry).unwrap()
+    }
+
+    fn jit_compiler() -> JitCompiler {
+        JitCompiler {
+            iree_compile_path: None,
+            target_backend: "llvm-cpu".to_string(),
+            failed_fns: std::collections::HashSet::new(),
+            variants: HashMap::new(),
+            last_vag_fail_reason: None,
+            vag_cache: HashMap::new(),
+        }
+    }
+
+    fn signature() -> FunctionSignature {
+        FunctionSignature {
+            param_types: vec![crate::StableHLOType::scalar_f32()],
+            return_type: crate::StableHLOType::scalar_f32(),
+            return_dict_keys: None,
+            arg_type_layouts: Vec::new(),
+            captured_scalars: HashMap::new(),
+        }
+    }
+
+    fn module(name: &str) -> CompiledModuleInfo {
+        CompiledModuleInfo {
+            module_name: name.to_string(),
+            signature: signature(),
+        }
     }
 
     #[test]
@@ -2129,6 +2215,89 @@ mod cache_key_tests {
         let mut second = BTreeMap::new();
         second.insert("b".to_string(), tensor(vec![2], 0.0, Dtype::F32));
         assert_ne!(key(&definition, &[Value::Dict(first)], &registry), key(&definition, &[Value::Dict(second)], &registry));
+    }
+
+    #[test]
+    fn module_catalog_publishes_and_finds_variant_by_key() {
+        let definition = definition("catalog-publish", &["x"], "f", passthrough());
+        let registry = HashMap::from([("catalog-publish".to_string(), definition.clone())]);
+        let key = key(&definition, &[tensor(vec![2], 0.0, Dtype::F32)], &registry);
+        let mut compiler = jit_compiler();
+
+        assert!(compiler
+            .register_module(key.clone(), module("jit_catalog_publish"))
+            .is_ok());
+        let other_compiler = jit_compiler();
+
+        assert!(matches!(
+            other_compiler.module_for_key(&key),
+            Ok(Some(metadata)) if metadata == module("jit_catalog_publish")
+        ));
+    }
+
+    #[test]
+    fn module_catalog_returns_cloned_metadata() {
+        let definition = definition("catalog-clone", &["x"], "f", passthrough());
+        let registry = HashMap::from([("catalog-clone".to_string(), definition.clone())]);
+        let key = key(&definition, &[tensor(vec![2], 0.0, Dtype::F32)], &registry);
+        let mut compiler = jit_compiler();
+        assert!(compiler
+            .register_module(key.clone(), module("jit_catalog_clone"))
+            .is_ok());
+
+        let result = compiler.module_for_key(&key);
+        assert!(matches!(&result, Ok(Some(_))));
+        let Some(mut metadata) = result.ok().flatten() else {
+            return;
+        };
+        metadata.module_name.push_str("_modified");
+        metadata.signature.param_types.clear();
+
+        assert!(matches!(
+            compiler.module_for_key(&key),
+            Ok(Some(metadata)) if metadata == module("jit_catalog_clone")
+        ));
+    }
+
+    #[test]
+    fn module_catalog_keeps_distinct_keys_separate() {
+        let definition = definition("catalog-distinct", &["x"], "f", passthrough());
+        let registry = HashMap::from([("catalog-distinct".to_string(), definition.clone())]);
+        let first = key(&definition, &[tensor(vec![2], 0.0, Dtype::F32)], &registry);
+        let second = key(&definition, &[tensor(vec![3], 0.0, Dtype::F32)], &registry);
+        let mut compiler = jit_compiler();
+        assert!(compiler
+            .register_module(first.clone(), module("jit_catalog_first"))
+            .is_ok());
+        assert!(compiler
+            .register_module(second.clone(), module("jit_catalog_second"))
+            .is_ok());
+
+        assert!(matches!(
+            compiler.module_for_key(&first),
+            Ok(Some(metadata)) if metadata == module("jit_catalog_first")
+        ));
+        assert!(matches!(
+            compiler.module_for_key(&second),
+            Ok(Some(metadata)) if metadata == module("jit_catalog_second")
+        ));
+    }
+
+    #[test]
+    fn module_catalog_publication_preserves_local_variant() {
+        let definition = definition("catalog-local", &["x"], "f", passthrough());
+        let registry = HashMap::from([("catalog-local".to_string(), definition.clone())]);
+        let key = key(&definition, &[tensor(vec![2], 0.0, Dtype::F32)], &registry);
+        let mut compiler = jit_compiler();
+        assert!(compiler
+            .register_module(key.clone(), module("jit_catalog_local"))
+            .is_ok());
+
+        assert!(matches!(
+            compiler.variant_for(&key),
+            Some((module_name, module_signature))
+                if module_name == "jit_catalog_local" && module_signature == &signature()
+        ));
     }
 
     #[test]
