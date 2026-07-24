@@ -63,9 +63,9 @@ log_pass () { printf "  %sPASS%s  %s\n" "$C_GREEN" "$C_NC" "$1"; }
 log_fail () { printf "  %sFAIL%s  %s  -- %s\n" "$C_RED" "$C_NC" "$1" "$2"; }
 log_info () { printf "  %s%s%s\n" "$C_GREY" "$1" "$C_NC"; }
 
-# validators: bash+awk for stdout-driven checks
+# validators: bash+awk checks against example output.
 #
-# Each validator takes (stdout_path, workdir) and outputs one of:
+# Each validator receives the log paths it needs and outputs one of:
 #   PASS
 #   FAIL: <reason>
 # Anything else is treated as FAIL: unexpected.
@@ -148,11 +148,11 @@ validate_clevr () {
 }
 
 validate_nanoGPT_sample () {
-    local stdout="$1"
+    local stdout="$1" stderr="$2"
     if ! grep -q -- "Generating 500 tokens..." "$stdout"; then
         echo "FAIL: 'Generating 500 tokens...' missing"; return 0
     fi
-    if ! grep -Eq -- 'jit: compiling gpt-forward \[|jit: gpt-forward \(cached\)' "$stdout"; then
+    if ! grep -Eq -- 'jit: compiling gpt-forward \[|jit: gpt-forward \(cached\)' "$stderr"; then
         echo "FAIL: gpt-forward did not compile through JIT"; return 0
     fi
     local sep_count
@@ -301,7 +301,7 @@ run_example () {
         clevr)
             val_out="$(validate_clevr "$stdout_log")" ;;
         nanoGPT-sample)
-            val_out="$(validate_nanoGPT_sample "$stdout_log")" ;;
+            val_out="$(validate_nanoGPT_sample "$stdout_log" "$stderr_log")" ;;
         nanoGPT-train)
             val_out="$( cd "$workdir" && \
                 timeout --foreground 30 \
