@@ -42,17 +42,24 @@ pub(super) fn try_iree_dispatch(
         }
         _ => None,
     };
-    let (module_name, sig) = aot_variant.or_else(|| {
-        let jit = env.jit_compiler.as_ref()?;
-        let key = crate::runtime::jit::cache_key_for_function(func_def, args, &env.registry)?;
-        jit.variant_for(&key).cloned()
-    })?;
+    let (full_name, sig) = match aot_variant {
+        Some((module_name, signature)) => (dispatch_name(&module_name, &func_def.name), signature),
+        None => {
+            let jit = env.jit_compiler.as_ref()?;
+            let key = crate::runtime::jit::cache_key_for_function(func_def, args, &env.registry)?;
+            let info = match jit.module_for_key(&key) {
+                Ok(Some(info)) => info,
+                Ok(None) => return None,
+                Err(e) => return Some(Err(e)),
+            };
+            (jit_dispatch_name(&info, &func_def.name), info.signature)
+        }
+    };
 
     let iree_session = match crate::runtime::iree_session::shared_session() {
         Ok(session) => session,
         Err(e) => return Some(Err(e)),
     };
-    let full_name = dispatch_name(&module_name, &func_def.name);
     let result = match iree_session.call_typed_device(&full_name, args, &sig.return_type) {
         Ok(v) => v,
         Err(e) => return Some(Err(e)),
@@ -87,15 +94,47 @@ fn dispatch_name(module_name: &str, function_name: &str) -> String {
     )
 }
 
+fn jit_dispatch_name(
+    module: &crate::runtime::jit::CompiledModuleInfo,
+    function_name: &str,
+) -> String {
+    dispatch_name(&module.module_name, function_name)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::dispatch_name;
+    use super::{dispatch_name, jit_dispatch_name};
+    use crate::core::inference::FunctionSignature;
+    use crate::runtime::jit::CompiledModuleInfo;
+
+    fn signature() -> FunctionSignature {
+        FunctionSignature {
+            param_types: vec![crate::StableHLOType::scalar_f32()],
+            return_type: crate::StableHLOType::scalar_f32(),
+            return_dict_keys: None,
+            arg_type_layouts: Vec::new(),
+            captured_scalars: std::collections::HashMap::new(),
+        }
+    }
 
     #[test]
     fn dispatch_name_uses_registered_module_name() {
         assert_eq!(
             dispatch_name("aot_model_42", "predict-value?"),
             "aot_model_42.predict_value_q"
+        );
+    }
+
+    #[test]
+    fn jit_dispatch_name_uses_catalogued_variant_namespace() {
+        let module = CompiledModuleInfo {
+            module_name: "jit_variant_42".to_string(),
+            signature: signature(),
+        };
+
+        assert_eq!(
+            jit_dispatch_name(&module, "predict-value?"),
+            "jit_variant_42.predict_value_q"
         );
     }
 }
