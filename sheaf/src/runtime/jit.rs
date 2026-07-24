@@ -7,8 +7,10 @@
 //! the JIT attempts to compile it on the fly via the following pipeline:
 //! type inference -> dict lowering -> inlining -> codegen -> MLIR
 //! -> iree-compile -> load VMFB. On success, subsequent calls dispatch via IREE.
-//! On failure, the function is added to a blocklist and the interpreter
-//! handles it normally.
+//! On failure the result is remembered so the same artifact is not retried:
+//! structural rejections by compiled definition identity, per-variant
+//! failures by cache key, and value-and-grad failures by their own key.
+//! The interpreter then handles the call normally.
 
 use crate::SheafError;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -368,7 +370,13 @@ fn vag_module_name(key: &str) -> String {
 pub struct JitCompiler {
     iree_compile_path: Option<String>,
     target_backend: String,
-    failed_fns: HashSet<String>,
+    /// Structural rejections independent of runtime arguments, keyed by
+    /// compiled definition identity.
+    failed_definitions: HashSet<String>,
+    /// Per-variant compilation failures, keyed by the exact cache key.
+    failed_keys: HashSet<JitCacheKey>,
+    /// Value-and-grad failures, keyed by their `__vag_` identity.
+    failed_vag: HashSet<String>,
     variants: HashMap<JitCacheKey, (String, FunctionSignature)>,
     last_vag_fail_reason: Option<String>,
     /// Cache compiled VAG metadata: vag_key -> (module_name, signature, param_names)
@@ -399,7 +407,9 @@ impl JitCompiler {
         Self {
             iree_compile_path,
             target_backend,
-            failed_fns: HashSet::new(),
+            failed_definitions: HashSet::new(),
+            failed_keys: HashSet::new(),
+            failed_vag: HashSet::new(),
             variants: HashMap::new(),
             last_vag_fail_reason: None,
             vag_cache: HashMap::new(),
@@ -425,13 +435,6 @@ impl JitCompiler {
             return session.target_backend().to_string();
         }
         "llvm-cpu".to_string()
-    }
-
-
-    /// Failed compilations are remembered indefinitely. Call this after
-    /// invalidating a cached VMFB session so the function can be retried.
-    pub fn clear_failure(&mut self, name: &str) {
-        self.failed_fns.remove(name);
     }
 
 
@@ -476,32 +479,52 @@ impl JitCompiler {
         Ok(())
     }
 
+    pub(crate) fn preflight_jit_eligibility(
+        &mut self,
+        func_def: &FunctionDef,
+        registry: &HashMap<String, FunctionDef>,
+    ) -> bool {
+        let name = &func_def.name;
+        if func_def.body_compiled.is_none() {
+            return false;
+        }
+        let definition_identity = function_definition_identity(func_def, registry);
+        if self.failed_definitions.contains(&definition_identity) {
+            return false;
+        }
+        if let Err(reason) = jit_eligibility(name, registry) {
+            self.failed_definitions.insert(definition_identity);
+            self.jit_fail(name, &reason);
+            return false;
+        }
+        true
+    }
+
     pub fn try_jit_compile(
         &mut self,
         func_def: &FunctionDef,
         args: &[Value],
         registry: &HashMap<String, FunctionDef>,
     ) -> Option<FunctionSignature> {
-        let iree_compile = self.iree_compile_path.clone()?;
+        if !self.preflight_jit_eligibility(func_def, registry) {
+            return None;
+        }
+
         let name = &func_def.name;
+        let iree_compile = self.iree_compile_path.clone()?;
         let cache_key = cache_key_for_function(func_def, args, registry)?;
         if let Some((_, signature)) = self.variants.get(&cache_key) {
             return Some(signature.clone());
         }
         let module_name = module_name_for(&cache_key);
 
-        if self.failed_fns.contains(name) {
+        // Structural rejections are remembered by definition identity so one
+        // bad call graph does not poison a distinct specialization; a failed
+        // variant is remembered by its exact cache key instead.
+        if self.failed_definitions.contains(&cache_key.definition_identity) {
             return None;
         }
-
-
-        // Reject functions whose compiled body is unavailable, or whose call graph
-        // contains a cycle, an effect, or a higher-order call.
-        if func_def.body_compiled.is_none() {
-            return None;
-        }
-        if let Err(reason) = jit_eligibility(name, registry) {
-            self.jit_fail(name, &reason);
+        if self.failed_keys.contains(&cache_key) {
             return None;
         }
 
@@ -510,6 +533,8 @@ impl JitCompiler {
             matches!(a, Value::Tensor { .. } | Value::DeviceBuffer(_) | Value::Dict(_) | Value::Tuple(_))
         });
         if !has_tensor {
+            self.failed_definitions
+                .insert(cache_key.definition_identity.clone());
             self.jit_fail(name, "scalar-only args");
             return None;
         }
@@ -543,6 +568,9 @@ impl JitCompiler {
             }
             Some(signature)
         } else {
+            // A failed compile_function attempt is specific to this runtime
+            // variant: record it by cache key so other shapes stay eligible.
+            self.failed_keys.insert(cache_key);
             None
         }
     }
@@ -984,7 +1012,7 @@ impl JitCompiler {
         // Derive a human-readable name from the outermost function call
         let vag_fn_name = outermost_call_name(body).unwrap_or("anonymous".to_string());
 
-        // Build a stable key for the blocklist and cache.
+        // Build a stable key for the failure set and VMFB cache.
         // Include wrt_arg type so shape changes (e.g. after grow-hydra) cause a cache miss.
         let wrt_type_str = value_to_stablehlo_type(wrt_arg)
             .map(|t| t.to_mlir())
@@ -1007,7 +1035,7 @@ impl JitCompiler {
             .join(",");
         let vag_key = format!("__vag_{:?}_{}_{}", body, wrt_type_str, scalars_suffix);
         let module_name = vag_module_name(&vag_key);
-        if self.failed_fns.contains(&vag_key) {
+        if self.failed_vag.contains(&vag_key) {
             return None;
         }
 
@@ -1691,8 +1719,12 @@ impl JitCompiler {
     }
 
     fn jit_fail(&mut self, name: &str, reason: &str) {
-        self.failed_fns.insert(name.to_string());
+        // Ordinary failures are logged here; structural and per-variant
+        // recording is done at the call site that owns the cache key.
+        // Value-and-grad failures stay isolated in failed_vag and keep
+        // their reason for classify_vag_skip.
         if name.starts_with("__vag_") {
+            self.failed_vag.insert(name.to_string());
             self.last_vag_fail_reason = Some(reason.to_string());
         }
         let display_name = if name.starts_with("__vag_") {
@@ -2028,8 +2060,8 @@ fn preprocess_body(
 #[cfg(test)]
 mod cache_key_tests {
     use super::{
-        cache_key_for_function, module_name_for, CompiledModuleInfo, JitCompiler,
-        JIT_COMPILATION_LOCK,
+        cache_key_for_function, function_definition_identity, module_name_for,
+        CompiledModuleInfo, JitCompiler, JIT_COMPILATION_LOCK,
     };
     use crate::core::ast::SheafValue;
     use crate::core::inference::FunctionSignature;
@@ -2083,7 +2115,9 @@ mod cache_key_tests {
         JitCompiler {
             iree_compile_path: None,
             target_backend: "llvm-cpu".to_string(),
-            failed_fns: std::collections::HashSet::new(),
+            failed_definitions: std::collections::HashSet::new(),
+            failed_keys: std::collections::HashSet::new(),
+            failed_vag: std::collections::HashSet::new(),
             variants: HashMap::new(),
             last_vag_fail_reason: None,
             vag_cache: HashMap::new(),
@@ -2155,6 +2189,34 @@ mod cache_key_tests {
         let first = key(&scale, &[tensor(vec![4], 0.0, Dtype::F32), Value::Int(2)], &registry);
         let second = key(&scale, &[tensor(vec![4], 0.0, Dtype::F32), Value::Int(4)], &registry);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn direct_recursion_is_rejected_before_cache_key_analysis() {
+        let recursive = definition(
+            "recursive",
+            &["x"],
+            "recursive",
+            CompiledExpr::FunctionCall {
+                name: "recursive".to_string(),
+                args: vec![CompiledExpr::Symbol("x".to_string())],
+                loc: None,
+            },
+        );
+        let registry = HashMap::from([("recursive".to_string(), recursive.clone())]);
+        let identity = function_definition_identity(&recursive, &registry);
+        let mut compiler = jit_compiler();
+        compiler.iree_compile_path = Some("iree-compile".to_string());
+
+        assert!(compiler
+            .try_jit_compile(&recursive, &[tensor(vec![2], 0.0, Dtype::F32)], &registry)
+            .is_none());
+        assert!(compiler.failed_definitions.contains(&identity));
+
+        assert!(compiler
+            .try_jit_compile(&recursive, &[tensor(vec![2], 0.0, Dtype::F32)], &registry)
+            .is_none());
+        assert_eq!(compiler.failed_definitions.len(), 1);
     }
 
     #[test]
@@ -2306,5 +2368,50 @@ mod cache_key_tests {
         assert!(JIT_COMPILATION_LOCK.try_lock().is_err());
         drop(first);
         assert!(JIT_COMPILATION_LOCK.try_lock().is_ok());
+    }
+
+    #[test]
+    fn jit_fail_does_not_blacklist_regular_definition() {
+        let mut compiler = jit_compiler();
+        // An ordinary JIT failure must be logged without poisoning any
+        // failure set: structural and per-variant recording happens at the
+        // call site that owns the cache key.
+        compiler.jit_fail("regular-fn", "scalar-only args");
+        assert!(compiler.failed_definitions.is_empty());
+        assert!(compiler.failed_keys.is_empty());
+        assert!(compiler.failed_vag.is_empty());
+    }
+
+    #[test]
+    fn variant_failure_cache_keeps_distinct_shapes_independent() {
+        let definition = definition("variant-fn", &["x"], "f", passthrough());
+        let registry = HashMap::from([("variant-fn".to_string(), definition.clone())]);
+        let small = key(&definition, &[tensor(vec![2], 0.0, Dtype::F32)], &registry);
+        let large = key(&definition, &[tensor(vec![3], 0.0, Dtype::F32)], &registry);
+        assert_ne!(small, large);
+
+        let mut compiler = jit_compiler();
+        compiler.failed_keys.insert(small.clone());
+
+        assert!(compiler.failed_keys.contains(&small));
+        // A distinct runtime shape is its own variant: a failed sibling
+        // with a different key must not blacklist it.
+        assert!(!compiler.failed_keys.contains(&large));
+    }
+
+    #[test]
+    fn vag_failure_recording_isolates_from_ordinary_sets() {
+        let mut compiler = jit_compiler();
+        let vag_key = "__vag_isolated".to_string();
+        compiler.jit_fail(&vag_key, "compilation failed on all backends");
+
+        assert!(compiler.failed_vag.contains(&vag_key));
+        assert_eq!(
+            compiler.last_vag_fail_reason.as_deref(),
+            Some("compilation failed on all backends")
+        );
+        // Value-and-grad failures stay isolated from the ordinary failure sets.
+        assert!(compiler.failed_definitions.is_empty());
+        assert!(compiler.failed_keys.is_empty());
     }
 }

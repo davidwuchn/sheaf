@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 pub(super) fn try_iree_dispatch(
     func_def: &crate::core::expr::FunctionDef,
     args: &[Value],
-    env: &Env,
+    env: &mut Env,
 ) -> Option<Result<Value, SheafError>> {
     let aot_variant = match func_def.signature.as_ref() {
         Some(signature)
@@ -45,7 +45,10 @@ pub(super) fn try_iree_dispatch(
     let (full_name, sig) = match aot_variant {
         Some((module_name, signature)) => (dispatch_name(&module_name, &func_def.name), signature),
         None => {
-            let jit = env.jit_compiler.as_ref()?;
+            let jit = env.jit_compiler.as_mut()?;
+            if !jit.preflight_jit_eligibility(func_def, &env.registry) {
+                return None;
+            }
             let key = crate::runtime::jit::cache_key_for_function(func_def, args, &env.registry)?;
             let info = match jit.module_for_key(&key) {
                 Ok(Some(info)) => info,
