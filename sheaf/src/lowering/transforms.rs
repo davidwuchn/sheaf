@@ -9,15 +9,10 @@ use crate::core::expr::CompiledExpr;
 use crate::interpreter::value::Value;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::core::inference::{expr_is_tensor, infer_type_with_context};
 use crate::core::error::SheafResult;
+use crate::core::inference::{expr_is_tensor, infer_type_with_context};
 
-/// Substitute known scalar constants and propagate Let-bound constants.
-/// Handles: GetTupleElement -> Integer, (static expr) -> evaluate, Symbol -> local constant,
-/// and constant folding of arithmetic on known values.
-///
-/// When `skip_lambda` is true, Lambda bodies are not recursed into (they are
-/// resolved separately with their own scope by callers like preprocess_vag_lambda).
+/// Resolve scalar constants.
 pub fn resolve_static_constants(
     expr: &CompiledExpr,
     constants: &HashMap<(String, Vec<usize>), f64>,
@@ -44,16 +39,15 @@ fn resolve_constants_rec(
                 None => expr.clone(),
             }
         }
-        CompiledExpr::Symbol(name) => {
-            locals.get(name).cloned().unwrap_or_else(|| expr.clone())
-        }
+        CompiledExpr::Symbol(name) => locals.get(name).cloned().unwrap_or_else(|| expr.clone()),
         CompiledExpr::FunctionCall { name, args, .. } if name == "shape" && args.len() == 1 => {
             let shape_from_sym = match &args[0] {
                 CompiledExpr::Symbol(s) => shapes.get(s.as_str()).cloned(),
                 _ => None,
             };
             let shape = shape_from_sym.or_else(|| {
-                let resolved = resolve_constants_rec(&args[0], constants, locals, shapes, skip_lambda);
+                let resolved =
+                    resolve_constants_rec(&args[0], constants, locals, shapes, skip_lambda);
                 try_infer_shape(&resolved, shapes)
             });
             if let Some(sh) = shape {
@@ -63,7 +57,10 @@ fn resolve_constants_rec(
             }
             CompiledExpr::FunctionCall {
                 name: name.clone(),
-                args: args.iter().map(|a| resolve_constants_rec(a, constants, locals, shapes, skip_lambda)).collect(),
+                args: args
+                    .iter()
+                    .map(|a| resolve_constants_rec(a, constants, locals, shapes, skip_lambda))
+                    .collect(),
                 loc: None,
             }
         }
@@ -77,7 +74,11 @@ fn resolve_constants_rec(
                     return elems[norm as usize].clone();
                 }
             }
-            CompiledExpr::FunctionCall { name: name.clone(), args: vec![recv, idx], loc: None }
+            CompiledExpr::FunctionCall {
+                name: name.clone(),
+                args: vec![recv, idx],
+                loc: None,
+            }
         }
         CompiledExpr::FunctionCall { name, args, .. } if name == "cons" && args.len() == 2 => {
             let head = resolve_constants_rec(&args[0], constants, locals, shapes, skip_lambda);
@@ -89,23 +90,34 @@ fn resolve_constants_rec(
                     match inner.as_ref() {
                         SheafValue::Vector(v, _loc) => {
                             // Convert SheafValue elements to CompiledExpr
-                            let elems: Vec<CompiledExpr> = v.iter().filter_map(|sv| match sv {
-                                SheafValue::Integer(n, _) => Some(CompiledExpr::Integer(*n)),
-                                SheafValue::Float(f, _) => Some(CompiledExpr::Float(*f)),
-                                _ => None,
-                            }).collect();
-                            if elems.len() == v.len() { Some(elems) } else { None }
+                            let elems: Vec<CompiledExpr> = v
+                                .iter()
+                                .filter_map(|sv| match sv {
+                                    SheafValue::Integer(n, _) => Some(CompiledExpr::Integer(*n)),
+                                    SheafValue::Float(f, _) => Some(CompiledExpr::Float(*f)),
+                                    _ => None,
+                                })
+                                .collect();
+                            if elems.len() == v.len() {
+                                Some(elems)
+                            } else {
+                                None
+                            }
                         }
                         _ => None,
                     }
-                },
+                }
                 _ => None,
             };
             if let Some(mut elems) = tail_elems {
                 elems.insert(0, head);
                 CompiledExpr::Vector(elems)
             } else {
-                CompiledExpr::FunctionCall { name: name.clone(), args: vec![head, tail], loc: None }
+                CompiledExpr::FunctionCall {
+                    name: name.clone(),
+                    args: vec![head, tail],
+                    loc: None,
+                }
             }
         }
         CompiledExpr::FunctionCall { name, args, .. } if name == "int" && args.len() == 1 => {
@@ -113,7 +125,11 @@ fn resolve_constants_rec(
             match &inner {
                 CompiledExpr::Integer(_) => inner,
                 CompiledExpr::Float(f) => CompiledExpr::Integer(*f as i64),
-                _ => CompiledExpr::FunctionCall { name: name.clone(), args: vec![inner], loc: None },
+                _ => CompiledExpr::FunctionCall {
+                    name: name.clone(),
+                    args: vec![inner],
+                    loc: None,
+                },
             }
         }
         CompiledExpr::FunctionCall { name, args, .. }
@@ -123,100 +139,184 @@ fn resolve_constants_rec(
             push_first_last(name, recv)
         }
         CompiledExpr::FunctionCall { name, args, .. } => {
-            let resolved: Vec<_> = args.iter()
+            let resolved: Vec<_> = args
+                .iter()
                 .map(|a| resolve_constants_rec(a, constants, locals, shapes, skip_lambda))
                 .collect();
-            try_fold_arithmetic(name, &resolved)
-                .unwrap_or_else(|| CompiledExpr::FunctionCall { name: name.clone(), args: resolved, loc: None })
+            try_fold_arithmetic(name, &resolved).unwrap_or_else(|| CompiledExpr::FunctionCall {
+                name: name.clone(),
+                args: resolved,
+                loc: None,
+            })
         }
         CompiledExpr::Let { bindings, body } => {
-            let new_bindings: Vec<_> = bindings.iter().map(|(k, v)| {
-                let resolved = resolve_constants_rec(v, constants, locals, shapes, skip_lambda);
-                match &resolved {
-                    CompiledExpr::Integer(_) | CompiledExpr::Float(_) => {
-                        if let BindingPattern::Simple(k_str) = k {
-                            locals.insert(k_str.clone(), resolved.clone());
+            let new_bindings: Vec<_> = bindings
+                .iter()
+                .map(|(k, v)| {
+                    let resolved = resolve_constants_rec(v, constants, locals, shapes, skip_lambda);
+                    match &resolved {
+                        CompiledExpr::Integer(_) | CompiledExpr::Float(_) => {
+                            if let BindingPattern::Simple(k_str) = k {
+                                locals.insert(k_str.clone(), resolved.clone());
+                            }
                         }
-                    }
-                    CompiledExpr::Symbol(aliased) => {
-                        if let Some(sh) = shapes.get(aliased).cloned() {
+                        CompiledExpr::Symbol(aliased) => {
+                            if let Some(sh) = shapes.get(aliased).cloned() {
+                                if let BindingPattern::Simple(k_str) = k {
+                                    shapes.insert(k_str.clone(), sh);
+                                }
+                            }
+                        }
+                        CompiledExpr::Vector(elems)
+                            if elems.iter().all(|e| matches!(e, CompiledExpr::Integer(_))) =>
+                        {
+                            let sh: Vec<i64> = elems
+                                .iter()
+                                .filter_map(|e| {
+                                    if let CompiledExpr::Integer(n) = e {
+                                        Some(*n)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
                             if let BindingPattern::Simple(k_str) = k {
                                 shapes.insert(k_str.clone(), sh);
                             }
                         }
-                    }
-                    CompiledExpr::Vector(elems) if elems.iter().all(|e| matches!(e, CompiledExpr::Integer(_))) => {
-                        let sh: Vec<i64> = elems.iter().filter_map(|e| {
-                            if let CompiledExpr::Integer(n) = e { Some(*n) } else { None }
-                        }).collect();
-                        if let BindingPattern::Simple(k_str) = k {
-                            shapes.insert(k_str.clone(), sh);
-                        }
-                    }
-                    _ => {
-                        if let BindingPattern::Simple(k_str) = k {
-                            if let Some(sh) = try_infer_shape(&resolved, shapes) {
-                                shapes.insert(k_str.clone(), sh);
+                        _ => {
+                            if let BindingPattern::Simple(k_str) = k {
+                                if let Some(sh) = try_infer_shape(&resolved, shapes) {
+                                    shapes.insert(k_str.clone(), sh);
+                                }
                             }
                         }
                     }
-                }
-                (k.clone(), resolved)
-            }).collect();
+                    (k.clone(), resolved)
+                })
+                .collect();
             CompiledExpr::Let {
                 bindings: new_bindings,
-                body: Box::new(resolve_constants_rec(body, constants, locals, shapes, skip_lambda)),
+                body: Box::new(resolve_constants_rec(
+                    body,
+                    constants,
+                    locals,
+                    shapes,
+                    skip_lambda,
+                )),
             }
         }
         CompiledExpr::Do(exprs) => CompiledExpr::Do(
-            exprs.iter().map(|e| resolve_constants_rec(e, constants, locals, shapes, skip_lambda)).collect(),
+            exprs
+                .iter()
+                .map(|e| resolve_constants_rec(e, constants, locals, shapes, skip_lambda))
+                .collect(),
         ),
-        CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
-            condition: Box::new(resolve_constants_rec(condition, constants, locals, shapes, skip_lambda)),
-            then_branch: Box::new(resolve_constants_rec(then_branch, constants, locals, shapes, skip_lambda)),
-            else_branch: else_branch.as_ref().map(|e| Box::new(resolve_constants_rec(e, constants, locals, shapes, skip_lambda))),
+        CompiledExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => CompiledExpr::If {
+            condition: Box::new(resolve_constants_rec(
+                condition,
+                constants,
+                locals,
+                shapes,
+                skip_lambda,
+            )),
+            then_branch: Box::new(resolve_constants_rec(
+                then_branch,
+                constants,
+                locals,
+                shapes,
+                skip_lambda,
+            )),
+            else_branch: else_branch.as_ref().map(|e| {
+                Box::new(resolve_constants_rec(
+                    e,
+                    constants,
+                    locals,
+                    shapes,
+                    skip_lambda,
+                ))
+            }),
         },
-    CompiledExpr::Lambda { params, body } => {
-        if skip_lambda {
-            let _ = (constants, locals, shapes);
-            CompiledExpr::Lambda { params: params.clone(), body: body.clone() }
-        } else {
-            let saved_locals = locals.clone();
-            for p in params {
-                locals.remove(p);
-            }
-            let resolved_body = resolve_constants_rec(body, constants, locals, shapes, skip_lambda);
-            *locals = saved_locals;
-            CompiledExpr::Lambda {
-                params: params.clone(),
-                body: Box::new(resolved_body),
+        CompiledExpr::Lambda { params, body } => {
+            if skip_lambda {
+                let _ = (constants, locals, shapes);
+                CompiledExpr::Lambda {
+                    params: params.clone(),
+                    body: body.clone(),
+                }
+            } else {
+                let saved_locals = locals.clone();
+                for p in params {
+                    locals.remove(p);
+                }
+                let resolved_body =
+                    resolve_constants_rec(body, constants, locals, shapes, skip_lambda);
+                *locals = saved_locals;
+                CompiledExpr::Lambda {
+                    params: params.clone(),
+                    body: Box::new(resolved_body),
                 }
             }
         }
         CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
-            callee: Box::new(resolve_constants_rec(callee, constants, locals, shapes, skip_lambda)),
-            args: args.iter().map(|a| resolve_constants_rec(a, constants, locals, shapes, skip_lambda)).collect(),
+            callee: Box::new(resolve_constants_rec(
+                callee,
+                constants,
+                locals,
+                shapes,
+                skip_lambda,
+            )),
+            args: args
+                .iter()
+                .map(|a| resolve_constants_rec(a, constants, locals, shapes, skip_lambda))
+                .collect(),
         },
-        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => CompiledExpr::Repeat {
+        CompiledExpr::Repeat {
+            index_var,
+            count,
+            acc_var,
+            acc_init,
+            body,
+        } => CompiledExpr::Repeat {
             index_var: index_var.clone(),
-            count: Box::new(resolve_constants_rec(count, constants, locals, shapes, skip_lambda)),
+            count: Box::new(resolve_constants_rec(
+                count,
+                constants,
+                locals,
+                shapes,
+                skip_lambda,
+            )),
             acc_var: acc_var.clone(),
-            acc_init: Box::new(resolve_constants_rec(acc_init, constants, locals, shapes, skip_lambda)),
-            body: Box::new(resolve_constants_rec(body, constants, locals, shapes, skip_lambda)),
+            acc_init: Box::new(resolve_constants_rec(
+                acc_init,
+                constants,
+                locals,
+                shapes,
+                skip_lambda,
+            )),
+            body: Box::new(resolve_constants_rec(
+                body,
+                constants,
+                locals,
+                shapes,
+                skip_lambda,
+            )),
         },
         CompiledExpr::Vector(elems) => CompiledExpr::Vector(
-            elems.iter().map(|e| resolve_constants_rec(e, constants, locals, shapes, skip_lambda)).collect(),
+            elems
+                .iter()
+                .map(|e| resolve_constants_rec(e, constants, locals, shapes, skip_lambda))
+                .collect(),
         ),
         other => other.clone(),
     }
 }
 
-/// Lower (get alias :key) patterns introduced after inlining stdlib functions.
-///
-/// After inlining, a call like (layer-norm h (GetTupleElement layer-p [1]) 2)
-/// becomes (let [p (GetTupleElement layer-p [1])] (let [gamma (get p :gamma)] ...)).
-/// This pass tracks such aliases and resolves (get alias :key) to
-/// GetTupleElement { param: root_param, indices: full_indices }.
+/// Lower dictionary accesses through `Let` aliases.
 pub fn lower_inlined_gets(
     body: &CompiledExpr,
     index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
@@ -250,7 +350,10 @@ fn lower_inlined_gets_rec(
                             for k in keys {
                                 match k {
                                     CompiledExpr::Keyword(s) => path.push(s.clone()),
-                                    _ => { ok = false; break; }
+                                    _ => {
+                                        ok = false;
+                                        break;
+                                    }
                                 }
                             }
                             ok
@@ -263,13 +366,20 @@ fn lower_inlined_gets_rec(
                         for arg in &args[1..] {
                             match arg {
                                 CompiledExpr::Keyword(k) => path.push(k.clone()),
-                                _ => { ok = false; break; }
+                                _ => {
+                                    ok = false;
+                                    break;
+                                }
                             }
                         }
                         ok
                     };
                     if resolved {
-                        if let Some(imap) = index_maps.iter().find(|(p, _)| p == root_param).map(|(_, m)| m) {
+                        if let Some(imap) = index_maps
+                            .iter()
+                            .find(|(p, _)| p == root_param)
+                            .map(|(_, m)| m)
+                        {
                             if let Some(indices) = imap.get(&path) {
                                 return CompiledExpr::GetTupleElement {
                                     param: root_param.clone(),
@@ -280,10 +390,8 @@ fn lower_inlined_gets_rec(
                     }
                 }
             }
-            // Recurse into args, then check if args[0] resolved to a GetTupleElement.
-            // This handles nested (get (get alias :k1) :k2) where the inner get resolved
-            // but the outer get's receiver is now a GetTupleElement, not a Symbol.
-            let resolved_args: Vec<_> = args.iter()
+            let resolved_args: Vec<_> = args
+                .iter()
                 .map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse))
                 .collect();
             if let CompiledExpr::GetTupleElement { param, indices } = &resolved_args[0] {
@@ -296,7 +404,10 @@ fn lower_inlined_gets_rec(
                             for k in keys {
                                 match k {
                                     CompiledExpr::Keyword(s) => path.push(s.clone()),
-                                    _ => { ok = false; break; }
+                                    _ => {
+                                        ok = false;
+                                        break;
+                                    }
                                 }
                             }
                             ok
@@ -308,13 +419,18 @@ fn lower_inlined_gets_rec(
                         for arg in &resolved_args[1..] {
                             match arg {
                                 CompiledExpr::Keyword(k) => path.push(k.clone()),
-                                _ => { ok = false; break; }
+                                _ => {
+                                    ok = false;
+                                    break;
+                                }
                             }
                         }
                         ok
                     };
                     if keys_ok {
-                        if let Some(imap) = index_maps.iter().find(|(p, _)| p == param).map(|(_, m)| m) {
+                        if let Some(imap) =
+                            index_maps.iter().find(|(p, _)| p == param).map(|(_, m)| m)
+                        {
                             if let Some(full_indices) = imap.get(&path) {
                                 return CompiledExpr::GetTupleElement {
                                     param: param.clone(),
@@ -332,35 +448,36 @@ fn lower_inlined_gets_rec(
             }
         }
         CompiledExpr::Let { bindings, body } => {
-            let new_bindings: Vec<_> = bindings.iter().map(|(k, v)| {
-                let resolved = lower_inlined_gets_rec(v, index_maps, aliases, reverse);
-                match &resolved {
-                    CompiledExpr::GetTupleElement { param, indices } => {
-                        let key = (param.clone(), indices.clone());
-                        if let Some(path) = reverse.get(&key) {
-                            if let BindingPattern::Simple(k_str) = k {
-                                aliases.insert(k_str.clone(), (param.clone(), path.clone()));
+            let new_bindings: Vec<_> = bindings
+                .iter()
+                .map(|(k, v)| {
+                    let resolved = lower_inlined_gets_rec(v, index_maps, aliases, reverse);
+                    match &resolved {
+                        CompiledExpr::GetTupleElement { param, indices } => {
+                            let key = (param.clone(), indices.clone());
+                            if let Some(path) = reverse.get(&key) {
+                                if let BindingPattern::Simple(k_str) = k {
+                                    aliases.insert(k_str.clone(), (param.clone(), path.clone()));
+                                }
                             }
                         }
+                        CompiledExpr::Symbol(s) => {
+                            if let Some(existing) = aliases.get(s).cloned() {
+                                if let BindingPattern::Simple(k_str) = k {
+                                    aliases.insert(k_str.clone(), existing);
+                                }
+                            }
+                            else if index_maps.iter().any(|(p, _)| p == s) {
+                                if let BindingPattern::Simple(k_str) = k {
+                                    aliases.insert(k_str.clone(), (s.clone(), vec![]));
+                                }
+                            }
+                        }
+                        _ => {}
                     }
-                    CompiledExpr::Symbol(s) => {
-                        // Propagate alias: if `s` is itself an alias, copy it
-                        if let Some(existing) = aliases.get(s).cloned() {
-                            if let BindingPattern::Simple(k_str) = k {
-                                aliases.insert(k_str.clone(), existing);
-                            }
-                        }
-                        // If `s` is a known param root, create root alias (empty path)
-                        else if index_maps.iter().any(|(p, _)| p == s) {
-                            if let BindingPattern::Simple(k_str) = k {
-                                aliases.insert(k_str.clone(), (s.clone(), vec![]));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-                (k.clone(), resolved)
-            }).collect();
+                    (k.clone(), resolved)
+                })
+                .collect();
             CompiledExpr::Let {
                 bindings: new_bindings,
                 body: Box::new(lower_inlined_gets_rec(body, index_maps, aliases, reverse)),
@@ -368,16 +485,35 @@ fn lower_inlined_gets_rec(
         }
         CompiledExpr::FunctionCall { name, args, .. } => CompiledExpr::FunctionCall {
             name: name.clone(),
-            args: args.iter().map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse)).collect(),
+            args: args
+                .iter()
+                .map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse))
+                .collect(),
             loc: None,
         },
         CompiledExpr::Do(exprs) => CompiledExpr::Do(
-            exprs.iter().map(|e| lower_inlined_gets_rec(e, index_maps, aliases, reverse)).collect(),
+            exprs
+                .iter()
+                .map(|e| lower_inlined_gets_rec(e, index_maps, aliases, reverse))
+                .collect(),
         ),
-        CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
-            condition: Box::new(lower_inlined_gets_rec(condition, index_maps, aliases, reverse)),
-            then_branch: Box::new(lower_inlined_gets_rec(then_branch, index_maps, aliases, reverse)),
-            else_branch: else_branch.as_ref().map(|e| Box::new(lower_inlined_gets_rec(e, index_maps, aliases, reverse))),
+        CompiledExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => CompiledExpr::If {
+            condition: Box::new(lower_inlined_gets_rec(
+                condition, index_maps, aliases, reverse,
+            )),
+            then_branch: Box::new(lower_inlined_gets_rec(
+                then_branch,
+                index_maps,
+                aliases,
+                reverse,
+            )),
+            else_branch: else_branch
+                .as_ref()
+                .map(|e| Box::new(lower_inlined_gets_rec(e, index_maps, aliases, reverse))),
         },
         CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
             params: params.clone(),
@@ -385,25 +521,37 @@ fn lower_inlined_gets_rec(
         },
         CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
             callee: Box::new(lower_inlined_gets_rec(callee, index_maps, aliases, reverse)),
-            args: args.iter().map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse)).collect(),
+            args: args
+                .iter()
+                .map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse))
+                .collect(),
         },
-        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => CompiledExpr::Repeat {
+        CompiledExpr::Repeat {
+            index_var,
+            count,
+            acc_var,
+            acc_init,
+            body,
+        } => CompiledExpr::Repeat {
             index_var: index_var.clone(),
             count: Box::new(lower_inlined_gets_rec(count, index_maps, aliases, reverse)),
             acc_var: acc_var.clone(),
-            acc_init: Box::new(lower_inlined_gets_rec(acc_init, index_maps, aliases, reverse)),
+            acc_init: Box::new(lower_inlined_gets_rec(
+                acc_init, index_maps, aliases, reverse,
+            )),
             body: Box::new(lower_inlined_gets_rec(body, index_maps, aliases, reverse)),
         },
         CompiledExpr::Vector(elems) => CompiledExpr::Vector(
-            elems.iter().map(|e| lower_inlined_gets_rec(e, index_maps, aliases, reverse)).collect(),
+            elems
+                .iter()
+                .map(|e| lower_inlined_gets_rec(e, index_maps, aliases, reverse))
+                .collect(),
         ),
         other => other.clone(),
     }
 }
 
-/// Propagate tuple_key_layouts from dict key names to Let-bound variable names.
-/// e.g. `input-layer = GetTupleElement("params", [2])` where index 2 = key "input"
-/// -> copy tuple_key_layouts["input"] to tuple_key_layouts["input-layer"]
+/// Propagate dictionary layouts through `Let` bindings.
 pub fn propagate_let_layouts(
     expr: &CompiledExpr,
     idx_to_key: &HashMap<(String, usize), String>,
@@ -413,7 +561,6 @@ pub fn propagate_let_layouts(
         CompiledExpr::Let { bindings, body } => {
             for (var_name, value_expr) in bindings {
                 if let CompiledExpr::GetTupleElement { param, indices } = value_expr {
-                    // Walk idx_to_key chain for arbitrary depth
                     let mut cur = param.clone();
                     let mut resolved = true;
                     for &idx in indices {
@@ -446,7 +593,11 @@ pub fn propagate_let_layouts(
                 propagate_let_layouts(e, idx_to_key, layouts);
             }
         }
-        CompiledExpr::If { condition, then_branch, else_branch } => {
+        CompiledExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             propagate_let_layouts(condition, idx_to_key, layouts);
             propagate_let_layouts(then_branch, idx_to_key, layouts);
             if let Some(e) = else_branch {
@@ -455,20 +606,17 @@ pub fn propagate_let_layouts(
         }
         CompiledExpr::Lambda { body, .. } => {
             propagate_let_layouts(body, idx_to_key, layouts);
-        },
+        }
         _ => {}
     }
 }
 
-/// Replace all free occurrences of Symbol(name) with a constant value.
-/// Respects lambda scoping: if a lambda rebinds the same name, the inner
-/// occurrences are left untouched.
+/// Replace free occurrences of a symbol with a scalar constant.
 pub fn substitute_scalar_param(expr: &CompiledExpr, name: &str, value: f64) -> CompiledExpr {
     match expr {
         CompiledExpr::Symbol(s) if s == name => f64_to_const(value),
         CompiledExpr::Lambda { params, body } => {
             if params.iter().any(|p| p == name) {
-                // Lambda shadows this name -> don't recurse
                 expr.clone()
             } else {
                 CompiledExpr::Lambda {
@@ -476,7 +624,7 @@ pub fn substitute_scalar_param(expr: &CompiledExpr, name: &str, value: f64) -> C
                     body: Box::new(substitute_scalar_param(body, name, value)),
                 }
             }
-        },
+        }
         CompiledExpr::Let { bindings, body } => {
             let mut new_bindings = Vec::new();
             let mut shadowed = false;
@@ -495,29 +643,56 @@ pub fn substitute_scalar_param(expr: &CompiledExpr, name: &str, value: f64) -> C
             }
             CompiledExpr::Let {
                 bindings: new_bindings,
-                body: if shadowed { body.clone() } else {
+                body: if shadowed {
+                    body.clone()
+                } else {
                     Box::new(substitute_scalar_param(body, name, value))
                 },
             }
-        },
-        CompiledExpr::FunctionCall { name: fn_name, args, .. } => CompiledExpr::FunctionCall {
+        }
+        CompiledExpr::FunctionCall {
+            name: fn_name,
+            args,
+            ..
+        } => CompiledExpr::FunctionCall {
             name: fn_name.clone(),
-            args: args.iter().map(|a| substitute_scalar_param(a, name, value)).collect(),
+            args: args
+                .iter()
+                .map(|a| substitute_scalar_param(a, name, value))
+                .collect(),
             loc: None,
         },
         CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
             callee: Box::new(substitute_scalar_param(callee, name, value)),
-            args: args.iter().map(|a| substitute_scalar_param(a, name, value)).collect(),
+            args: args
+                .iter()
+                .map(|a| substitute_scalar_param(a, name, value))
+                .collect(),
         },
-        CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
+        CompiledExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => CompiledExpr::If {
             condition: Box::new(substitute_scalar_param(condition, name, value)),
             then_branch: Box::new(substitute_scalar_param(then_branch, name, value)),
-            else_branch: else_branch.as_ref().map(|e| Box::new(substitute_scalar_param(e, name, value))),
+            else_branch: else_branch
+                .as_ref()
+                .map(|e| Box::new(substitute_scalar_param(e, name, value))),
         },
         CompiledExpr::Vector(elems) => CompiledExpr::Vector(
-            elems.iter().map(|e| substitute_scalar_param(e, name, value)).collect(),
+            elems
+                .iter()
+                .map(|e| substitute_scalar_param(e, name, value))
+                .collect(),
         ),
-        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => {
+        CompiledExpr::Repeat {
+            index_var,
+            count,
+            acc_var,
+            acc_init,
+            body,
+        } => {
             let new_init = Box::new(substitute_scalar_param(acc_init, name, value));
             let shadowed = index_var == name || acc_var == name;
             CompiledExpr::Repeat {
@@ -525,11 +700,13 @@ pub fn substitute_scalar_param(expr: &CompiledExpr, name: &str, value: f64) -> C
                 count: count.clone(),
                 acc_var: acc_var.clone(),
                 acc_init: new_init,
-                body: if shadowed { body.clone() } else {
+                body: if shadowed {
+                    body.clone()
+                } else {
                     Box::new(substitute_scalar_param(body, name, value))
                 },
             }
-        },
+        }
         _ => expr.clone(),
     }
 }
@@ -555,7 +732,9 @@ fn extract_scalars_rec(
         Value::Int(n) => Some(*n as f64),
         Value::Float(f) => Some(*f as f64),
         Value::Tensor { data, .. } if data.is_empty() => None,
-        Value::Tensor { data, .. } if data.len() == 1 => Some(data.iter().next().copied().unwrap() as f64),
+        Value::Tensor { data, .. } if data.len() == 1 => {
+            Some(data.iter().next().copied().unwrap() as f64)
+        }
         Value::Dict(map) => {
             for (key, child) in map {
                 path.push(key.clone());
@@ -573,14 +752,12 @@ fn extract_scalars_rec(
 
 fn push_first_last(name: &str, expr: CompiledExpr) -> CompiledExpr {
     match expr {
-        CompiledExpr::Vector(elems) => {
-            if name == "first" {
-                elems.into_iter().next()
-            } else {
-                elems.into_iter().last()
-            }
-            .unwrap_or_else(|| CompiledExpr::Vector(vec![]))
+        CompiledExpr::Vector(elems) => if name == "first" {
+            elems.into_iter().next()
+        } else {
+            elems.into_iter().last()
         }
+        .unwrap_or_else(|| CompiledExpr::Vector(vec![])),
         CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
             bindings,
             body: Box::new(push_first_last(name, *body)),
@@ -599,18 +776,13 @@ pub fn try_infer_shape(
 ) -> Option<Vec<i64>> {
     match expr {
         CompiledExpr::Symbol(s) => shapes.get(s).cloned(),
-        // Vector literal: infer shape by counting nested structure
-        // e.g. Vector([Vector([1,2,3])]) -> [1,3]
         CompiledExpr::Vector(elems) => {
             if elems.is_empty() {
                 return Some(vec![0]);
             }
-            // Check if all elements are Vectors (2D+ tensor literal)
             if let CompiledExpr::Vector(inner) = &elems[0] {
-                // For simplicity, assume rectangular: [outer_len, inner_len]
                 Some(vec![elems.len() as i64, inner.len() as i64])
             } else {
-                // 1D vector
                 Some(vec![elems.len() as i64])
             }
         }
@@ -626,13 +798,14 @@ pub fn try_infer_shape(
             try_infer_shape(body, &inner)
         }
         CompiledExpr::FunctionCall { name, args, .. } => match name.as_str() {
-            "+" | "-" | "*" | "/" | "**" | "sqrt" | "exp" | "log" | "abs"
-            | "relu" | "gelu" | "tanh" | "sigmoid" | "neg"
-            | "maximum" | "minimum" | "clamp"
-            | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not"
-            | "where" => args.iter().find_map(|a| try_infer_shape(a, shapes)),
-            "layer-norm" | "softmax" | "normalize" | "log-softmax"
-                => args.first().and_then(|a| try_infer_shape(a, shapes)),
+            "+" | "-" | "*" | "/" | "**" | "sqrt" | "exp" | "log" | "abs" | "relu" | "gelu"
+            | "tanh" | "sigmoid" | "neg" | "maximum" | "minimum" | "clamp" | "==" | "!=" | "<"
+            | "<=" | ">" | ">=" | "and" | "or" | "not" | "where" => {
+                args.iter().find_map(|a| try_infer_shape(a, shapes))
+            }
+            "layer-norm" | "softmax" | "normalize" | "log-softmax" => {
+                args.first().and_then(|a| try_infer_shape(a, shapes))
+            }
             "transpose" | "tr" if args.len() == 1 || args.len() == 2 => {
                 let sh = try_infer_shape(&args[0], shapes)?;
                 if sh.len() >= 2 {
@@ -647,20 +820,35 @@ pub fn try_infer_shape(
             "first" => args.first().and_then(|a| try_infer_shape(a, shapes)),
             "reshape" if args.len() == 2 => {
                 if let CompiledExpr::Vector(elems) = &args[1] {
-                    elems.iter().map(|e| {
-                        if let CompiledExpr::Integer(n) = e { Some(*n) } else { None }
-                    }).collect()
+                    elems
+                        .iter()
+                        .map(|e| {
+                            if let CompiledExpr::Integer(n) = e {
+                                Some(*n)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
                 } else {
                     None
                 }
             }
             "swapaxes" if args.len() == 3 => {
-                if let (Some(sh), Some(CompiledExpr::Integer(a)), Some(CompiledExpr::Integer(b)))
-                    = (try_infer_shape(&args[0], shapes), args.get(1), args.get(2))
+                if let (Some(sh), Some(CompiledExpr::Integer(a)), Some(CompiledExpr::Integer(b))) =
+                    (try_infer_shape(&args[0], shapes), args.get(1), args.get(2))
                 {
                     let ndim = sh.len() as i64;
-                    let ai = if *a < 0 { (ndim + a) as usize } else { *a as usize };
-                    let bi = if *b < 0 { (ndim + b) as usize } else { *b as usize };
+                    let ai = if *a < 0 {
+                        (ndim + a) as usize
+                    } else {
+                        *a as usize
+                    };
+                    let bi = if *b < 0 {
+                        (ndim + b) as usize
+                    } else {
+                        *b as usize
+                    };
                     if ai < sh.len() && bi < sh.len() {
                         let mut out = sh;
                         out.swap(ai, bi);
@@ -678,24 +866,24 @@ pub fn try_infer_shape(
                 match (lhs.len(), rhs.len()) {
                     (1, 1) => Some(vec![]),
                     (1, r) if r >= 2 => {
-                        let mut out = rhs[..r-2].to_vec();
-                        out.extend_from_slice(&rhs[r-1..]);
+                        let mut out = rhs[..r - 2].to_vec();
+                        out.extend_from_slice(&rhs[r - 1..]);
                         Some(out)
                     }
-                    (l, 1) if l >= 1 => Some(lhs[..l-1].to_vec()),
+                    (l, 1) if l >= 1 => Some(lhs[..l - 1].to_vec()),
                     (l, r) if l >= 2 && r >= 2 => {
-                        let mut out = lhs[..lhs.len()-1].to_vec();
+                        let mut out = lhs[..lhs.len() - 1].to_vec();
                         out.push(*rhs.last().unwrap());
                         Some(out)
                     }
                     _ => None,
                 }
             }
-            // get: tensor indexing, (get tensor idx)
-            // tensor[idx] -> idx.shape + tensor.shape[1:]
             "get" if args.len() == 2 => {
                 let tensor_shape = try_infer_shape(&args[0], shapes)?;
-                if tensor_shape.is_empty() { return None; }
+                if tensor_shape.is_empty() {
+                    return None;
+                }
                 let trailing = &tensor_shape[1..];
                 match try_infer_shape(&args[1], shapes) {
                     Some(idx_shape) => {
@@ -706,11 +894,11 @@ pub fn try_infer_shape(
                     None => Some(trailing.to_vec()), // scalar index
                 }
             }
-            // slice: (slice tensor start end), axis 0
             "slice" if args.len() >= 3 => {
                 let tensor_shape = try_infer_shape(&args[0], shapes)?;
-                if tensor_shape.is_empty() { return None; }
-                // Parse optional :axis keyword
+                if tensor_shape.is_empty() {
+                    return None;
+                }
                 let mut axis_raw: i64 = 0;
                 for (i, a) in args.iter().enumerate() {
                     if let CompiledExpr::Keyword(k) = a {
@@ -722,9 +910,17 @@ pub fn try_infer_shape(
                     }
                 }
                 let ndim = tensor_shape.len() as i64;
-                let axis = if axis_raw < 0 { (ndim + axis_raw) as usize } else { axis_raw as usize };
-                if axis >= tensor_shape.len() { return None; }
-                if let (CompiledExpr::Integer(start), CompiledExpr::Integer(end)) = (&args[1], &args[2]) {
+                let axis = if axis_raw < 0 {
+                    (ndim + axis_raw) as usize
+                } else {
+                    axis_raw as usize
+                };
+                if axis >= tensor_shape.len() {
+                    return None;
+                }
+                if let (CompiledExpr::Integer(start), CompiledExpr::Integer(end)) =
+                    (&args[1], &args[2])
+                {
                     let sliced_dim = end - start;
                     let mut out = tensor_shape.clone();
                     out[axis] = sliced_dim;
@@ -736,7 +932,6 @@ pub fn try_infer_shape(
             _ => None,
         },
         CompiledExpr::GetTupleElement { param, indices } => {
-            // Try to find the shape in the shapes map using a synthetic key
             let key = format!("{}@{:?}", param, indices);
             shapes.get(&key).cloned()
         }
@@ -753,7 +948,9 @@ fn f64_to_const(val: f64) -> CompiledExpr {
 }
 
 fn try_fold_arithmetic(name: &str, args: &[CompiledExpr]) -> Option<CompiledExpr> {
-    if args.len() != 2 { return None; }
+    if args.len() != 2 {
+        return None;
+    }
     let a = extract_numeric(&args[0])?;
     let b = extract_numeric(&args[1])?;
     let result = match name {
@@ -777,10 +974,10 @@ fn extract_numeric(expr: &CompiledExpr) -> Option<f64> {
 
 // ── Reduce unrolling ──
 
-use crate::lowering::stablehlo::StableHLOType;
 use crate::autodiff::replace_symbol;
 use crate::core::error::SheafError;
-use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+use crate::lowering::stablehlo::StableHLOType;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 static UNROLL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static DESTRUCTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -791,16 +988,16 @@ fn fresh_temp() -> String {
     format!("__dst{}", n)
 }
 
-/// Navigate a `StableHLOType` tree following tuple indices.
-///
-/// E.g. for `Tuple([Tuple([T0, T1]), Tuple([T2, T3])])` with indices `[1, 0]`
-/// -> returns `T2`.
+/// Look up a nested tuple type.
 fn resolve_type_at_indices(
     param: &str,
     indices: &[usize],
     param_types: &[(String, StableHLOType)],
 ) -> Option<StableHLOType> {
-    let base = param_types.iter().find(|(n, _)| n == param).map(|(_, t)| t)?;
+    let base = param_types
+        .iter()
+        .find(|(n, _)| n == param)
+        .map(|(_, t)| t)?;
     let mut current = base;
     for &idx in indices {
         match current {
@@ -813,23 +1010,7 @@ fn resolve_type_at_indices(
     Some(current.clone())
 }
 
-/// Unroll `reduce` calls into Let chains for symbolic AD.
-///
-/// Transforms:
-/// ```text
-/// reduce(fn [carry elem] body, init, coll)
-/// ```
-/// into:
-/// ```text
-/// let __r_0 = body[carry->init, elem->coll[0]]
-/// let __r_1 = body[carry->__r_0, elem->coll[1]]
-/// ...
-/// result = __r_{n-1}
-/// ```
-///
-/// The collection length `n` is determined from the StableHLO type of `coll`:
-/// - `GetTupleElement { param, indices }` -> resolve type -> `Tuple(elems)` -> n = len
-/// - `Vector(elems)` -> n = len
+/// Unroll statically sized `reduce` calls into `Let` chains for symbolic AD.
 pub fn unroll_reduces(
     expr: &CompiledExpr,
     param_types: &[(String, StableHLOType)],
@@ -843,19 +1024,18 @@ fn unroll_reduces_rec(
     let_env: &HashMap<String, CompiledExpr>,
 ) -> CompiledExpr {
     match expr {
-        CompiledExpr::FunctionCall { name, args, .. }
-            if name == "reduce" && args.len() == 3 =>
-        {
-            // Extract lambda, init, coll
+        CompiledExpr::FunctionCall { name, args, .. } if name == "reduce" && args.len() == 3 => {
             let (carry_p, elem_p, body) = match &args[0] {
                 CompiledExpr::Lambda { params, body } if params.len() == 2 => {
                     (&params[0], &params[1], body.as_ref())
                 }
                 _ => {
-                    // Not a lambda, can't unroll, recurse into args
                     return CompiledExpr::FunctionCall {
                         name: name.clone(),
-                        args: args.iter().map(|a| unroll_reduces_rec(a, param_types, let_env)).collect(),
+                        args: args
+                            .iter()
+                            .map(|a| unroll_reduces_rec(a, param_types, let_env))
+                            .collect(),
                         loc: None,
                     };
                 }
@@ -864,26 +1044,23 @@ fn unroll_reduces_rec(
             let init = unroll_reduces_rec(&args[1], param_types, let_env);
             let coll = unroll_reduces_rec(&args[2], param_types, let_env);
 
-            // Resolve the collection: if it's a Let-bound symbol, look through to the GTE
             let resolved_coll = match &coll {
                 CompiledExpr::Symbol(s) => let_env.get(s).unwrap_or(&coll),
                 other => other,
             };
 
-            // Determine n and element accessor
             let unroll_info = match resolved_coll {
                 CompiledExpr::GetTupleElement { param, indices } => {
-                    resolve_type_at_indices(param, indices, param_types)
-                        .and_then(|ty| match ty {
-                            StableHLOType::Tuple(elems, _) => Some((
-                                elems.len(),
-                                UnrollColl::TupleElement {
-                                    param: param.clone(),
-                                    base_indices: indices.clone(),
-                                },
-                            )),
-                            _ => None,
-                        })
+                    resolve_type_at_indices(param, indices, param_types).and_then(|ty| match ty {
+                        StableHLOType::Tuple(elems, _) => Some((
+                            elems.len(),
+                            UnrollColl::TupleElement {
+                                param: param.clone(),
+                                base_indices: indices.clone(),
+                            },
+                        )),
+                        _ => None,
+                    })
                 }
                 CompiledExpr::Vector(elems) => {
                     Some((elems.len(), UnrollColl::Vector(elems.clone())))
@@ -894,7 +1071,6 @@ fn unroll_reduces_rec(
             let (n, coll_info) = match unroll_info {
                 Some(info) => info,
                 None => {
-                    // Can't determine length, leave as-is
                     return CompiledExpr::FunctionCall {
                         name: name.clone(),
                         args: vec![args[0].clone(), init, coll],
@@ -913,9 +1089,11 @@ fn unroll_reduces_rec(
             for i in 0..n {
                 let var_name = format!("__reduce_{}_{}", id, i);
 
-                // Element expression for iteration i
                 let elem_expr = match &coll_info {
-                    UnrollColl::TupleElement { param, base_indices } => {
+                    UnrollColl::TupleElement {
+                        param,
+                        base_indices,
+                    } => {
                         let mut indices = base_indices.clone();
                         indices.push(i);
                         CompiledExpr::GetTupleElement {
@@ -926,19 +1104,16 @@ fn unroll_reduces_rec(
                     UnrollColl::Vector(elems) => elems[i].clone(),
                 };
 
-                // Carry expression: init for i=0, previous var for i>0
                 let carry_expr = if i == 0 {
                     init.clone()
                 } else {
                     CompiledExpr::Symbol(format!("__reduce_{}_{}", id, i - 1))
                 };
 
-                // Substitute carry and elem params in body
                 let mut iteration_body = body.clone();
                 iteration_body = replace_symbol(&iteration_body, carry_p, &carry_expr);
                 iteration_body = replace_symbol(&iteration_body, elem_p, &elem_expr);
 
-                // Recursively unroll any nested reduces in the substituted body
                 iteration_body = unroll_reduces_rec(&iteration_body, param_types, let_env);
 
                 bindings.push((BindingPattern::Simple(var_name), iteration_body));
@@ -951,10 +1126,12 @@ fn unroll_reduces_rec(
             }
         }
 
-        // Recurse into all other expression types
         CompiledExpr::FunctionCall { name, args, .. } => CompiledExpr::FunctionCall {
             name: name.clone(),
-            args: args.iter().map(|a| unroll_reduces_rec(a, param_types, let_env)).collect(),
+            args: args
+                .iter()
+                .map(|a| unroll_reduces_rec(a, param_types, let_env))
+                .collect(),
             loc: None,
         },
         CompiledExpr::Let { bindings, body } => {
@@ -973,14 +1150,23 @@ fn unroll_reduces_rec(
                 bindings: new_bindings,
                 body: Box::new(unroll_reduces_rec(body, param_types, &new_env)),
             }
-        },
+        }
         CompiledExpr::Do(exprs) => CompiledExpr::Do(
-            exprs.iter().map(|e| unroll_reduces_rec(e, param_types, let_env)).collect(),
+            exprs
+                .iter()
+                .map(|e| unroll_reduces_rec(e, param_types, let_env))
+                .collect(),
         ),
-        CompiledExpr::If { condition, then_branch, else_branch } => CompiledExpr::If {
+        CompiledExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => CompiledExpr::If {
             condition: Box::new(unroll_reduces_rec(condition, param_types, let_env)),
             then_branch: Box::new(unroll_reduces_rec(then_branch, param_types, let_env)),
-            else_branch: else_branch.as_ref().map(|e| Box::new(unroll_reduces_rec(e, param_types, let_env))),
+            else_branch: else_branch
+                .as_ref()
+                .map(|e| Box::new(unroll_reduces_rec(e, param_types, let_env))),
         },
         CompiledExpr::Lambda { params, body } => CompiledExpr::Lambda {
             params: params.clone(),
@@ -988,9 +1174,18 @@ fn unroll_reduces_rec(
         },
         CompiledExpr::LambdaCall { callee, args } => CompiledExpr::LambdaCall {
             callee: Box::new(unroll_reduces_rec(callee, param_types, let_env)),
-            args: args.iter().map(|a| unroll_reduces_rec(a, param_types, let_env)).collect(),
+            args: args
+                .iter()
+                .map(|a| unroll_reduces_rec(a, param_types, let_env))
+                .collect(),
         },
-        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => CompiledExpr::Repeat {
+        CompiledExpr::Repeat {
+            index_var,
+            count,
+            acc_var,
+            acc_init,
+            body,
+        } => CompiledExpr::Repeat {
             index_var: index_var.clone(),
             count: Box::new(unroll_reduces_rec(count, param_types, let_env)),
             acc_var: acc_var.clone(),
@@ -998,14 +1193,20 @@ fn unroll_reduces_rec(
             body: Box::new(unroll_reduces_rec(body, param_types, let_env)),
         },
         CompiledExpr::Vector(elems) => CompiledExpr::Vector(
-            elems.iter().map(|e| unroll_reduces_rec(e, param_types, let_env)).collect(),
+            elems
+                .iter()
+                .map(|e| unroll_reduces_rec(e, param_types, let_env))
+                .collect(),
         ),
         other => other.clone(),
     }
 }
 
 enum UnrollColl {
-    TupleElement { param: String, base_indices: Vec<usize> },
+    TupleElement {
+        param: String,
+        base_indices: Vec<usize>,
+    },
     Vector(Vec<CompiledExpr>),
 }
 
@@ -1014,7 +1215,6 @@ pub fn classify_vectors(
     param_shapes: &HashMap<String, Vec<i64>>,
 ) -> CompiledExpr {
     let mut symbol_types = HashMap::new();
-    // Seed initial symbol_types from param_shapes: each param is a tensor of f32 with the given shape
     for (name, shape) in param_shapes {
         symbol_types.insert(name.clone(), StableHLOType::f32_tensor(shape.clone()));
     }
@@ -1027,24 +1227,16 @@ fn classify_vectors_rec(
 ) -> CompiledExpr {
     match expr {
         CompiledExpr::Let { bindings, body } => {
-            // Process each binding in order
             let mut new_bindings = Vec::with_capacity(bindings.len());
             for (pattern, value) in bindings {
-                // Classify the value expression with the current symbol_types
                 let value_classified = classify_vectors_rec(value, symbol_types);
-                // For Simple pattern, we bind the symbol to the type of the value
-                // For Destructure, we don't bind a single symbol (the inner symbols will be bound in desugaring)
                 if let BindingPattern::Simple(name) = &pattern {
-                    // Compute the type of the value
                     let ty = infer_type_with_context(&value_classified, &*symbol_types)
                         .unwrap_or_else(|_| StableHLOType::scalar_f32());
                     symbol_types.insert(name.clone(), ty);
                 }
-                // For Destructure, we do not add a single symbol to symbol_types here.
-                // The desugaring pass will bind the individual elements.
                 new_bindings.push((pattern.clone(), value_classified));
             }
-            // Now classify the body with the updated symbol_types
             let body_classified = classify_vectors_rec(*body, symbol_types);
             CompiledExpr::Let {
                 bindings: new_bindings,
@@ -1052,8 +1244,6 @@ fn classify_vectors_rec(
             }
         }
         CompiledExpr::Lambda { params, body } => {
-            // Push params into symbol_types for the duration of the body,
-            // defaulting to scalar unless the caller pre-populated a kind.
             let mut saved = Vec::new();
             for param in &params {
                 let old_ty = symbol_types.remove(param);
@@ -1066,8 +1256,12 @@ fn classify_vectors_rec(
             let body_classified = classify_vectors_rec(*body, symbol_types);
             for (param, old_ty) in saved {
                 match old_ty {
-                    Some(old) => { symbol_types.insert(param, old); }
-                    None => { symbol_types.remove(&param); }
+                    Some(old) => {
+                        symbol_types.insert(param, old);
+                    }
+                    None => {
+                        symbol_types.remove(&param);
+                    }
                 }
             }
             CompiledExpr::Lambda {
@@ -1076,17 +1270,13 @@ fn classify_vectors_rec(
             }
         }
         CompiledExpr::Vector(elems) => {
-            // First, classify each element recursively
             let mut elems_classified = Vec::with_capacity(elems.len());
             for e in elems {
                 elems_classified.push(classify_vectors_rec(e, symbol_types));
             }
-            // Now, apply the classification rule
-            // Rule 1: if try_flatten_to_constant succeeds -> keep as Vector
             if crate::lowering::codegen::try_flatten_to_constant(&elems_classified).is_some() {
                 return CompiledExpr::Vector(elems_classified);
             }
-            // Rule 2: if all elements are scalars (shape empty) -> keep as Vector
             let mut all_scalar = true;
             for e in &elems_classified {
                 if expr_is_tensor(e, symbol_types) {
@@ -1097,7 +1287,6 @@ fn classify_vectors_rec(
             if all_scalar {
                 return CompiledExpr::Vector(elems_classified);
             }
-            // Otherwise, convert to Tuple
             CompiledExpr::Tuple(elems_classified)
         }
         CompiledExpr::Tuple(elems) => {
@@ -1118,10 +1307,15 @@ fn classify_vectors_rec(
                 loc,
             }
         }
-        CompiledExpr::If { condition, then_branch, else_branch } => {
+        CompiledExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             let condition_classified = classify_vectors_rec(*condition, symbol_types);
             let then_classified = classify_vectors_rec(*then_branch, symbol_types);
-            let else_classified = else_branch.map(|e| Box::new(classify_vectors_rec(*e, symbol_types)));
+            let else_classified =
+                else_branch.map(|e| Box::new(classify_vectors_rec(*e, symbol_types)));
             CompiledExpr::If {
                 condition: Box::new(condition_classified),
                 then_branch: Box::new(then_classified),
@@ -1146,7 +1340,13 @@ fn classify_vectors_rec(
                 args: args_classified,
             }
         }
-        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => {
+        CompiledExpr::Repeat {
+            index_var,
+            count,
+            acc_var,
+            acc_init,
+            body,
+        } => {
             let count_classified = classify_vectors_rec(*count, symbol_types);
             let acc_init_classified = classify_vectors_rec(*acc_init, symbol_types);
             let body_classified = classify_vectors_rec(*body, symbol_types);
@@ -1158,7 +1358,6 @@ fn classify_vectors_rec(
                 body: Box::new(body_classified),
             }
         }
-        // For atomic nodes, we just return them.
         CompiledExpr::Integer(_)
         | CompiledExpr::Float(_)
         | CompiledExpr::Boolean(_)
@@ -1173,14 +1372,11 @@ fn classify_vectors_rec(
         | CompiledExpr::ValueAndGrad { .. }
         | CompiledExpr::Def { .. }
         | CompiledExpr::Guard { .. }
-        | CompiledExpr::While { .. }
-        => expr,
+        | CompiledExpr::While { .. } => expr,
     }
 }
 
-/// Determine the source kind of a destructuring source expression,
-/// using the symbol_types env (from classify_vectors) as ground truth.
-/// Returns one of {Tuple, Tensor1D, Unknown}.
+/// Classify a destructuring source.
 enum DestructKind {
     Tuple,
     Tensor1D,
@@ -1188,10 +1384,7 @@ enum DestructKind {
     Unknown,
 }
 
-fn kind_of(
-    expr: &CompiledExpr,
-    symbol_types: &HashMap<String, StableHLOType>,
-) -> DestructKind {
+fn kind_of(expr: &CompiledExpr, symbol_types: &HashMap<String, StableHLOType>) -> DestructKind {
     match expr {
         CompiledExpr::Tuple(_) => DestructKind::Tuple,
         CompiledExpr::Vector(_) => DestructKind::Vector1D,
@@ -1203,7 +1396,6 @@ fn kind_of(
                     if sh.len() == 1 && !sh.is_empty() {
                         DestructKind::Tensor1D
                     } else {
-                        // Scalar (shape empty) or >1-D tensor -> not a destructure source
                         DestructKind::Unknown
                     }
                 }
@@ -1214,14 +1406,7 @@ fn kind_of(
     }
 }
 
-/// Extract the statically-known length of a destructuring source.
-///
-/// Literal vectors/tuples resolve to their element count. A typed Symbol
-/// (e.g. a function parameter whose type was seeded into `symbol_types` by
-/// `classify_vectors` / `param_shapes`) resolves from its type: a 1-D tensor
-/// yields `shape[0]`, a tuple yields its arity. Returns `None` only when the
-/// length is genuinely unknown at compile time, so desugar never errors on a
-/// source whose length is in fact statically derivable.
+/// Return the statically known length of a destructuring source.
 fn static_length_with_types(
     expr: &CompiledExpr,
     symbol_types: &HashMap<String, StableHLOType>,
@@ -1244,34 +1429,20 @@ fn static_length_with_types(
     }
 }
 
-/// Desugar destructuring Let bindings into nested Let chains.
-/// 
-/// For a binding `(Destructure([a b c]), value)`, generates:
-/// ```scheme
-/// (let [tmp value]
-///   (let [a (get tmp 0)]
-///     (let [b (get tmp 1)]
-///       (let [c (get tmp 2)]
-///         <body>))))
-/// ```
+/// Desugar destructuring `Let` bindings.
 
 /// Shape-bearing operations and the argument positions that require compile-time integers.
 const SHAPE_BEARING_OPS: &[(&str, &[usize])] = &[
-    ("reshape", &[1]),              // dimensions
-    ("slice", &[1, 2]),             // start_indices, limit_indices
-    ("dynamic-slice", &[1, 2]),     // start_indices, limit_indices
-    ("one-hot", &[1]),              // num_classes
-    ("random-randint", &[2, 3]),    // low, high
-    ("random-split", &[1]),         // N
-    ("repeat", &[1]),               // count
+    ("reshape", &[1]),           // dimensions
+    ("slice", &[1, 2]),          // start_indices, limit_indices
+    ("dynamic-slice", &[1, 2]),  // start_indices, limit_indices
+    ("one-hot", &[1]),           // num_classes
+    ("random-randint", &[2, 3]), // low, high
+    ("random-split", &[1]),      // N
+    ("repeat", &[1]),            // count
 ];
 
-/// Resolve `e` to a `(param, indices)` pair by following `Let`-bound symbol
-/// aliases. Returns `Some` only if the expression (possibly through a chain
-/// of symbol references) bottoms out at a `GetTupleElement`. This lets the
-/// classifier recognize the canonical pattern
-/// `(let [n (get cfg :n)] (reshape x [n]))`, where the GTE lives in a binding
-/// and only a `Symbol` appears at the shape-bearing position.
+/// Resolve a `Let` alias to a tuple element.
 fn resolve_to_gte<'a>(
     e: &'a crate::core::expr::CompiledExpr,
     locals: &'a HashMap<String, crate::core::expr::CompiledExpr>,
@@ -1287,11 +1458,7 @@ fn resolve_to_gte<'a>(
     }
 }
 
-/// Collect all `GetTupleElement { param, indices }` whose value flows into a
-/// shape-bearing argument position anywhere in `body`, resolving one or more
-/// levels of `Let`-bound symbol aliases. Decides which dict-leaf scalars must
-/// be baked as compile-time constants (shape dims require static integers)
-/// versus which may stay as live runtime arguments.
+/// Collect tuple elements used as static shape arguments.
 pub(crate) fn collect_shape_gtes(
     body: &crate::core::expr::CompiledExpr,
 ) -> std::collections::HashSet<(String, Vec<usize>)> {
@@ -1312,16 +1479,22 @@ pub(crate) fn collect_shape_gtes(
             {
                 for &pos in pos_list {
                     if pos < args.len() {
-                        // Direct GTE, or a Symbol aliased to one via Let.
                         if let Some((param, indices)) = resolve_to_gte(&args[pos], locals) {
                             shape_gtes.insert((param.to_string(), indices.clone()));
+                        } else if let CompiledExpr::Symbol(param) = &args[pos]
+                            && !locals.contains_key(param)
+                        {
+                            shape_gtes.insert((param.clone(), Vec::new()));
                         }
-                        // Inside Vector/Tuple literals at shape positions, e.g.
-                        // (reshape x [n n]) where n is a let-bound GTE.
-                        if let CompiledExpr::Vector(elems) | CompiledExpr::Tuple(elems) = &args[pos] {
+                        if let CompiledExpr::Vector(elems) | CompiledExpr::Tuple(elems) = &args[pos]
+                        {
                             for elem in elems {
                                 if let Some((param, indices)) = resolve_to_gte(elem, locals) {
                                     shape_gtes.insert((param.to_string(), indices.clone()));
+                                } else if let CompiledExpr::Symbol(param) = elem
+                                    && !locals.contains_key(param)
+                                {
+                                    shape_gtes.insert((param.clone(), Vec::new()));
                                 }
                             }
                         }
@@ -1329,16 +1502,13 @@ pub(crate) fn collect_shape_gtes(
                 }
             }
         }
-        // Recurse into children, threading locals through Let scopes.
         match e {
             CompiledExpr::FunctionCall { args, .. } => {
-                for a in args { visit(a, shape_gtes, locals); }
+                for a in args {
+                    visit(a, shape_gtes, locals);
+                }
             }
             CompiledExpr::Let { bindings, body: b } => {
-                // Sequential let (Clojure-style): each binding can see prior
-                // bindings in the same let. Walk them in order, growing the
-                // scope so a later RHS that references an earlier name (e.g.
-                // (let [n (get cfg :n) r (reshape x [n n])] ...)) resolves.
                 let mut scope = locals.clone();
                 for (pat, rhs) in bindings {
                     visit(rhs, shape_gtes, &scope);
@@ -1349,39 +1519,69 @@ pub(crate) fn collect_shape_gtes(
                 visit(b, shape_gtes, &scope);
             }
             CompiledExpr::Vector(elems) | CompiledExpr::Tuple(elems) => {
-                for e in elems { visit(e, shape_gtes, locals); }
+                for e in elems {
+                    visit(e, shape_gtes, locals);
+                }
             }
             CompiledExpr::Dict(pairs) => {
-                for (_, v) in pairs { visit(v, shape_gtes, locals); }
+                for (_, v) in pairs {
+                    visit(v, shape_gtes, locals);
+                }
             }
-            CompiledExpr::Lambda { body: b, .. } => { visit(b, shape_gtes, locals); }
+            CompiledExpr::Lambda { body: b, .. } => {
+                visit(b, shape_gtes, locals);
+            }
             CompiledExpr::LambdaCall { callee, args } => {
                 visit(callee, shape_gtes, locals);
-                for a in args { visit(a, shape_gtes, locals); }
+                for a in args {
+                    visit(a, shape_gtes, locals);
+                }
             }
-            CompiledExpr::If { condition: c, then_branch: t, else_branch: e } => {
+            CompiledExpr::If {
+                condition: c,
+                then_branch: t,
+                else_branch: e,
+            } => {
                 visit(c, shape_gtes, locals);
                 visit(t, shape_gtes, locals);
-                if let Some(e) = e { visit(e, shape_gtes, locals); }
+                if let Some(e) = e {
+                    visit(e, shape_gtes, locals);
+                }
             }
-            CompiledExpr::Do(stmts) => { for s in stmts { visit(s, shape_gtes, locals); } }
-            CompiledExpr::Repeat { count: c, acc_init: a, body: b, .. } => {
+            CompiledExpr::Do(stmts) => {
+                for s in stmts {
+                    visit(s, shape_gtes, locals);
+                }
+            }
+            CompiledExpr::Repeat {
+                count: c,
+                acc_init: a,
+                body: b,
+                ..
+            } => {
                 visit(c, shape_gtes, locals);
                 visit(a, shape_gtes, locals);
                 visit(b, shape_gtes, locals);
             }
-            CompiledExpr::While { condition: c, acc_init: a, body: b, .. } => {
+            CompiledExpr::While {
+                condition: c,
+                acc_init: a,
+                body: b,
+                ..
+            } => {
                 visit(c, shape_gtes, locals);
                 visit(a, shape_gtes, locals);
                 visit(b, shape_gtes, locals);
             }
-            CompiledExpr::Guard { check: _, expr: e } => { visit(e, shape_gtes, locals); }
-            CompiledExpr::Def { value: v, .. } => { visit(v, shape_gtes, locals); }
+            CompiledExpr::Guard { check: _, expr: e } => {
+                visit(e, shape_gtes, locals);
+            }
+            CompiledExpr::Def { value: v, .. } => {
+                visit(v, shape_gtes, locals);
+            }
             CompiledExpr::ValueAndGrad { shape_config, .. } => {
-                // VAG lambdas are preprocessed separately with their own constant scope.
                 let _ = shape_config;
             }
-            // Leaf nodes — nothing to recurse into.
             CompiledExpr::Integer(_)
             | CompiledExpr::Float(_)
             | CompiledExpr::Boolean(_)
@@ -1399,11 +1599,7 @@ pub(crate) fn collect_shape_gtes(
     result
 }
 
-/// Filter the captured-scalar map: keep only entries whose `GetTupleElement`
-/// flows into a shape-bearing position in `body` (resolving `Let` aliases).
-/// Scalars that only feed arithmetic are dropped so they stay live runtime
-/// arguments instead of being baked into the VMFB. If nothing shape-bearing
-/// is found, nothing is baked.
+/// Keep captured scalars used as static shape arguments.
 pub(crate) fn filter_constants_for_shape_positions(
     constants: &HashMap<(String, Vec<usize>), f64>,
     body: &crate::core::expr::CompiledExpr,
@@ -1420,9 +1616,6 @@ pub fn lower_tuples_and_destructuring(
     body: CompiledExpr,
     param_shapes: &HashMap<String, Vec<i64>>,
 ) -> SheafResult<CompiledExpr> {
-    // Share a single symbol_types env between classify_vectors and
-    // desugar_destructuring_lets, so the latter can resolve kinds (Tuple vs
-    // Tensor1D) without re-guessing.
     let mut symbol_types: HashMap<String, StableHLOType> = HashMap::new();
     for (name, shape) in param_shapes {
         symbol_types.insert(name.clone(), StableHLOType::f32_tensor(shape.clone()));
@@ -1438,48 +1631,41 @@ pub fn desugar_destructuring_lets(
     match expr {
         CompiledExpr::Let { bindings, body } => {
             let mut new_bindings = Vec::new();
-            // First, desugar the body (in case it contains nested Let)
             let mut body = desugar_destructuring_lets(*body, symbol_types)?;
-            
+
             for (pattern, value) in bindings {
                 match pattern {
                     BindingPattern::Simple(_) => {
-                        // Leave simple bindings as-is
-                        new_bindings.push((pattern, desugar_destructuring_lets(value, symbol_types)?));
+                        new_bindings
+                            .push((pattern, desugar_destructuring_lets(value, symbol_types)?));
                     }
                     BindingPattern::Destructure(names) => {
-                        // Check for nested destructuring (not yet supported)
                         for name in &names {
                             if let BindingPattern::Destructure(_) = name {
                                 return Err(SheafError::Compile {
-                                    message: "Nested destructuring patterns are not yet supported".to_string(),
+                                    message: "Nested destructuring patterns are not yet supported"
+                                        .to_string(),
                                     location: crate::core::error::SourceLocation::unknown(),
                                 });
                             }
                         }
-                        
-                        // Generate a temporary variable
+
                         let tmp = fresh_temp();
-                        // Desugar the value first
                         let value = desugar_destructuring_lets(value, symbol_types)?;
-                        
-                        // Determine the kind of the value, using symbol_types as ground truth
+
                         let kind = kind_of(&value, symbol_types);
-                        let len = static_length_with_types(&value, symbol_types).ok_or_else(|| {
-                            // Only genuinely unknown lengths reach here: the source is neither a
-                            // literal nor a typed parameter of known shape (e.g. a runtime scalar
-                            // or the result of an untyped function call). A 1-D tensor parameter
-                            // of known shape was already resolved via symbol_types above.
-                            SheafError::Compile {
-                                message: "Destructuring source has a dynamic length that cannot be \
+                        let len =
+                            static_length_with_types(&value, symbol_types).ok_or_else(|| {
+                                SheafError::Compile {
+                                    message:
+                                        "Destructuring source has a dynamic length that cannot be \
                                           resolved statically: it is neither a literal nor a typed \
                                           parameter of known shape"
-                                    .to_string(),
-                                location: crate::core::error::SourceLocation::unknown(),
-                            }
-                        })?;
-                        
-                        // Check arity match
+                                            .to_string(),
+                                    location: crate::core::error::SourceLocation::unknown(),
+                                }
+                            })?;
+
                         if len != names.len() {
                             return Err(SheafError::Compile {
                                 message: format!(
@@ -1490,20 +1676,20 @@ pub fn desugar_destructuring_lets(
                                 location: crate::core::error::SourceLocation::unknown(),
                             });
                         }
-                        
-                        // Create nested Let bindings for each name
+
                         for (i, name) in names.into_iter().enumerate().rev() {
-                            // Extract the i-th element based on the source kind.
                             let extraction = match kind {
                                 DestructKind::Tuple => CompiledExpr::GetTupleElement {
                                     param: tmp.clone(),
                                     indices: vec![i],
                                 },
                                 DestructKind::Vector1D | DestructKind::Tensor1D => {
-                                    // For Vector/Tensor 1-D: use tensor indexing (get builtin).
                                     CompiledExpr::FunctionCall {
                                         name: "get".to_string(),
-                                        args: vec![CompiledExpr::Symbol(tmp.clone()), CompiledExpr::Integer(i as i64)],
+                                        args: vec![
+                                            CompiledExpr::Symbol(tmp.clone()),
+                                            CompiledExpr::Integer(i as i64),
+                                        ],
                                         loc: None,
                                     }
                                 }
@@ -1516,26 +1702,23 @@ pub fn desugar_destructuring_lets(
                                     });
                                 }
                             };
-                            
-                            // Wrap the current body in a Let binding
+
                             body = CompiledExpr::Let {
                                 bindings: vec![(name, extraction)],
                                 body: Box::new(body),
                             };
                         }
-                        
-                        // Add the binding for the temporary variable
+
                         new_bindings.push((BindingPattern::Simple(tmp), value));
                     }
                 }
             }
-            
+
             Ok(CompiledExpr::Let {
                 bindings: new_bindings,
                 body: Box::new(body),
             })
         }
-        // Recurse into other expression types
         CompiledExpr::FunctionCall { name, args, loc } => {
             let mut new_args = Vec::new();
             for arg in args {
@@ -1548,7 +1731,6 @@ pub fn desugar_destructuring_lets(
             })
         }
         CompiledExpr::Lambda { params, body } => {
-            // Params shadow the outer symbol_types; for desugaring purposes we just recurse.
             Ok(CompiledExpr::Lambda {
                 params,
                 body: Box::new(desugar_destructuring_lets(*body, symbol_types)?),
@@ -1564,51 +1746,49 @@ pub fn desugar_destructuring_lets(
                 args: new_args,
             })
         }
-        CompiledExpr::If { condition, then_branch, else_branch } => {
-            Ok(CompiledExpr::If {
-                condition: Box::new(desugar_destructuring_lets(*condition, symbol_types)?),
-                then_branch: Box::new(desugar_destructuring_lets(*then_branch, symbol_types)?),
-                else_branch: match else_branch {
-                    Some(e) => Some(Box::new(desugar_destructuring_lets(*e, symbol_types)?)),
-                    None => None,
-                },
-            })
-        }
-        CompiledExpr::Do(exprs) => {
-            Ok(CompiledExpr::Do(
-                exprs.into_iter()
-                    .map(|e| desugar_destructuring_lets(e, symbol_types))
-                    .collect::<SheafResult<_>>()?,
-            ))
-        }
-        CompiledExpr::Repeat { index_var, count, acc_var, acc_init, body } => {
-            Ok(CompiledExpr::Repeat {
-                index_var,
-                count: Box::new(desugar_destructuring_lets(*count, symbol_types)?),
-                acc_var,
-                acc_init: Box::new(desugar_destructuring_lets(*acc_init, symbol_types)?),
-                body: Box::new(desugar_destructuring_lets(*body, symbol_types)?),
-            })
-        }
-        CompiledExpr::Vector(elems) => {
-            Ok(CompiledExpr::Vector(
-                elems.into_iter()
-                    .map(|e| desugar_destructuring_lets(e, symbol_types))
-                    .collect::<SheafResult<_>>()?,
-            ))
-        }
-        CompiledExpr::Tuple(elems) => {
-            Ok(CompiledExpr::Tuple(
-                elems.into_iter()
-                    .map(|e| desugar_destructuring_lets(e, symbol_types))
-                    .collect::<SheafResult<_>>()?,
-            ))
-        }
-        // Other / atomic nodes (Dict, Quoted, FunctionRef, Symbol, GetTupleElement,
-        // ValueAndGrad, Def, Guard, While, ...) are returned as-is. destructuring
-        // patterns inside such nodes are not expected to appear in user bodies that
-        // reach the JIT pipeline; the FunctionCall/Lambda/If/Do/Vector/Tuple/Repeat/
-        // Let arms above cover anything the codegen will encounter post-AST -> ANF.
+        CompiledExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => Ok(CompiledExpr::If {
+            condition: Box::new(desugar_destructuring_lets(*condition, symbol_types)?),
+            then_branch: Box::new(desugar_destructuring_lets(*then_branch, symbol_types)?),
+            else_branch: match else_branch {
+                Some(e) => Some(Box::new(desugar_destructuring_lets(*e, symbol_types)?)),
+                None => None,
+            },
+        }),
+        CompiledExpr::Do(exprs) => Ok(CompiledExpr::Do(
+            exprs
+                .into_iter()
+                .map(|e| desugar_destructuring_lets(e, symbol_types))
+                .collect::<SheafResult<_>>()?,
+        )),
+        CompiledExpr::Repeat {
+            index_var,
+            count,
+            acc_var,
+            acc_init,
+            body,
+        } => Ok(CompiledExpr::Repeat {
+            index_var,
+            count: Box::new(desugar_destructuring_lets(*count, symbol_types)?),
+            acc_var,
+            acc_init: Box::new(desugar_destructuring_lets(*acc_init, symbol_types)?),
+            body: Box::new(desugar_destructuring_lets(*body, symbol_types)?),
+        }),
+        CompiledExpr::Vector(elems) => Ok(CompiledExpr::Vector(
+            elems
+                .into_iter()
+                .map(|e| desugar_destructuring_lets(e, symbol_types))
+                .collect::<SheafResult<_>>()?,
+        )),
+        CompiledExpr::Tuple(elems) => Ok(CompiledExpr::Tuple(
+            elems
+                .into_iter()
+                .map(|e| desugar_destructuring_lets(e, symbol_types))
+                .collect::<SheafResult<_>>()?,
+        )),
         other => Ok(other),
     }
 }
@@ -1620,13 +1800,20 @@ mod shape_classifier_tests {
     use std::collections::HashMap;
 
     fn gte(param: &str, idx: usize) -> CompiledExpr {
-        CompiledExpr::GetTupleElement { param: param.into(), indices: vec![idx] }
+        CompiledExpr::GetTupleElement {
+            param: param.into(),
+            indices: vec![idx],
+        }
     }
     fn sym(name: &str) -> CompiledExpr {
         CompiledExpr::Symbol(name.into())
     }
     fn call(name: &str, args: Vec<CompiledExpr>) -> CompiledExpr {
-        CompiledExpr::FunctionCall { name: name.into(), args, loc: None }
+        CompiledExpr::FunctionCall {
+            name: name.into(),
+            args,
+            loc: None,
+        }
     }
     fn let_(bindings: Vec<(&str, CompiledExpr)>, body: CompiledExpr) -> CompiledExpr {
         CompiledExpr::Let {
@@ -1638,18 +1825,14 @@ mod shape_classifier_tests {
         }
     }
 
-    /// Regression: the canonical pattern `(let [n (get cfg :n)] (reshape x [n n]))`
-    /// MUST be recognised as shape-bearing through the let alias. Previously the
-    /// classifier only saw GTEs directly at shape positions and missed this,
-    /// causing silent interpreter fallback.
     #[test]
     fn shape_scalar_via_let_alias_is_collected() {
         let body = let_(
             vec![("n", gte("cfg", 0))],
-            call("reshape", vec![
-                sym("x"),
-                CompiledExpr::Vector(vec![sym("n"), sym("n")]),
-            ]),
+            call(
+                "reshape",
+                vec![sym("x"), CompiledExpr::Vector(vec![sym("n"), sym("n")])],
+            ),
         );
         let gtes = collect_shape_gtes(&body);
         assert!(
@@ -1659,25 +1842,22 @@ mod shape_classifier_tests {
         );
     }
 
-    /// Multi-level alias chains must resolve transitively.
     #[test]
     fn shape_scalar_via_nested_let_alias_is_collected() {
         let body = let_(
             vec![("n", gte("cfg", 0))],
             let_(
                 vec![("m", sym("n"))],
-                call("reshape", vec![
-                    sym("x"),
-                    CompiledExpr::Vector(vec![sym("m"), sym("m")]),
-                ]),
+                call(
+                    "reshape",
+                    vec![sym("x"), CompiledExpr::Vector(vec![sym("m"), sym("m")])],
+                ),
             ),
         );
         let gtes = collect_shape_gtes(&body);
         assert!(gtes.contains(&("cfg".to_string(), vec![0])));
     }
 
-    /// Regression: a scalar used only in arithmetic must NOT be baked.
-    /// This is the freeze footgun fix.
     #[test]
     fn arithmetic_only_scalar_is_not_collected() {
         let body = let_(
@@ -1692,41 +1872,42 @@ mod shape_classifier_tests {
         );
     }
 
-    /// filter_constants_for_shape_positions keeps shape-bearing entries and
-    /// drops arithmetic-only ones.
     #[test]
     fn filter_keeps_shape_drops_arithmetic() {
-        // n -> shape (reshape dim), scale -> arithmetic
         let body = let_(
             vec![
                 ("n", gte("cfg", 0)),
                 ("scale", gte("cfg", 1)),
-                ("r", call("reshape", vec![
-                    sym("x"),
-                    CompiledExpr::Vector(vec![sym("n"), sym("n")]),
-                ])),
+                (
+                    "r",
+                    call(
+                        "reshape",
+                        vec![sym("x"), CompiledExpr::Vector(vec![sym("n"), sym("n")])],
+                    ),
+                ),
             ],
             call("*", vec![sym("scale"), sym("r")]),
         );
         let mut constants = HashMap::new();
-        constants.insert(("cfg".to_string(), vec![0]), 8.0);   // n
-        constants.insert(("cfg".to_string(), vec![1]), 2.0);   // scale
+        constants.insert(("cfg".to_string(), vec![0]), 8.0); // n
+        constants.insert(("cfg".to_string(), vec![1]), 2.0); // scale
         let filtered = filter_constants_for_shape_positions(&constants, &body);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered.get(&("cfg".to_string(), vec![0])), Some(&8.0));
     }
 
-    /// Sequential let: a later binding may reference an earlier one for its
-    /// shape arg. The classifier must see the accumulated scope.
     #[test]
     fn sequential_let_accumulates_scope() {
         let body = let_(
             vec![
                 ("n", gte("cfg", 0)),
-                ("r", call("reshape", vec![
-                    sym("x"),
-                    CompiledExpr::Vector(vec![sym("n"), sym("n")]),
-                ])),
+                (
+                    "r",
+                    call(
+                        "reshape",
+                        vec![sym("x"), CompiledExpr::Vector(vec![sym("n"), sym("n")])],
+                    ),
+                ),
             ],
             sym("r"),
         );
