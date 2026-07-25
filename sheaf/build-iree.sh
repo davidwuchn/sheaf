@@ -11,8 +11,9 @@
 #                      (default: <repo>/sheaf/iree-runtime/ for cargo build)
 #   IREE_SRC_DIR       where to clone the IREE source (default: <repo>/sheaf/build/iree-src)
 #   IREE_BUILD_DIR     CMake build tree (default: <repo>/sheaf/build/iree-build)
-#   ENABLE_CUDA        set to 1 to build the CUDA HAL driver (Linux, needs CUDA toolkit)
-#   ENABLE_VULKAN      set to 1 to build the Vulkan HAL driver (off by default)
+#   ENABLE_CUDA        auto (default), 1, or 0. Auto enables CUDA when nvcc is found.
+#   ENABLE_VULKAN      auto (default), 1, or 0. Auto enables Vulkan when its
+#                      runtime loader is found. Set to 1 for cross-builds.
 #   IREE_JOBS          parallel jobs passed to ninja (default: all cores)
 #   SKIP_CLONE         set to 1 to reuse an existing IREE_SRC_DIR without re-cloning
 #
@@ -82,32 +83,73 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 # --- driver flags -----------------------------------------------------------
-# CPU task drivers are always on. GPU drivers are opt-in except Metal on macOS
-# (which only needs system frameworks).
-CMAKE_FLAGS=(
-  -DIREE_BUILD_COMPILER=OFF
-  -DIREE_BUILD_TESTS=OFF
-  -DIREE_BUILD_SAMPLES=OFF
-  -DIREE_HAL_DRIVER_LOCAL_SYNC=ON
-  -DIREE_HAL_DRIVER_LOCAL_TASK=ON
-  -DIREE_HAL_DRIVER_VULKAN=OFF
-)
+# The runtime loads CUDA and Vulkan dynamically. Use the host toolchain or
+# loader for native builds, but allow explicit overrides for distribution
+# and cross builds.
+resolve_toggle() {
+  local name="$1" requested="$2" detected="$3"
+  case "$requested" in
+    auto) printf '%s\n' "$detected" ;;
+    0|1) printf '%s\n' "$requested" ;;
+    *)
+      echo "error: $name must be auto, 0, or 1 (got '$requested')" >&2
+      exit 1
+      ;;
+  esac
+}
+
+has_vulkan_loader() {
+  if command -v ldconfig >/dev/null 2>&1 \
+    && ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so\.1'; then
+    return 0
+  fi
+  if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists vulkan; then
+    return 0
+  fi
+  # ldconfig is absent on some minimal distributions.
+  compgen -G '/usr/lib*/libvulkan.so*' >/dev/null \
+    || compgen -G '/usr/lib/*/libvulkan.so*' >/dev/null
+}
+
+CUDA_REQUESTED="${ENABLE_CUDA:-auto}"
+VULKAN_REQUESTED="${ENABLE_VULKAN:-auto}"
+CUDA_DETECTED=0
+VULKAN_DETECTED=0
+METAL_ENABLED=0
 
 case "$OS" in
   Darwin)
-    CMAKE_FLAGS+=(-DIREE_HAL_DRIVER_METAL=ON)
-    echo "    platform    : macOS ($ARCH) -> Metal driver enabled"
+    if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]] \
+      && xcode-select -p >/dev/null 2>&1; then
+      METAL_ENABLED=1
+    fi
     ;;
   Linux)
-    [[ "${ENABLE_CUDA:-0}" == "1" ]]   && CMAKE_FLAGS+=(-DIREE_HAL_DRIVER_CUDA=ON)
-    [[ "${ENABLE_VULKAN:-0}" == "1" ]] && CMAKE_FLAGS+=(-DIREE_HAL_DRIVER_VULKAN=ON)
-    echo "    platform    : Linux ($ARCH); CUDA=${ENABLE_CUDA:-0} Vulkan=${ENABLE_VULKAN:-0}"
+    command -v nvcc >/dev/null 2>&1 && CUDA_DETECTED=1
+    has_vulkan_loader && VULKAN_DETECTED=1
     ;;
   *)
     echo "error: unsupported OS '$OS' (expected Darwin or Linux)" >&2
     exit 1
     ;;
 esac
+
+CUDA_ENABLED="$(resolve_toggle ENABLE_CUDA "$CUDA_REQUESTED" "$CUDA_DETECTED")"
+VULKAN_ENABLED="$(resolve_toggle ENABLE_VULKAN "$VULKAN_REQUESTED" "$VULKAN_DETECTED")"
+
+CMAKE_FLAGS=(
+  -DIREE_BUILD_COMPILER=OFF
+  -DIREE_BUILD_TESTS=OFF
+  -DIREE_BUILD_SAMPLES=OFF
+  -DIREE_HAL_DRIVER_LOCAL_SYNC=ON
+  -DIREE_HAL_DRIVER_LOCAL_TASK=ON
+  -DIREE_HAL_DRIVER_CUDA="$([[ "$CUDA_ENABLED" == 1 ]] && echo ON || echo OFF)"
+  -DIREE_HAL_DRIVER_METAL="$([[ "$METAL_ENABLED" == 1 ]] && echo ON || echo OFF)"
+  -DIREE_HAL_DRIVER_VULKAN="$([[ "$VULKAN_ENABLED" == 1 ]] && echo ON || echo OFF)"
+)
+
+echo "    platform    : $OS ($ARCH)"
+echo "    drivers     : CUDA=$CUDA_ENABLED (requested: $CUDA_REQUESTED), Metal=$METAL_ENABLED, Vulkan=$VULKAN_ENABLED (requested: $VULKAN_REQUESTED)"
 echo
 
 # --- clone IREE at the pinned tag -------------------------------------------
