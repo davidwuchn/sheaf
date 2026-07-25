@@ -91,10 +91,8 @@ jobs:
           tag_name: nightly
           name: Nightly build
           body: |
-            Nightly build of Sheaf from the main branch.
-            These binaries are built from the latest commit and may be unstable. The Linux x86_64 build is covered by daily CUDA CI validation.
-            Nightly builds have not gone through release validation, and performance has not been benchmarked against release builds.
-            See the commit history for details of the included changes.
+            Nightly builds have not gone through release validation, and performance may differ from release builds.
+            The Linux x86_64 build is covered by daily CUDA CI validation.
 
           prerelease: true
           files: sheaf-*.tar.gz

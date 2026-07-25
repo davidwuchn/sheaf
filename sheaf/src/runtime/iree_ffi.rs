@@ -263,6 +263,7 @@ unsafe extern "C" {
 
     // Status debug
     pub fn iree_status_fprint(file: *mut c_void, status: iree_status_t);
+    pub fn iree_status_free(status: iree_status_t);
 
     // VM ref lifecycle
     pub fn iree_vm_ref_release(ref_: *mut iree_vm_ref_t);

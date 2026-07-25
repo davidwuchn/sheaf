@@ -55,8 +55,8 @@ jobs:
         run: |
           case "${{ matrix.target }}" in
             linux-x86_64)
-              echo "cmake_extra=-DIREE_HAL_DRIVER_CUDA=ON" >> "$GITHUB_OUTPUT"
-              echo "cache_suffix=-cuda" >> "$GITHUB_OUTPUT" ;;
+              echo "cmake_extra=-DIREE_HAL_DRIVER_CUDA=ON -DIREE_HAL_DRIVER_VULKAN=ON" >> "$GITHUB_OUTPUT"
+              echo "cache_suffix=-cuda-vulkan" >> "$GITHUB_OUTPUT" ;;
             linux-aarch64)
               echo "cmake_extra=" >> "$GITHUB_OUTPUT"
               echo "cache_suffix=-nocuda" >> "$GITHUB_OUTPUT" ;;
