@@ -28,3 +28,7 @@ pub fn device_override() -> Option<&'static str> {
 pub fn jit_profile() -> bool {
     CONFIG.get().map(|c| c.jit_profile).unwrap_or(false)
 }
+
+pub fn jit_module_warning_threshold() -> usize {
+    64
+}

@@ -46,16 +46,9 @@ pub(super) fn try_iree_dispatch(
         Some((module_name, signature)) => (dispatch_name(&module_name, &func_def.name), signature),
         None => {
             let jit = env.jit_compiler.as_mut()?;
-            if !jit.preflight_jit_eligibility(func_def, &env.registry) {
-                return None;
-            }
             let key = crate::runtime::jit::cache_key_for_function(func_def, args, &env.registry)?;
-            let info = match jit.module_for_key(&key) {
-                Ok(Some(info)) => info,
-                Ok(None) => return None,
-                Err(e) => return Some(Err(e)),
-            };
-            (jit_dispatch_name(&info, &func_def.name), info.signature)
+            let info = jit.module_for_key(&key)?;
+            (jit_dispatch_name(&info, &func_def.name), info.sig)
         }
     };
 
@@ -131,8 +124,9 @@ mod tests {
     #[test]
     fn jit_dispatch_name_uses_catalogued_variant_namespace() {
         let module = CompiledModuleInfo {
+            function_name: "predict-value?".to_string(),
             module_name: "jit_variant_42".to_string(),
-            signature: signature(),
+            sig: signature(),
         };
 
         assert_eq!(
@@ -158,10 +152,16 @@ pub(super) fn try_jit_vag(
         None => return JitVagOutcome::Unsupported,
     };
 
+    let iree_session = match crate::runtime::iree_session::shared_session() {
+        Ok(session) => session,
+        Err(e) => return JitVagOutcome::Success(Err(e)),
+    };
+
     let (module_name, sig, param_names) = match jit.try_jit_value_and_grad(
         &augmented_func,
         params,
         &env.registry,
+        &iree_session,
     ) {
         Some(x) => x,
         None => return jit.classify_vag_skip(),
@@ -187,11 +187,6 @@ pub(super) fn try_jit_vag(
             continue;
         }
     }
-
-    let iree_session = match crate::runtime::iree_session::shared_session() {
-        Ok(session) => session,
-        Err(e) => return JitVagOutcome::Success(Err(e)),
-    };
 
     let full_name = format!("{}.value_and_grad", module_name);
     let result = match iree_session.call_typed_device(&full_name, &args, &sig.return_type) {

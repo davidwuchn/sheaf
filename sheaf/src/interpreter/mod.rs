@@ -557,7 +557,14 @@ let has_kwargs = matches!(name,
 
             let mut recompiled = false;
             if let Some(jit) = &mut env.jit_compiler {
-                if jit.try_jit_compile(&func_def, &pos_args, &env.registry).is_some() {
+                let shared_session = match crate::runtime::iree_session::shared_session() {
+                    Ok(session) => session,
+                    Err(error) => {
+                        if let Some(ref mut p) = env.profiler { p.exit(); }
+                        return Err(error);
+                    }
+                };
+                if jit.try_jit_compile(&func_def, &pos_args, &env.registry, &shared_session).is_some() {
                     recompiled = true;
                     if let Some(result) = iree_dispatch::try_iree_dispatch(&func_def, &pos_args, env) {
                         if let Some(ref mut p) = env.profiler { p.exit(); }
