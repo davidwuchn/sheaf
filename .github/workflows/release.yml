@@ -18,7 +18,7 @@ jobs:
       # build_version left empty: use the Cargo package version (e.g. 2.2.0).
 
   release-draft:
-    needs: build
+    needs: cuda-test
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-22.04
     steps:
@@ -36,13 +36,13 @@ jobs:
           generate_release_notes: true
           files: sheaf-*.tar.gz
           body: |
-            **DRAFT - pending CUDA validation.**
+            **DRAFT - CUDA validation passed.**
 
-            This release was created automatically. The CUDA test suite runs on
-            completion; promote this draft manually once it is green.
+            This release was created automatically. Promote it manually after
+            the remaining release checks are complete.
 
   cuda-test:
-    needs: release-draft
+    needs: build
     if: startsWith(github.ref, 'refs/tags/')
     uses: ./.github/workflows/cuda-test.yml
     with:

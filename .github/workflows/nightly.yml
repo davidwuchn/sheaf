@@ -2,9 +2,8 @@ name: Nightly
 
 # Nightly build and validation.
 #
-# Builds the Linux (CUDA) and macOS (Metal) binaries, publishes them to the
-# rolling `nightly` GitHub Release, then validates the Linux build by running
-# the example suite on CUDA via Modal.
+# Builds the Linux (CUDA) and macOS (Metal) binaries, validates the Linux
+# artifact on CUDA, then publishes the rolling `nightly` GitHub Release.
 #
 # Skipped if the latest commit is more than 24 hours old.
 
@@ -71,7 +70,7 @@ jobs:
       build_version: ${{ needs.preflight.outputs.nightly_version }}
 
   publish-nightly:
-    needs: build
+    needs: cuda-test
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -100,8 +99,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   cuda-test:
-    needs: publish-nightly
+    needs: build
     uses: ./.github/workflows/cuda-test.yml
     with:
-      binary_url: "https://github.com/sheaf-lang/sheaf/releases/download/nightly/sheaf-linux-x86_64.tar.gz"
+      binary_artifact: "sheaf-linux-x86_64"
     secrets: inherit
