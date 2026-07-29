@@ -176,8 +176,20 @@ fn cache_key_for(
     cache_key_for_with_identity(fn_name, params, args, body_compiled, String::new())
 }
 
-/// Builds the cache key used by both lookup and compilation.
+/// Builds the cache key used by lookup callers that have not checked eligibility.
 pub fn cache_key_for_function(
+    func_def: &FunctionDef,
+    args: &[Value],
+    registry: &HashMap<String, FunctionDef>,
+) -> Option<JitCacheKey> {
+    // Shape analysis inlines the call graph. It is undefined for recursive
+    // functions, so enforce eligibility at this public boundary.
+    jit_eligibility(&func_def.name, registry).ok()?;
+    cache_key_for_eligible_function(func_def, args, registry)
+}
+
+/// Builds a cache key after the caller has established JIT eligibility.
+pub(crate) fn cache_key_for_eligible_function(
     func_def: &FunctionDef,
     args: &[Value],
     registry: &HashMap<String, FunctionDef>,
@@ -534,6 +546,27 @@ impl JitCompiler {
             .get(key)
             .cloned()
     }
+
+    /// Reject and memoize definitions that cannot enter the JIT pipeline.
+    ///
+    /// `function_definition_identity` covers the transitive direct-call graph
+    /// and body hashes without inlining, so it is safe for recursive functions.
+    pub(crate) fn preflight_jit_eligibility(
+        &mut self,
+        func_def: &FunctionDef,
+        registry: &HashMap<String, FunctionDef>,
+    ) -> bool {
+        let identity = function_definition_identity(func_def, registry);
+        if self.failed_definitions.contains(&identity) {
+            return false;
+        }
+        if let Err(reason) = jit_eligibility(&func_def.name, registry) {
+            self.failed_definitions.insert(identity);
+            self.jit_fail(&func_def.name, &reason);
+            return false;
+        }
+        true
+    }
 }
 
 /// Why the JIT skipped a value-and-grad call.
@@ -554,13 +587,16 @@ mod vag;
 
 #[cfg(test)]
 mod cache_key_tests {
-    use super::{cache_key_for, cache_key_for_function, module_growth_warning, JitCompiler};
+    use super::{
+        cache_key_for, cache_key_for_function, function_definition_identity,
+        module_growth_warning, JitCompiler,
+    };
     use crate::core::ast::SheafValue;
     use crate::core::error::SourceLocation;
     use crate::core::expr::{CompiledExpr, FunctionDef};
     use crate::interpreter::value::{Dtype, Value};
     use ndarray::ArrayD;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
     fn tensor_f32(shape: Vec<usize>, fill: f32) -> Value {
@@ -728,6 +764,74 @@ mod cache_key_tests {
         });
         let second = cache_key_for_function(&caller, &args, &registry).unwrap();
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn recursive_function_has_no_jit_cache_key() {
+        let recursive = function(
+            "recursive",
+            CompiledExpr::FunctionCall {
+                name: "recursive".into(),
+                args: vec![CompiledExpr::Symbol("x".into())],
+                loc: None,
+            },
+        );
+        let registry = HashMap::from([("recursive".to_string(), recursive.clone())]);
+
+        assert!(
+            cache_key_for_function(&recursive, &[tensor_f32(vec![2], 0.0)], &registry).is_none()
+        );
+    }
+
+    #[test]
+    fn mutually_recursive_function_has_no_jit_cache_key() {
+        let a = function(
+            "a",
+            CompiledExpr::FunctionCall {
+                name: "b".into(),
+                args: vec![CompiledExpr::Symbol("x".into())],
+                loc: None,
+            },
+        );
+        let b = function(
+            "b",
+            CompiledExpr::FunctionCall {
+                name: "a".into(),
+                args: vec![CompiledExpr::Symbol("x".into())],
+                loc: None,
+            },
+        );
+        let registry = HashMap::from([("a".to_string(), a.clone()), ("b".to_string(), b)]);
+
+        assert!(cache_key_for_function(&a, &[tensor_f32(vec![2], 0.0)], &registry).is_none());
+    }
+
+    #[test]
+    fn recursive_definition_is_memoized_before_cache_key_analysis() {
+        let recursive = function(
+            "recursive",
+            CompiledExpr::FunctionCall {
+                name: "recursive".into(),
+                args: vec![CompiledExpr::Symbol("x".into())],
+                loc: None,
+            },
+        );
+        let registry = HashMap::from([("recursive".to_string(), recursive.clone())]);
+        let mut compiler = JitCompiler {
+            iree_compile_path: None,
+            target_backend: "llvm-cpu".to_string(),
+            failed_definitions: HashSet::new(),
+            failed_vag: HashSet::new(),
+            failed_keys: HashSet::new(),
+            last_vag_fail_reason: None,
+            vag_cache: HashMap::new(),
+        };
+        let identity = function_definition_identity(&recursive, &registry);
+
+        assert!(!compiler.preflight_jit_eligibility(&recursive, &registry));
+        assert!(compiler.failed_definitions.contains(&identity));
+        assert!(!compiler.preflight_jit_eligibility(&recursive, &registry));
+        assert_eq!(compiler.failed_definitions.len(), 1);
     }
 
     #[test]

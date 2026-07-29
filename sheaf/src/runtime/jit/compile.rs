@@ -14,8 +14,14 @@ impl JitCompiler {
         registry: &HashMap<String, FunctionDef>,
         shared_session: &std::sync::Arc<crate::runtime::iree_session::IreeSession>,
     ) -> Option<FunctionSignature> {
-        let iree_compile = self.iree_compile_path.clone()?;
         let name = &func_def.name;
+        let iree_compile = self.iree_compile_path.clone()?;
+
+        // Cache-key construction performs shape analysis with call inlining.
+        // Establish eligibility first, including the negative definition cache.
+        if !self.preflight_jit_eligibility(func_def, registry) {
+            return None;
+        }
 
         // The session's active driver is the source of truth for compilation.
         if let Some(backend) = crate::runtime::iree_session::IreeSession::cached_target_backend() {
@@ -23,7 +29,7 @@ impl JitCompiler {
         }
 
         // Success and failure caches use the same variant identity.
-        let cache_key = cache_key_for_function(func_def, args, registry)?;
+        let cache_key = cache_key_for_eligible_function(func_def, args, registry)?;
         if self.failed_definitions.contains(&cache_key.definition_hash) {
             return None;
         }
@@ -39,15 +45,6 @@ impl JitCompiler {
         // (2) Failure cache hit: this exact (fn, shape) was tried before and
         // the compile failed. Don't retry.
         if self.failed_keys.contains(&cache_key) {
-            return None;
-        }
-
-        // Reject functions whose compiled body is unavailable, or whose call graph
-        // contains a cycle, an effect, or a higher-order call.
-        if let Err(reason) = jit_eligibility(name, registry) {
-            self.failed_definitions
-                .insert(cache_key.definition_hash.clone());
-            self.jit_fail(name, &reason);
             return None;
         }
 
