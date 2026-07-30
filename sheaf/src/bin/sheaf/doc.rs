@@ -35,10 +35,10 @@ pub fn parse_reference() -> Vec<DocCategory> {
                 functions: Vec::new(),
             });
         }
-        // Function header: ### name
-        else if trimmed.starts_with("### ") {
+        // Function header: ### name[, name...]
+        else if let Some(header) = trimmed.strip_prefix("### ") {
             if let Some(ref mut cat) = current {
-                cat.functions.push(trimmed[4..].to_string());
+                cat.functions.extend(header.split(',').map(|name| name.trim().to_string()));
             }
         }
     }
@@ -72,19 +72,8 @@ pub fn doc_list() {
 /// Print detailed documentation for a single function.
 /// Returns true on success, false if the function was not found.
 pub fn doc_show(name: &str) -> bool {
-    let header_h4 = format!("#### {}", name);
-    let header_h3 = format!("### {}", name);
-    let (start, header_len) = match REFERENCE.find(&header_h4) {
-        Some(pos) => (pos, header_h4.len()),
-        None => match REFERENCE.find(&header_h3) {
-            Some(pos) => {
-                if pos > 0 && REFERENCE.as_bytes()[pos - 1] == b'#' {
-                    return false;
-                }
-                (pos, header_h3.len())
-            }
-            None => return false,
-        },
+    let Some((start, header_len)) = find_documentation_header(name) else {
+        return false;
     };
 
     let content = &REFERENCE[start + header_len..];
@@ -140,4 +129,49 @@ pub fn doc_show(name: &str) -> bool {
     }
     println!();
     true
+}
+
+fn find_documentation_header(name: &str) -> Option<(usize, usize)> {
+    let mut offset = 0;
+
+    for line in REFERENCE.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if let Some(header) = trimmed
+            .strip_prefix("#### ")
+            .or_else(|| trimmed.strip_prefix("### "))
+            && header.split(',').any(|entry| entry.trim() == name)
+        {
+            let header_len = trimmed.len();
+            let leading_whitespace = line.len() - line.trim_start().len();
+            return Some((offset + leading_whitespace, header_len));
+        }
+        offset += line.len();
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_documentation_header, parse_reference};
+
+    #[test]
+    fn grouped_headers_are_individual_documentation_entries() {
+        let categories = parse_reference();
+        let tensor_creation = categories
+            .iter()
+            .find(|category| category.name == "Tensor Creation")
+            .expect("Tensor Creation category should exist");
+
+        assert!(tensor_creation.functions.contains(&"ones".to_string()));
+        assert!(tensor_creation.functions.contains(&"zeros".to_string()));
+        assert!(find_documentation_header("ones").is_some());
+        assert!(find_documentation_header("zeros").is_some());
+    }
+
+    #[test]
+    fn internal_autodiff_primitives_have_no_public_documentation() {
+        assert!(find_documentation_header("@-grad-lhs").is_none());
+        assert!(find_documentation_header("@-grad-rhs").is_none());
+    }
 }

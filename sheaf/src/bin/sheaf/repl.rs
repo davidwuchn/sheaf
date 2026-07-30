@@ -209,7 +209,10 @@ impl SheafHelper {
         for name in interp.env().all_names() {
             set.insert(name);
         }
-        let mut sorted: Vec<String> = set.into_iter().collect();
+        let mut sorted: Vec<String> = set
+            .into_iter()
+            .filter(|name| !name.starts_with("@-"))
+            .collect();
         sorted.sort();
         self.names = sorted;
     }
