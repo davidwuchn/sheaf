@@ -153,7 +153,7 @@ def _image_local(binary_url: str) -> modal.Image:
     if use_local:
         image = (
             image
-            .add_local_file(LOCAL_BINARY, remote_path=REMOTE_TARBALL)
+            .add_local_file(LOCAL_BINARY, remote_path=REMOTE_TARBALL, copy=True)
             .run_commands(
                 _extract_local_binary_step() + " && "
                 + _warmup_toolchain_step()
