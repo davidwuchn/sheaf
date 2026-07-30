@@ -1,0 +1,87 @@
+;; -*- mode: clojure -*-
+;;
+;; This demo shows how macros can generate models from a description.
+;;
+
+;; --- Training --------------------------------------------------------------
+
+;; Generate one training function per model.
+(defmacro deftrain [name model]
+  `(defn ~name [p x y lr]
+     (let [f (fn [p] (mse-loss (~model x p) y))
+           [loss grads] ((value-and-grad f) p)]
+       {:p (sgd-step p grads lr) :loss loss})))
+
+
+;; --- Residual model --------------------------------------------------------
+
+;; Define a residual model.
+(defmacro defresidual [name input-params & layers]
+  `(defn ~name [~(first input-params) p]
+     (as-> ~(first input-params) _
+       ~@(map make-res-layer layers))))
+
+;; Build one residual layer.
+(defn make-res-layer [spec]
+  (let [act (if (>= (count spec) 3) (nth spec 2) nil)
+        lname (nth spec 1)]
+    (if act
+      `(with-params [p ~lname]
+         (+ (~act (+ (@ _ W) b)) _))
+      `(with-params [p ~lname]
+         (+ (+ (@ _ W) b) _)))))
+
+
+;; --- Architectures ---------------------------------------------------------
+
+;; Take a list of layers and create two models from it:
+;; - net (classic feed-forward network)
+;; - res-net (residual network)
+;; Each one has its own training function.
+(defmacro defarchitectures [& layers]
+  `(do
+     (defmodel net (x) ~@layers)
+     (defresidual res-net (x) ~@layers)
+     (deftrain train-net-step net)
+     (deftrain train-res-net-step res-net)))
+
+;; Generate both architectures from the same layer list.
+(defarchitectures
+  [linear :h1 relu]
+  [linear :h2 relu])
+
+
+;; --- Train both models -----------------------------------------------------
+
+;; Both models share the same parameter layout (input, output, LR, parameters)
+(let [X (random-normal (random-key 0) '[32 4])
+      Y (* 2 X)
+      lr 0.01
+      p {:h1 {:W (* 0.5 (random-normal (random-key 1) '[4 4]))
+               :b (zeros '[4])}
+         :h2 {:W (* 0.5 (random-normal (random-key 2) '[4 4]))
+               :b (zeros '[4])}}
+
+      mlp-p (repeat [epoch 200] [p p]
+              (let [res (train-net-step p X Y lr)]
+                (if (== (mod epoch 50) 0)
+                  (print "MLP epoch {} | loss: {:.6f}"
+                         (+ epoch 1) (get res :loss))
+                  nil)
+                (get res :p)))
+
+      res-p (repeat [epoch 200] [p p]
+              (let [res (train-res-net-step p X Y lr)]
+                (if (== (mod epoch 50) 0)
+                  (print "ResNet epoch {} | loss: {:.6f}"
+                         (+ epoch 1) (get res :loss))
+                  nil)
+                (get res :p)))]
+
+  (let [mlp-loss (guard :range [0.0 4.0]
+                   (get (train-net-step mlp-p X Y lr) :loss))
+        res-loss (guard :range [0.0 1.0]
+                   (get (train-res-net-step res-p X Y lr) :loss))]
+    (print "")
+    (print "Final loss -- MLP: {:.6f}" mlp-loss)
+    (print "Final loss -- ResNet: {:.6f}" res-loss)))
