@@ -162,3 +162,8 @@
 - name: vag-stop-gradient-baseline
   test: ((value-and-grad (fn [x] (sum (* x (stop-gradient x))))) [3.0 4.0])
   expected: "[25.0, [3. 4.]]"
+
+# A parameter-dependent operation with no symbolic rule must not yield zero.
+- name: vag-missing-gradient-rule
+  test: ((value-and-grad (fn [x] (sum (flip x 0)))) [1.0 2.0 3.0])
+  expected: "ERROR: <eval>:1: autodiff error: no differentiation rule for operation 'flip'"

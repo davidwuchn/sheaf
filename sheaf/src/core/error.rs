@@ -3,6 +3,7 @@
 
 //! Error types for Sheaf compiler
 
+use std::borrow::Cow;
 use std::fmt;
 use std::rc::Rc;
 
@@ -50,6 +51,11 @@ pub enum SheafError {
         message: String,
         location: Option<SourceLocation>,
     },
+    /// Autodiff has no differentiation rule for an operation that affects the result.
+    AutodiffMissingRule {
+        operation: String,
+        location: Option<SourceLocation>,
+    },
     /// IO error
     Io(String),
 }
@@ -87,6 +93,24 @@ impl fmt::Display for SheafError {
             } => {
                 write!(f, "runtime error: {}", message)
             }
+            SheafError::AutodiffMissingRule {
+                operation,
+                location: Some(loc),
+            } => {
+                write!(
+                    f,
+                    "{}:{}: autodiff error: no differentiation rule for operation '{}'",
+                    loc.filename, loc.line, operation
+                )
+            }
+            SheafError::AutodiffMissingRule {
+                operation,
+                location: None,
+            } => write!(
+                f,
+                "autodiff error: no differentiation rule for operation '{}'",
+                operation
+            ),
             SheafError::Io(msg) => write!(f, "io error: {}", msg),
         }
     }
@@ -103,17 +127,25 @@ impl SheafError {
                 message,
                 location: Some(loc.clone()),
             },
+            SheafError::AutodiffMissingRule { operation, .. } => SheafError::AutodiffMissingRule {
+                operation,
+                location: Some(loc.clone()),
+            },
             other => other,
         }
     }
 
     /// Return just the message, without location or error-kind prefix.
-    pub fn short_message(&self) -> &str {
+    pub fn short_message(&self) -> Cow<'_, str> {
         match self {
             SheafError::Parse { message, .. }
             | SheafError::Compile { message, .. }
-            | SheafError::Runtime { message, .. } => message,
-            SheafError::Io(msg) => msg,
+            | SheafError::Runtime { message, .. } => Cow::Borrowed(message),
+            SheafError::AutodiffMissingRule { operation, .. } => Cow::Owned(format!(
+                "no differentiation rule for operation '{}'",
+                operation
+            )),
+            SheafError::Io(msg) => Cow::Borrowed(msg),
         }
     }
 }
@@ -122,3 +154,38 @@ impl std::error::Error for SheafError {}
 
 /// Result type for Sheaf operations
 pub type SheafResult<T> = Result<T, SheafError>;
+
+#[cfg(test)]
+mod tests {
+    use super::{SheafError, SourceLocation};
+    use crate::core::error_format::format_error;
+    use std::rc::Rc;
+
+    #[test]
+    fn autodiff_missing_rule_preserves_its_diagnostic_contract() {
+        let location = SourceLocation::new(4, 7, Rc::from("loss.shf"));
+        let error = SheafError::AutodiffMissingRule {
+            operation: "flip".to_string(),
+            location: None,
+        }.with_location(&location);
+
+        assert!(matches!(
+            error,
+            SheafError::AutodiffMissingRule {
+                ref operation,
+                location: Some(ref actual),
+            } if operation == "flip" && actual == &location
+        ));
+        assert_eq!(
+            error.short_message(),
+            "no differentiation rule for operation 'flip'"
+        );
+        assert_eq!(
+            error.to_string(),
+            "loss.shf:4: autodiff error: no differentiation rule for operation 'flip'"
+        );
+        assert!(format_error(&error).contains(
+            "error: no differentiation rule for operation 'flip'"
+        ));
+    }
+}

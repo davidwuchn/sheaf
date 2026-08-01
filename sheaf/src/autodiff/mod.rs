@@ -15,6 +15,8 @@ pub use transforms::{cse, fold_dict_gets, inline_function_calls};
 // `grad(expr, wrt)` returns a new `CompiledExpr` representing dL/d(wrt),
 // assuming `expr` is the scalar loss (so the incoming gradient is 1.0).
 
+use crate::autodiff::analysis::depends_on;
+use crate::core::error::{SheafError, SheafResult};
 use crate::core::expr::{BindingPattern, CompiledExpr};
 
 // helpers
@@ -33,6 +35,22 @@ fn float(v: f64) -> CompiledExpr {
 fn is_zero(expr: &CompiledExpr) -> bool {
     matches!(expr, CompiledExpr::Float(v) if *v == 0.0)
         || matches!(expr, CompiledExpr::Integer(0))
+}
+
+fn unsupported_gradient(
+    expr: &CompiledExpr,
+    wrt: &str,
+    operation: &str,
+    location: Option<crate::core::error::SourceLocation>,
+) -> SheafResult<CompiledExpr> {
+    if depends_on(expr, wrt) {
+        Err(SheafError::AutodiffMissingRule {
+            operation: operation.to_string(),
+            location,
+        })
+    } else {
+        Ok(float(0.0))
+    }
 }
 
 fn add(a: CompiledExpr, b: CompiledExpr) -> CompiledExpr {
@@ -165,13 +183,21 @@ pub fn simplify(expr: CompiledExpr) -> CompiledExpr {
 /// differentiating the loss itself: an implicit `1.0` is used.
 ///
 /// Returns a `CompiledExpr` that can be fed to the code generator as-is.
-pub fn grad(expr: &CompiledExpr, wrt: &str, grad_output: Option<CompiledExpr>) -> CompiledExpr {
+pub fn grad(
+    expr: &CompiledExpr,
+    wrt: &str,
+    grad_output: Option<CompiledExpr>,
+) -> SheafResult<CompiledExpr> {
     let g = grad_output.unwrap_or_else(|| float(1.0));
     grad_with(expr, wrt, g)
 }
 
-fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
-    match expr {
+fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> SheafResult<CompiledExpr> {
+    if is_zero(&g) {
+        return Ok(float(0.0));
+    }
+
+    let result = match expr {
         // Constants and irrelevant symbols -> zero
         CompiledExpr::Float(_) | CompiledExpr::Integer(_) => float(0.0),
 
@@ -193,7 +219,9 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
             }
         }
 
-        CompiledExpr::FunctionCall { name, args, .. } => grad_function_call(name, args, wrt, g),
+        CompiledExpr::FunctionCall { name, args, loc } => {
+            grad_function_call(name, args, wrt, g, loc.clone())?
+        }
 
         // Let: forward-mode AD through bindings without exponential expansion.
         //
@@ -250,7 +278,7 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
             // upstream[i] = dL/dxi, accumulated from body and later bindings.
             let mut upstream: Vec<CompiledExpr> = (0..n)
                 .map(|i| grad_with(body, binding_names[i], g.clone()))
-                .collect();
+                .collect::<SheafResult<_>>()?;
 
             // Back-propagate through later bindings (reverse order)
             for j in (0..n).rev() {
@@ -259,7 +287,7 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
                         &effective_bindings[j].1,
                         binding_names[i],
                         upstream[j].clone(),
-                    );
+                    )?;
                     if !is_zero(&contrib) {
                         upstream[i] = add(upstream[i].clone(), contrib);
                     }
@@ -275,7 +303,7 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
             let mut total = if is_bound {
                 float(0.0)
             } else {
-                grad_with(body, wrt, g)
+                grad_with(body, wrt, g)?
             };
 
             for i in 0..n {
@@ -283,7 +311,7 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
                     &effective_bindings[i].1,
                     wrt,
                     upstream[i].clone(),
-                );
+                )?;
                 if !is_zero(&contrib) {
                     total = add(total, contrib);
                 }
@@ -300,7 +328,7 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
                         &effective_bindings[j].1,
                         &alias,
                         upstream[j].clone(),
-                    );
+                    )?;
                     if !is_zero(&contrib) {
                         // __pre_h = Symbol(h_outer). Propagate: if wrt matches
                         // the outer name, the gradient flows through.
@@ -312,7 +340,7 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
                                 &CompiledExpr::Symbol(outer_name.to_string()),
                                 wrt,
                                 contrib,
-                            );
+                            )?;
                             if !is_zero(&outer_contrib) {
                                 all_bindings.push((
                                     BindingPattern::Simple(format!("__d_alias_{}", outer_name)),
@@ -336,14 +364,35 @@ fn grad_with(expr: &CompiledExpr, wrt: &str, g: CompiledExpr) -> CompiledExpr {
         // Do: only the last expression matters
         CompiledExpr::Do(exprs) => {
             if let Some(last) = exprs.last() {
-                grad_with(last, wrt, g)
+                grad_with(last, wrt, g)?
             } else {
                 float(0.0)
             }
         }
 
-        _ => float(0.0),
-    }
+        CompiledExpr::Boolean(_) => float(0.0),
+        CompiledExpr::Nil => float(0.0),
+        CompiledExpr::String(_) => float(0.0),
+        CompiledExpr::Keyword(_) => float(0.0),
+        CompiledExpr::Quoted(_) => float(0.0),
+        CompiledExpr::FunctionRef(_) => float(0.0),
+        CompiledExpr::Vector(_) => return unsupported_gradient(expr, wrt, "vector", None),
+        CompiledExpr::Tuple(_) => return unsupported_gradient(expr, wrt, "tuple", None),
+        CompiledExpr::Dict(_) => return unsupported_gradient(expr, wrt, "dict", None),
+        CompiledExpr::If { .. } => return unsupported_gradient(expr, wrt, "if", None),
+        CompiledExpr::Lambda { .. } => return unsupported_gradient(expr, wrt, "lambda", None),
+        CompiledExpr::LambdaCall { .. } => {
+            return unsupported_gradient(expr, wrt, "lambda-call", None);
+        }
+        CompiledExpr::ValueAndGrad { .. } => {
+            return unsupported_gradient(expr, wrt, "value-and-grad", None);
+        }
+        CompiledExpr::Repeat { .. } => return unsupported_gradient(expr, wrt, "repeat", None),
+        CompiledExpr::While { .. } => return unsupported_gradient(expr, wrt, "while", None),
+        CompiledExpr::Guard { .. } => return unsupported_gradient(expr, wrt, "guard", None),
+        CompiledExpr::Def { .. } => return unsupported_gradient(expr, wrt, "def", None),
+    };
+    Ok(result)
 }
 
 /// Check if a Let has duplicate binding names (e.g. from as-> threading).
@@ -410,8 +459,9 @@ fn grad_function_call(
     args: &[CompiledExpr],
     wrt: &str,
     g: CompiledExpr,
-) -> CompiledExpr {
-    match name {
+    location: Option<crate::core::error::SourceLocation>,
+) -> SheafResult<CompiledExpr> {
+    let result = match name {
         // stop-gradient: forward is identity, backward is zero (blocks backprop)
         "stop-gradient" => float(0.0),
 
@@ -419,7 +469,7 @@ fn grad_function_call(
         "+" => {
             // d/dx (f + h) = df/dx + dh/dx
             let (lhs, rhs) = (&args[0], &args[1]);
-            add(grad_with(lhs, wrt, g.clone()), grad_with(rhs, wrt, g))
+            add(grad_with(lhs, wrt, g.clone())?, grad_with(rhs, wrt, g)?)
         }
 
         "-" if args.len() == 2 => {
@@ -428,14 +478,14 @@ fn grad_function_call(
             // Do NOT sub here: the negation is already in the upstream.
             let (lhs, rhs) = (&args[0], &args[1]);
             add(
-                grad_with(lhs, wrt, g.clone()),
-                grad_with(rhs, wrt, mul(float(-1.0), g)),
+                grad_with(lhs, wrt, g.clone())?,
+                grad_with(rhs, wrt, mul(float(-1.0), g))?,
             )
         }
 
         "-" => {
             // Unary negation: d/dx (-f) = -df/dx
-            grad_with(&args[0], wrt, mul(float(-1.0), g))
+            grad_with(&args[0], wrt, mul(float(-1.0), g))?
         }
 
         "*" => {
@@ -443,7 +493,7 @@ fn grad_function_call(
             let (lhs, rhs) = (&args[0], &args[1]);
             let g_lhs = mul(g.clone(), rhs.clone());
             let g_rhs = mul(g, lhs.clone());
-            add(grad_with(lhs, wrt, g_lhs), grad_with(rhs, wrt, g_rhs))
+            add(grad_with(lhs, wrt, g_lhs)?, grad_with(rhs, wrt, g_rhs)?)
         }
 
         "/" if args.len() == 2 => {
@@ -459,8 +509,8 @@ fn grad_function_call(
                 ),
             );
             add(
-                grad_with(lhs, wrt, g_lhs),
-                grad_with(rhs, wrt, mul(g, g_rhs_upstream)),
+                grad_with(lhs, wrt, g_lhs)?,
+                grad_with(rhs, wrt, mul(g, g_rhs_upstream))?,
             )
         }
 
@@ -473,7 +523,7 @@ fn grad_function_call(
             let (a, b) = (&args[0], &args[1]);
             let g_a = call("@-grad-lhs", vec![a.clone(), b.clone(), g.clone()]);
             let g_b = call("@-grad-rhs", vec![a.clone(), b.clone(), g.clone()]);
-            add(grad_with(a, wrt, g_a), grad_with(b, wrt, g_b))
+            add(grad_with(a, wrt, g_a)?, grad_with(b, wrt, g_b)?)
         }
 
         "einsum" => {
@@ -510,17 +560,25 @@ fn grad_function_call(
                                 args[1].clone(),
                                 g_broadcast,
                             ]);
-                            return add(grad_with(&args[1], wrt, g_a), grad_with(&args[2], wrt, g_b));
+                            return Ok(add(
+                                grad_with(&args[1], wrt, g_a)?,
+                                grad_with(&args[2], wrt, g_b)?,
+                            ));
                         }
                     }
                 }
             }
-            CompiledExpr::Float(0.0)
+            let function_call = CompiledExpr::FunctionCall {
+                name: name.to_string(),
+                args: args.to_vec(),
+                loc: location.clone(),
+            };
+            return unsupported_gradient(&function_call, wrt, name, location);
         }
 
         "transpose" | "tr" => {
             // d/dx transpose(f) = transpose(df/dx)
-            grad_with(&args[0], wrt, transpose(g))
+            grad_with(&args[0], wrt, transpose(g))?
         }
 
         // Activations
@@ -531,7 +589,7 @@ fn grad_function_call(
                 float(1.0),
                 float(0.0),
             ]);
-            grad_with(&args[0], wrt, mul(g, mask))
+            grad_with(&args[0], wrt, mul(g, mask))?
         }
 
         "maximum" => {
@@ -548,8 +606,8 @@ fn grad_function_call(
                 g,
             ]);
             add(
-                grad_with(&args[0], wrt, g_a),
-                grad_with(&args[1], wrt, g_b),
+                grad_with(&args[0], wrt, g_a)?,
+                grad_with(&args[1], wrt, g_b)?,
             )
         }
 
@@ -566,8 +624,8 @@ fn grad_function_call(
                 g,
             ]);
             add(
-                grad_with(&args[0], wrt, g_a),
-                grad_with(&args[1], wrt, g_b),
+                grad_with(&args[0], wrt, g_a)?,
+                grad_with(&args[1], wrt, g_b)?,
             )
         }
 
@@ -575,19 +633,19 @@ fn grad_function_call(
             // d/dx sigmoid(f) = sigmoid(f) * (1 - sigmoid(f)) * df/dx
             let sig = call("sigmoid", vec![args[0].clone()]);
             let local_g = mul(sig.clone(), sub(float(1.0), sig));
-            grad_with(&args[0], wrt, mul(g, local_g))
+            grad_with(&args[0], wrt, mul(g, local_g))?
         }
 
         "exp" => {
             // d/dx exp(f) = exp(f) * df/dx
             let local_g = call("exp", vec![args[0].clone()]);
-            grad_with(&args[0], wrt, mul(g, local_g))
+            grad_with(&args[0], wrt, mul(g, local_g))?
         }
 
         "log" => {
             // d/dx log(f) = (1/f) * df/dx
             let local_g = call("/", vec![float(1.0), args[0].clone()]);
-            grad_with(&args[0], wrt, mul(g, local_g))
+            grad_with(&args[0], wrt, mul(g, local_g))?
         }
 
         "sqrt" => {
@@ -596,14 +654,14 @@ fn grad_function_call(
                 float(1.0),
                 mul(float(2.0), call("sqrt", vec![args[0].clone()])),
             ]);
-            grad_with(&args[0], wrt, mul(g, local_g))
+            grad_with(&args[0], wrt, mul(g, local_g))?
         }
 
         "tanh" => {
             // d/dx tanh(f) = (1 - tanh(f)^2) * df/dx
             let t = call("tanh", vec![args[0].clone()]);
             let local_g = sub(float(1.0), mul(t.clone(), t));
-            grad_with(&args[0], wrt, mul(g, local_g))
+            grad_with(&args[0], wrt, mul(g, local_g))?
         }
 
         "gelu" => {
@@ -622,7 +680,7 @@ fn grad_function_call(
                 mul(float(0.5), add(float(1.0), tanh_k)),
                 mul(mul(float(0.5), x), mul(sech2_k, dk)),
             );
-            grad_with(&args[0], wrt, mul(g, local_g))
+            grad_with(&args[0], wrt, mul(g, local_g))?
         }
 
         "log-softmax" => {
@@ -630,17 +688,17 @@ fn grad_function_call(
             let sm = call("softmax", vec![args[0].clone(), CompiledExpr::Keyword("axis".to_string()), CompiledExpr::Integer(-1)]);
             let sum_g = call("sum", vec![g.clone(), CompiledExpr::Keyword("axis".to_string()), CompiledExpr::Integer(-1), CompiledExpr::Keyword("keepdims".to_string())]);
             let local_g = sub(g.clone(), mul(sm, sum_g));
-            grad_with(&args[0], wrt, local_g)
+            grad_with(&args[0], wrt, local_g)?
         }
 
         "reshape" => {
             // Flatten the gradient and let downstream ops handle shape alignment.
-            grad_with(&args[0], wrt, g)
+            grad_with(&args[0], wrt, g)?
         }
 
         "swapaxes" => {
             // Shape-manipulation ops: gradient passes through.
-            grad_with(&args[0], wrt, g)
+            grad_with(&args[0], wrt, g)?
         }
 
         "where" if args.len() == 3 => {
@@ -648,19 +706,19 @@ fn grad_function_call(
             let g_a = call("where", vec![args[0].clone(), g.clone(), float(0.0)]);
             let g_b = call("where", vec![args[0].clone(), float(0.0), g]);
             add(
-                grad_with(&args[1], wrt, g_a),
-                grad_with(&args[2], wrt, g_b),
+                grad_with(&args[1], wrt, g_a)?,
+                grad_with(&args[2], wrt, g_b)?,
             )
         }
 
         "slice" if args.len() >= 3 => {
             // slice is a view: gradient flows through the slice
             // (simplified: treat as pass-through, codegen handles the shape)
-            grad_with(&args[0], wrt, g)
+            grad_with(&args[0], wrt, g)?
         }
 
         "neg" => {
-            grad_with(&args[0], wrt, mul(float(-1.0), g))
+            grad_with(&args[0], wrt, mul(float(-1.0), g))?
         }
 
         "abs" => {
@@ -669,19 +727,19 @@ fn grad_function_call(
                 float(1.0),
                 float(-1.0),
             ]);
-            grad_with(&args[0], wrt, mul(g, local_g))
+            grad_with(&args[0], wrt, mul(g, local_g))?
         }
 
         // Reductions
         "mean" => {
             // d/dx mean(f) = (1/N) * df/dx
             let scaled_g = call("/", vec![g, call("len", vec![args[0].clone()])]);
-            grad_with(&args[0], wrt, scaled_g)
+            grad_with(&args[0], wrt, scaled_g)?
         }
 
         "sum" => {
             // d/dx sum(f) = df/dx (gradient broadcasts back automatically)
-            grad_with(&args[0], wrt, g)
+            grad_with(&args[0], wrt, g)?
         }
 
         "softmax" => {
@@ -691,7 +749,7 @@ fn grad_function_call(
             let gs = mul(g, sm.clone());
             let sum_gs = call("sum", vec![gs.clone(), CompiledExpr::Keyword("axis".to_string()), CompiledExpr::Integer(-1), CompiledExpr::Keyword("keepdims".to_string())]);
             let local_g = sub(gs, mul(sm, sum_gs));
-            grad_with(&args[0], wrt, local_g)
+            grad_with(&args[0], wrt, local_g)?
         }
 
         // Cross-entropy loss
@@ -704,7 +762,7 @@ fn grad_function_call(
             let n_classes = call("last", vec![call("shape", vec![args[0].clone()])]);
             let oh = call("one-hot", vec![args[1].clone(), n_classes]);
             let local_g = sub(sm, oh);
-            grad_with(&args[0], wrt, mul(g, local_g))
+            grad_with(&args[0], wrt, mul(g, local_g))?
         }
 
         // Power
@@ -718,20 +776,167 @@ fn grad_function_call(
             };
             if let Some(n) = n {
                 let local_g = mul(float(n), call("**", vec![base.clone(), float(n - 1.0)]));
-                grad_with(base, wrt, mul(g, local_g))
+                grad_with(base, wrt, mul(g, local_g))?
             } else {
-                // General case: d/dx f^g = f^g * (g/f * df/dx + log(f) * dg/dx)
-                grad_with(base, wrt, g)
+                let function_call = CompiledExpr::FunctionCall {
+                    name: name.to_string(),
+                    args: args.to_vec(),
+                    loc: location.clone(),
+                };
+                return unsupported_gradient(&function_call, wrt, name, location);
             }
         }
 
-        // Unknown
+        // An unknown operation can be treated as constant only after its
+        // arguments are proven independent of the differentiated value.
+        _ if args.iter().any(|arg| depends_on(arg, wrt)) => {
+            return Err(SheafError::AutodiffMissingRule {
+                operation: name.to_string(),
+                location,
+            });
+        }
         _ => float(0.0),
-    }
+    };
+    Ok(result)
 }
 
 /// Compute gradient and simplify in one step.
-pub fn grad_simplified(expr: &CompiledExpr, wrt: &str) -> CompiledExpr {
-    let g = grad(expr, wrt, None);
-    simplify(g)
+pub fn grad_simplified(expr: &CompiledExpr, wrt: &str) -> SheafResult<CompiledExpr> {
+    let g = grad(expr, wrt, None)?;
+    Ok(simplify(g))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{call, float, grad_simplified, CompiledExpr, SheafError};
+
+    fn missing_rule(error: SheafError, operation: &str) {
+        match error {
+            SheafError::AutodiffMissingRule {
+                operation: actual, ..
+            } => assert_eq!(actual, operation),
+            other => panic!("expected missing gradient rule, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_dependent_unknown_operation() {
+        let expr = call(
+            "sum",
+            vec![call(
+                "__missing-gradient-rule__",
+                vec![CompiledExpr::Symbol("x".into())],
+            )],
+        );
+        missing_rule(
+            grad_simplified(&expr, "x").unwrap_err(),
+            "__missing-gradient-rule__",
+        );
+    }
+
+    #[test]
+    fn rejects_nonliteral_power_exponent() {
+        let expr = call(
+            "**",
+            vec![
+                CompiledExpr::Symbol("x".into()),
+                CompiledExpr::Symbol("exponent".into()),
+            ],
+        );
+        missing_rule(grad_simplified(&expr, "x").unwrap_err(), "**");
+    }
+
+    #[test]
+    fn accepts_constant_unknown_operation() {
+        let expr = call(
+            "sum",
+            vec![call("__missing-gradient-rule__", vec![float(1.0)])],
+        );
+        assert!(matches!(
+            grad_simplified(&expr, "x").unwrap(),
+            CompiledExpr::Float(0.0)
+        ));
+    }
+
+    #[test]
+    fn preserves_stop_gradient_zero() {
+        let expr = call(
+            "sum",
+            vec![call(
+                "stop-gradient",
+                vec![CompiledExpr::Symbol("x".into())],
+            )],
+        );
+        assert!(matches!(
+            grad_simplified(&expr, "x").unwrap(),
+            CompiledExpr::Float(0.0)
+        ));
+    }
+
+    #[test]
+    fn skips_dead_let_binding() {
+        let expr = CompiledExpr::Let {
+            bindings: vec![(
+                crate::core::expr::BindingPattern::Simple("unused".into()),
+                call("__missing-gradient-rule__", vec![CompiledExpr::Symbol("x".into())]),
+            )],
+            body: Box::new(float(1.0)),
+        };
+        let gradient = grad_simplified(&expr, "x").unwrap();
+        assert!(matches!(
+            gradient,
+            CompiledExpr::Let { body, .. } if matches!(*body, CompiledExpr::Float(0.0))
+        ));
+    }
+
+    #[test]
+    fn skips_dead_do_expression() {
+        let expr = CompiledExpr::Do(vec![
+            call("__missing-gradient-rule__", vec![CompiledExpr::Symbol("x".into())]),
+            float(1.0),
+        ]);
+        assert!(matches!(
+            grad_simplified(&expr, "x").unwrap(),
+            CompiledExpr::Float(0.0)
+        ));
+    }
+
+    #[test]
+    fn retains_existing_rules() {
+        let expr = call("sum", vec![call("exp", vec![CompiledExpr::Symbol("x".into())])]);
+        assert!(matches!(
+            grad_simplified(&expr, "x").unwrap(),
+            CompiledExpr::FunctionCall { ref name, ref args, .. }
+                if name == "exp" && matches!(args.as_slice(), [CompiledExpr::Symbol(symbol)] if symbol == "x")
+        ));
+    }
+
+    #[test]
+    fn rejects_dependent_unsupported_constructs() {
+        let x = || CompiledExpr::Symbol("x".into());
+        let constructs = vec![
+            (CompiledExpr::If {
+                condition: Box::new(CompiledExpr::Boolean(true)),
+                then_branch: Box::new(x()),
+                else_branch: None,
+            }, "if"),
+            (CompiledExpr::Tuple(vec![x()]), "tuple"),
+            (
+                CompiledExpr::Dict(vec![(CompiledExpr::Keyword("x".into()), x())]),
+                "dict",
+            ),
+            (CompiledExpr::LambdaCall {
+                callee: Box::new(CompiledExpr::Lambda {
+                    params: vec!["y".into()],
+                    body: Box::new(CompiledExpr::Symbol("y".into())),
+                }),
+                args: vec![x()],
+            }, "lambda-call"),
+        ];
+
+        for (expr, operation) in constructs {
+            missing_rule(grad_simplified(&expr, "x").unwrap_err(), operation);
+        }
+    }
+
 }

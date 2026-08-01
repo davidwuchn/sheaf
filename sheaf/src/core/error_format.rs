@@ -85,6 +85,26 @@ pub fn format_error(error: &SheafError) -> String {
                 parts.push(format!("  = hint: {}", hint));
             }
         }
+        SheafError::AutodiffMissingRule {
+            operation,
+            location: Some(loc),
+        } => {
+            parts.push(format!(
+                "error: no differentiation rule for operation '{}'",
+                operation
+            ));
+            parts.push(format!(" --> {}:{}", loc.filename, loc.line));
+            append_code_context(&mut parts, &loc.filename, loc.line, loc.column);
+        }
+        SheafError::AutodiffMissingRule {
+            operation,
+            location: None,
+        } => {
+            parts.push(format!(
+                "error: no differentiation rule for operation '{}'",
+                operation
+            ));
+        }
         SheafError::Io(msg) => {
             parts.push(format!("io error: {}", msg));
         }

@@ -123,7 +123,13 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
 
             let loss_val = eval(&inlined, env)?;
             let loss = scalar_from_value(&loss_val)?;
-            let grad_expr = grad_simplified(&inlined, param_name);
+            let grad_expr = match grad_simplified(&inlined, param_name) {
+                Ok(expr) => expr,
+                Err(error) => {
+                    env.pop_scope();
+                    return Err(error);
+                }
+            };
             let grad_val = eval(&grad_expr, env)?;
 
             env.pop_scope();
@@ -158,12 +164,15 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
                             env.set(sym, val.clone());
                         }
 
-                            let grad_tree = build_grad_from_leaves(
+                            let grad_tree = match build_grad_from_leaves(
                                 &traced, params, &leaf_map.leaves, env,
-                            ).map_err(|e| {
-                                env.pop_scope();
-                                runtime_error(format!("value-and-grad: {}", e.short_message()))
-                            })?;
+                            ) {
+                                Ok(tree) => tree,
+                                Err(error) => {
+                                    env.pop_scope();
+                                    return Err(error);
+                                }
+                            };
                             env.pop_scope();
                             return Ok(Value::List(vec![Value::Float(loss), grad_tree]));
                         }
@@ -205,7 +214,7 @@ fn build_grad_from_leaves(
 
     let mut leaf_grads: HashMap<String, Value> = HashMap::new();
     for (sym, _val) in leaves {
-        let grad_expr = grad_simplified(traced_expr, sym);
+        let grad_expr = grad_simplified(traced_expr, sym)?;
         let grad_val = eval(&grad_expr, env)?;
         leaf_grads.insert(sym.clone(), grad_val);
     }

@@ -33,7 +33,7 @@ fn inline_calls_rec(
     }
 
     match expr {
-        CompiledExpr::FunctionCall { name, args, .. } => {
+        CompiledExpr::FunctionCall { name, args, loc } => {
             // First, inline in arguments
             let inlined_args: Vec<CompiledExpr> = args
                 .iter()
@@ -73,7 +73,7 @@ fn inline_calls_rec(
             CompiledExpr::FunctionCall {
                 name: name.clone(),
                 args: inlined_args,
-                loc: None,
+                loc: loc.clone(),
             }
         }
 
