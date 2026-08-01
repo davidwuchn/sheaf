@@ -481,7 +481,7 @@ impl JitCompiler {
                     .collect();
                 // Run reverse-mode AD on ANF with shape info
                 let (backward_bindings, grad_sym_map) =
-                    reverse_grad(&anf_bindings_str, &anf_body, &all_wrt_symbols, &shape_map);
+                    reverse_grad(&anf_bindings_str, &anf_body, &all_wrt_symbols, &shape_map)?;
 
                 // Apply AST-level optimizations to backward bindings
                 let backward_bindings: Vec<(String, CompiledExpr)> = backward_bindings

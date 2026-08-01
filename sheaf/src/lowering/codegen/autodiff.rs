@@ -292,7 +292,7 @@ impl CodeGenerator {
         let shape_map: HashMap<String, Vec<i64>> = self.binding_shapes();
 
     let (backward_bindings, grad_sym_map) =
-        crate::autodiff::reverse::reverse_grad(&anf_bindings_str, &anf_body, &all_wrt_symbols, &shape_map);
+        crate::autodiff::reverse::reverse_grad(&anf_bindings_str, &anf_body, &all_wrt_symbols, &shape_map)?;
 
     let backward_bindings: Vec<(String, CompiledExpr)> = backward_bindings
             .into_iter()

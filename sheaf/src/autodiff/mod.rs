@@ -76,13 +76,15 @@ pub(crate) fn replace_symbol(expr: &CompiledExpr, name: &str, replacement: &Comp
         CompiledExpr::Symbol(s) if s == name => replacement.clone(),
         CompiledExpr::FunctionCall {
             name: fn_name,
-            args, .. } => CompiledExpr::FunctionCall {
+            args,
+            loc,
+        } => CompiledExpr::FunctionCall {
             name: fn_name.clone(),
             args: args
                 .iter()
                 .map(|a| replace_symbol(a, name, replacement))
                 .collect(),
-            loc: None,
+            loc: loc.clone(),
         },
         CompiledExpr::Let { bindings, body } => {
             // Sequential scoping: once a binding shadows the name,

@@ -13,6 +13,7 @@
 //!    named binding, so the backward expression is also flat.
 
 use crate::autodiff::replace_symbol;
+use crate::core::error::{SheafError, SheafResult};
 use crate::core::expr::{BindingPattern, CompiledExpr};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -66,12 +67,12 @@ fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(BindingPattern, CompiledExpr)>) -
         _ if is_trivial(expr) => expr.clone(),
 
         // FunctionCall: ANF-ify all args, then bind the call
-        CompiledExpr::FunctionCall { name, args, .. } => {
+        CompiledExpr::FunctionCall { name, args, loc } => {
             let anf_args: Vec<CompiledExpr> = args.iter().map(|a| anf_rec(a, out)).collect();
             let result = CompiledExpr::FunctionCall {
                 name: name.clone(),
                 args: anf_args,
-                loc: None,
+                loc: loc.clone(),
             };
             let sym = fresh_anf_name();
             out.push((BindingPattern::Simple(sym.clone()), result));
@@ -169,7 +170,8 @@ pub fn reverse_grad(
     anf_body: &CompiledExpr,
     wrt: &[String],
     shapes: &HashMap<String, Vec<i64>>,
-) -> (Vec<(String, CompiledExpr)>, HashMap<String, String>) {
+) -> SheafResult<(Vec<(String, CompiledExpr)>, HashMap<String, String>)> {
+    let dependencies = analyze_anf_dependencies(anf_bindings, wrt);
     let mut adj_names: HashMap<String, String> = HashMap::new();
     let mut backward_bindings: Vec<(String, CompiledExpr)> = Vec::new();
 
@@ -199,7 +201,16 @@ pub fn reverse_grad(
             None => continue,
         };
 
-        distribute_adjoint_named(value, &adj_sym, &mut adj_names, &mut backward_bindings, shapes, name, &fwd_lookup);
+        distribute_adjoint_named(
+            value,
+            &adj_sym,
+            &mut adj_names,
+            &mut backward_bindings,
+            shapes,
+            name,
+            &fwd_lookup,
+            &dependencies,
+        )?;
     }
 
     // Build grad_map: wrt name -> adjoint symbol name
@@ -210,7 +221,66 @@ pub fn reverse_grad(
         })
         .collect();
 
-    (backward_bindings, grad_map)
+    Ok((backward_bindings, grad_map))
+}
+
+/// Determine which ANF bindings transitively depend on differentiated inputs.
+///
+/// Unknown ANF forms are conservatively dependent, so they cannot turn a
+/// missing reverse rule into a plausible zero gradient.
+fn analyze_anf_dependencies(
+    anf_bindings: &[(String, CompiledExpr)],
+    wrt: &[String],
+) -> HashMap<String, bool> {
+    let mut dependencies: HashMap<String, bool> = wrt
+        .iter()
+        .map(|name| (name.clone(), true))
+        .collect();
+
+    for (name, value) in anf_bindings {
+        let depends = anf_expr_depends_on_wrt(value, &dependencies);
+        dependencies.insert(name.clone(), depends);
+    }
+
+    dependencies
+}
+
+fn anf_expr_depends_on_wrt(expr: &CompiledExpr, dependencies: &HashMap<String, bool>) -> bool {
+    match expr {
+        CompiledExpr::Integer(_)
+        | CompiledExpr::Float(_)
+        | CompiledExpr::Boolean(_)
+        | CompiledExpr::Nil
+        | CompiledExpr::String(_)
+        | CompiledExpr::Keyword(_)
+        | CompiledExpr::Quoted(_)
+        | CompiledExpr::FunctionRef(_)
+        | CompiledExpr::ValueAndGrad { .. } => false,
+        CompiledExpr::Symbol(name) => dependencies.get(name).copied().unwrap_or(false),
+        CompiledExpr::GetTupleElement { param, .. } => {
+            dependencies.get(param).copied().unwrap_or(false)
+        }
+        CompiledExpr::Vector(elems) | CompiledExpr::Tuple(elems) => elems
+            .iter()
+            .any(|elem| anf_expr_depends_on_wrt(elem, dependencies)),
+        CompiledExpr::Dict(pairs) => pairs.iter().any(|(key, value)| {
+            anf_expr_depends_on_wrt(key, dependencies)
+                || anf_expr_depends_on_wrt(value, dependencies)
+        }),
+        CompiledExpr::FunctionCall { name, .. } if name == "shape" => false,
+        CompiledExpr::FunctionCall { args, .. } => args
+            .iter()
+            .any(|arg| anf_expr_depends_on_wrt(arg, dependencies)),
+        CompiledExpr::Def { value, .. } => anf_expr_depends_on_wrt(value, dependencies),
+        CompiledExpr::Let { .. }
+        | CompiledExpr::If { .. }
+        | CompiledExpr::Do(_)
+        | CompiledExpr::Lambda { .. }
+        | CompiledExpr::LambdaCall { .. }
+        | CompiledExpr::Repeat { .. }
+        | CompiledExpr::While { .. }
+        | CompiledExpr::Guard { .. } => true,
+    }
 }
 
 /// Add a contribution to the adjoint of `var_name`, emitting a new binding.
@@ -308,6 +378,51 @@ fn maybe_unbroadcast(
     }
 }
 
+fn reject_missing_rule_if_dependent(
+    operation: &str,
+    fwd_name: &str,
+    dependencies: &HashMap<String, bool>,
+    location: Option<crate::core::error::SourceLocation>,
+) -> SheafResult<()> {
+    if dependencies.get(fwd_name).copied().unwrap_or(true) {
+        Err(SheafError::AutodiffMissingRule {
+            operation: operation.to_string(),
+            location,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn anf_form_name(expr: &CompiledExpr) -> &'static str {
+    match expr {
+        CompiledExpr::Integer(_) => "integer",
+        CompiledExpr::Float(_) => "float",
+        CompiledExpr::Boolean(_) => "boolean",
+        CompiledExpr::Nil => "nil",
+        CompiledExpr::String(_) => "string",
+        CompiledExpr::Keyword(_) => "keyword",
+        CompiledExpr::Vector(_) => "vector",
+        CompiledExpr::Tuple(_) => "tuple",
+        CompiledExpr::Dict(_) => "dict",
+        CompiledExpr::Quoted(_) => "quoted",
+        CompiledExpr::FunctionRef(_) => "function reference",
+        CompiledExpr::Let { .. } => "let",
+        CompiledExpr::If { .. } => "if",
+        CompiledExpr::Do(_) => "do",
+        CompiledExpr::Lambda { .. } => "lambda",
+        CompiledExpr::LambdaCall { .. } => "lambda call",
+        CompiledExpr::ValueAndGrad { .. } => "value-and-grad",
+        CompiledExpr::Repeat { .. } => "repeat",
+        CompiledExpr::While { .. } => "while",
+        CompiledExpr::Guard { .. } => "guard",
+        CompiledExpr::Def { .. } => "def",
+        CompiledExpr::Symbol(_) => "symbol",
+        CompiledExpr::GetTupleElement { .. } => "tuple element",
+        CompiledExpr::FunctionCall { .. } => "function call",
+    }
+}
+
 /// Distribute the adjoint `adj_sym` (a Symbol) to the operands of `expr`.
 ///
 /// All emitted expressions reference `adj_sym` by Symbol, never clone the
@@ -320,21 +435,35 @@ fn distribute_adjoint_named(
     shapes: &HashMap<String, Vec<i64>>,
     fwd_name: &str,
     fwd_lookup: &HashMap<String, String>,
-) {
+    dependencies: &HashMap<String, bool>,
+) -> SheafResult<()> {
     match expr {
         CompiledExpr::Symbol(s) => {
             accumulate_named(s, adj_sym.clone(), adj_names, bindings);
+            Ok(())
         }
-
         CompiledExpr::GetTupleElement { param, .. } => {
             accumulate_named(param, adj_sym.clone(), adj_names, bindings);
+            Ok(())
         }
-
-        CompiledExpr::FunctionCall { name, args, .. } => {
-            distribute_fn_adjoint_named(name, args, adj_sym, adj_names, bindings, shapes, fwd_name, fwd_lookup);
-        }
-
-        _ => {}
+        CompiledExpr::FunctionCall { name, args, loc } => distribute_fn_adjoint_named(
+            name,
+            args,
+            adj_sym,
+            adj_names,
+            bindings,
+            shapes,
+            fwd_name,
+            fwd_lookup,
+            dependencies,
+            loc.clone(),
+        ),
+        _ => reject_missing_rule_if_dependent(
+            anf_form_name(expr),
+            fwd_name,
+            dependencies,
+            None,
+        ),
     }
 }
 
@@ -347,7 +476,9 @@ fn distribute_fn_adjoint_named(
     shapes: &HashMap<String, Vec<i64>>,
     fwd_name: &str,
     fwd_lookup: &HashMap<String, String>,
-) {
+    dependencies: &HashMap<String, bool>,
+    location: Option<crate::core::error::SourceLocation>,
+) -> SheafResult<()> {
     match name {
         // stop-gradient: forward is identity, but no gradient flows backward.
         "stop-gradient" => {}
@@ -471,34 +602,38 @@ fn distribute_fn_adjoint_named(
             // einsum("lhs_sub,rhs_sub->out_sub", A, B)
             // dL/dA = einsum("out_sub,rhs_sub->lhs_sub", adj, B)
             // dL/dB = einsum("lhs_sub,out_sub->rhs_sub", A, adj)
-            if args.len() == 3 {
-                if let CompiledExpr::String(ref sub) = args[0] {
-                    if let Some((inputs, output)) = sub.split_once("->") {
-                        let parts: Vec<&str> = inputs.split(',').collect();
-                        if parts.len() == 2 {
-                            let lhs_sub = parts[0].trim();
-                            let rhs_sub = parts[1].trim();
-                            let out_sub = output.trim();
-
-                            let grad_lhs_sub = format!("{},{}->{}", out_sub, rhs_sub, lhs_sub);
-                            let da = emit_binding(bindings, call("einsum", vec![
-                                CompiledExpr::String(grad_lhs_sub),
-                                adj.clone(),
-                                args[2].clone(),
-                            ]));
-                            acc_arg(&args[1], sym(&da), adj_names, bindings);
-
-                            let grad_rhs_sub = format!("{},{}->{}", lhs_sub, out_sub, rhs_sub);
-                            let db = emit_binding(bindings, call("einsum", vec![
-                                CompiledExpr::String(grad_rhs_sub),
-                                args[1].clone(),
-                                adj.clone(),
-                            ]));
-                            acc_arg(&args[2], sym(&db), adj_names, bindings);
-                        }
-                    }
-                }
+            let Some(CompiledExpr::String(sub)) = args.first() else {
+                return reject_missing_rule_if_dependent("einsum", fwd_name, dependencies, location);
+            };
+            if args.len() != 3 {
+                return reject_missing_rule_if_dependent("einsum", fwd_name, dependencies, location);
             }
+            let Some((inputs, output)) = sub.split_once("->") else {
+                return reject_missing_rule_if_dependent("einsum", fwd_name, dependencies, location);
+            };
+            let parts: Vec<&str> = inputs.split(',').collect();
+            if parts.len() != 2 {
+                return reject_missing_rule_if_dependent("einsum", fwd_name, dependencies, location);
+            }
+            let lhs_sub = parts[0].trim();
+            let rhs_sub = parts[1].trim();
+            let out_sub = output.trim();
+
+            let grad_lhs_sub = format!("{},{}->{}", out_sub, rhs_sub, lhs_sub);
+            let da = emit_binding(bindings, call("einsum", vec![
+                CompiledExpr::String(grad_lhs_sub),
+                adj.clone(),
+                args[2].clone(),
+            ]));
+            acc_arg(&args[1], sym(&da), adj_names, bindings);
+
+            let grad_rhs_sub = format!("{},{}->{}", lhs_sub, out_sub, rhs_sub);
+            let db = emit_binding(bindings, call("einsum", vec![
+                CompiledExpr::String(grad_rhs_sub),
+                args[1].clone(),
+                adj.clone(),
+            ]));
+            acc_arg(&args[2], sym(&db), adj_names, bindings);
         }
 
         "transpose" | "tr" => {
@@ -826,16 +961,14 @@ fn distribute_fn_adjoint_named(
 
         "**" if args.len() == 2 => {
             let n = match &args[1] {
-                CompiledExpr::Float(n) => Some(*n),
-                CompiledExpr::Integer(n) => Some(*n as f64),
-                _ => None,
+                CompiledExpr::Float(n) => *n,
+                CompiledExpr::Integer(n) => *n as f64,
+                _ => return reject_missing_rule_if_dependent("**", fwd_name, dependencies, location),
             };
-            if let Some(n) = n {
-                let pow = emit_binding(bindings, call("**", vec![args[0].clone(), float(n - 1.0)]));
-                let local = emit_binding(bindings, call("*", vec![float(n), sym(&pow)]));
-                let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&local)]));
-                acc_arg(&args[0], sym(&contrib), adj_names, bindings);
-            }
+            let pow = emit_binding(bindings, call("**", vec![args[0].clone(), float(n - 1.0)]));
+            let local = emit_binding(bindings, call("*", vec![float(n), sym(&pow)]));
+            let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&local)]));
+            acc_arg(&args[0], sym(&contrib), adj_names, bindings);
         }
 
         // first(x) extracts element 0.  Adjoint passes through to arg.
@@ -922,8 +1055,9 @@ fn distribute_fn_adjoint_named(
             acc_arg(&args[2], sym(&adj_coll), adj_names, bindings);
         }
 
-        _ => {} // Unknown op: no gradient
+        _ => return reject_missing_rule_if_dependent(name, fwd_name, dependencies, location),
     }
+    Ok(())
 }
 
 /// Look up the shape of an argument (must be a Symbol to resolve).
@@ -974,5 +1108,213 @@ fn acc_arg(
             accumulate_named(param, contribution, adj_names, bindings);
         }
         _ => {} // Literal: no gradient
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{reverse_grad, to_anf};
+    use crate::core::error::{SheafError, SourceLocation};
+    use crate::core::expr::{BindingPattern, CompiledExpr};
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    fn symbol(name: &str) -> CompiledExpr {
+        CompiledExpr::Symbol(name.to_string())
+    }
+
+    fn call(name: &str, args: Vec<CompiledExpr>) -> CompiledExpr {
+        CompiledExpr::FunctionCall {
+            name: name.to_string(),
+            args,
+            loc: None,
+        }
+    }
+
+    fn missing_rule(error: SheafError, operation: &str) {
+        assert!(matches!(
+            error,
+            SheafError::AutodiffMissingRule {
+                operation: actual, ..
+            } if actual == operation
+        ));
+    }
+
+    #[test]
+    fn rejects_unknown_operation_depending_on_parameter() {
+        let bindings = vec![("result".to_string(), call("unknown", vec![symbol("x")]))];
+        let error = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap_err();
+
+        missing_rule(error, "unknown");
+    }
+
+    #[test]
+    fn tracks_dependency_through_multiple_anf_bindings() {
+        let bindings = vec![
+            ("a".to_string(), call("unknown", vec![symbol("x")])),
+            ("result".to_string(), call("+", vec![symbol("a"), CompiledExpr::Float(1.0)])),
+        ];
+        let error = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap_err();
+
+        missing_rule(error, "unknown");
+    }
+
+    #[test]
+    fn rejects_nonliteral_power_exponent() {
+        let bindings = vec![(
+            "result".to_string(),
+            call("**", vec![symbol("x"), symbol("exponent")]),
+        )];
+        let error = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap_err();
+
+        missing_rule(error, "**");
+    }
+
+    #[test]
+    fn rejects_unsupported_einsum_form() {
+        let bindings = vec![(
+            "result".to_string(),
+            call("einsum", vec![CompiledExpr::String("ij".to_string()), symbol("x"), symbol("y")]),
+        )];
+        let error = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap_err();
+
+        missing_rule(error, "einsum");
+    }
+
+    #[test]
+    fn rejects_active_non_call_anf_form() {
+        let bindings = vec![(
+            "result".to_string(),
+            CompiledExpr::If {
+                condition: Box::new(CompiledExpr::Boolean(true)),
+                then_branch: Box::new(symbol("x")),
+                else_branch: Some(Box::new(CompiledExpr::Float(0.0))),
+            },
+        )];
+        let error = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap_err();
+
+        missing_rule(error, "if");
+    }
+
+    #[test]
+    fn permits_unknown_operation_independent_of_parameters() {
+        let bindings = vec![("result".to_string(), call("unknown", vec![CompiledExpr::Float(1.0)]))];
+        let (backward, gradients) = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap();
+
+        assert_eq!(backward.len(), 1);
+        assert!(gradients.is_empty());
+    }
+
+    #[test]
+    fn permits_unknown_operation_with_a_static_shape_argument() {
+        let bindings = vec![
+            ("shape".to_string(), call("shape", vec![symbol("x")])),
+            ("classes".to_string(), call("last", vec![symbol("shape")])),
+            (
+                "result".to_string(),
+                call("one-hot", vec![CompiledExpr::Integer(0), symbol("classes")]),
+            ),
+        ];
+        let (_, gradients) = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap();
+
+        assert!(gradients.is_empty());
+    }
+
+    #[test]
+    fn ignores_unknown_operation_in_dead_binding() {
+        let bindings = vec![
+            ("dead".to_string(), call("unknown", vec![symbol("x")])),
+            ("result".to_string(), call("+", vec![symbol("x"), CompiledExpr::Float(1.0)])),
+        ];
+        let (_, gradients) = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap();
+
+        assert!(gradients.contains_key("x"));
+    }
+
+    #[test]
+    fn stop_gradient_is_an_explicit_zero_gradient() {
+        let bindings = vec![("result".to_string(), call("stop-gradient", vec![symbol("x")]))];
+        let (_, gradients) = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap();
+
+        assert!(gradients.is_empty());
+    }
+
+    #[test]
+    fn preserves_unknown_operation_name_and_location() {
+        let location = SourceLocation::new(7, 3, Rc::from("loss.shf"));
+        let expr = CompiledExpr::Let {
+            bindings: vec![(BindingPattern::Simple("input".to_string()), symbol("x"))],
+            body: Box::new(CompiledExpr::FunctionCall {
+                name: "unknown".to_string(),
+                args: vec![symbol("input")],
+                loc: Some(location.clone()),
+            }),
+        };
+        let anf = to_anf(&expr);
+        let CompiledExpr::Let { bindings, body } = anf else {
+            panic!("expected ANF binding");
+        };
+        let bindings: Vec<(String, CompiledExpr)> = bindings.into_iter().map(|(name, value)| {
+            (name.as_simple().unwrap().to_string(), value)
+        }).collect();
+        let error = reverse_grad(
+            &bindings,
+            &body,
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap_err();
+
+        assert!(matches!(
+            error,
+            SheafError::AutodiffMissingRule {
+                operation,
+                location: Some(actual),
+            } if operation == "unknown" && actual == location
+        ));
     }
 }

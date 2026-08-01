@@ -756,7 +756,7 @@ impl CodeGenerator {
         // Run reverse_grad on body
         let (mut body_bwd, body_grad_map) = reverse_grad(
             &body_bindings_str, &carry_result, &wrt, &body_shapes,
-        );
+        )?;
 
         // Replace seed (Float(1.0)) with Symbol("__scan_adj_carry")
         // so each backward iteration uses the current adjoint carry.
