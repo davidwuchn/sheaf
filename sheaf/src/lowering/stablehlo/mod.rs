@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! StableHLO emitter - generates MLIR StableHLO from Sheaf AST
+//! StableHLO MLIR types, registers, and expression emitter.
 
 mod broadcast;
 mod compare_ops;
@@ -18,23 +18,16 @@ mod tensor_ops;
 use crate::core::ast::SheafValue;
 use std::collections::HashMap;
 
-/// StableHLO type representation
+/// Type of a value emitted into StableHLO MLIR.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StableHLOType {
-    /// Scalar tensor: tensor<f32>
     ScalarF32,
-    /// Scalar tensor: tensor<bf16>
     ScalarBF16,
-    /// Scalar tensor: tensor<f64>
     ScalarF64,
-    /// Scalar tensor: tensor<i64>
     ScalarI64,
-    /// Scalar tensor: tensor<i1> (boolean)
     ScalarI1,
-    /// Tensor with shape: tensor<2x3xf32>
     Tensor { shape: Vec<i64>, dtype: String },
-    /// Tuple of types: tuple<tensor<2x3xf32>, tensor<8xf32>>
-    /// When keys is Some, this represents a dict (reconstructed as Value::Dict on output).
+    /// The optional keys identify a dict reconstructed at the runtime boundary.
     Tuple(Vec<StableHLOType>, Option<Vec<String>>),
 }
 
@@ -65,7 +58,7 @@ impl StableHLOType {
         }
     }
 
-    /// Create a tensor with the given dtype string ("f32", "bf16", "i32", etc.)
+    /// Constructs a tensor with an arbitrary StableHLO element type.
     pub fn typed_tensor(shape: impl Into<Vec<i64>>, dtype: &str) -> Self {
         Self::Tensor {
             shape: shape.into(),
@@ -94,7 +87,7 @@ impl StableHLOType {
         }
     }
 
-    /// Get the shape of this type, or empty slice for scalars/tuples
+    /// Returns an empty slice for scalar and tuple types.
     pub fn shape(&self) -> &[i64] {
         match self {
             Self::ScalarF32
@@ -107,7 +100,6 @@ impl StableHLOType {
         }
     }
 
-    /// Get the dtype string
     pub fn dtype(&self) -> &str {
         match self {
             Self::ScalarF32 => "f32",
@@ -120,13 +112,11 @@ impl StableHLOType {
         }
     }
 
-    /// Is this a float type (f32 or bf16)?
     pub fn is_float(&self) -> bool {
         matches!(self.dtype(), "f32" | "bf16")
     }
 
-    /// Check if two types have the same tuple nesting structure.
-    /// Leaf types (tensors, scalars) are considered structurally equivalent.
+    /// Compares tuple nesting while treating all leaf types as equivalent.
     pub fn tuple_structure_matches(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Tuple(a, _), Self::Tuple(b, _)) => {
@@ -136,7 +126,7 @@ impl StableHLOType {
                         .all(|(x, y)| x.tuple_structure_matches(y))
             }
             (Self::Tuple(..), _) | (_, Self::Tuple(..)) => false,
-            _ => true, // both are leaf types
+            _ => true,
         }
     }
 
@@ -170,8 +160,7 @@ impl StableHLOType {
         }
     }
 
-    /// Parse an MLIR type string back into a StableHLOType.
-    /// Accepts: "tensor<f32>", "tensor<2x3xf32>", "tuple<tensor<2xf32>, tensor<f32>>".
+    /// Parses scalar, ranked tensor, and nested tuple MLIR types.
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         if s.starts_with("tuple<") && s.ends_with('>') {
@@ -181,7 +170,7 @@ impl StableHLOType {
             return parsed.map(|elems| Self::Tuple(elems, None));
         }
         if s.starts_with("tensor<") && s.ends_with('>') {
-            let inner = &s[7..s.len() - 1]; // e.g. "2x3xf32" or "f32"
+            let inner = &s[7..s.len() - 1];
             let parts: Vec<&str> = inner.split('x').collect();
             if parts.len() == 1 {
                 return match parts[0] {
@@ -204,7 +193,7 @@ impl StableHLOType {
     }
 }
 
-/// Split top-level comma-separated args in a tuple, respecting nesting.
+/// Splits tuple elements without splitting nested tuples.
 fn split_tuple_args(s: &str) -> Vec<&str> {
     let mut result = Vec::new();
     let mut depth = 0;
@@ -227,12 +216,10 @@ fn split_tuple_args(s: &str) -> Vec<&str> {
     result
 }
 
-/// Register name in SSA form: %0, %1, etc. or %arg0, %arg1, etc.
+/// SSA result or function-argument register.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Register {
-    /// Regular SSA register: %0, %1, etc.
     Reg(usize),
-    /// Function argument: %arg0, %arg1, etc.
     Arg(usize),
 }
 
@@ -253,19 +240,15 @@ impl Register {
     }
 }
 
-/// MLIR StableHLO emitter
+/// Stateful StableHLO instruction emitter.
 pub struct StableHLOEmitter {
     counter: usize,
     pub(crate) body: Vec<String>,
-    /// Cache for reduce_mean results: (input_register, normalized_axis, keepdims) -> (result_reg, result_type).
-    /// Avoids recomputing mean(x, axis) when var(x, axis) also needs it internally.
+    /// Cached mean reductions reused while emitting variance operations.
     reduce_mean_cache: HashMap<(Register, usize, bool), (Register, StableHLOType)>,
-    /// Virtual tuple registers: maps a register to its constituent (register, type) pairs.
-    /// Tuples are never materialized as MLIR ops: they exist only as register groupings.
+    /// Tuples remain register groups and are never materialized as MLIR operations.
     virtual_tuples: HashMap<Register, Vec<(Register, StableHLOType)>>,
-    /// Compile-time known scalar values for constant propagation.
-    /// Populated from constants and scalar function params; used to resolve
-    /// shape-critical values (e.g. K in top_k) at codegen time.
+    /// Constants used to resolve shape operands during code generation.
     known_scalars: HashMap<Register, f64>,
     known_tensors: HashMap<Register, Vec<f64>>,
 }
@@ -282,12 +265,10 @@ impl StableHLOEmitter {
         }
     }
 
-    /// Record a known scalar value for a register (constant propagation).
     pub fn set_known_scalar(&mut self, reg: Register, value: f64) {
         self.known_scalars.insert(reg, value);
     }
 
-    /// Look up a register's known compile-time scalar value.
     pub fn known_scalar_value(&self, reg: &Register) -> Option<f64> {
         self.known_scalars.get(reg).copied()
     }
@@ -300,20 +281,17 @@ impl StableHLOEmitter {
         self.known_tensors.get(reg)
     }
 
-    /// Generate a fresh register name
     pub fn fresh_register(&mut self) -> Register {
         let reg = Register::new(self.counter);
         self.counter += 1;
         reg
     }
 
-    /// Add an instruction to the body
     pub fn emit_instruction(&mut self, instruction: String) {
         self.body.push(instruction);
     }
 
-    /// Register a tuple-typed function parameter as a virtual tuple.
-    /// Leaf types map to Register::arg(flat_idx); sub-tuples map to fresh virtual registers.
+    /// Maps tuple leaves to flat arguments and nested tuples to virtual registers.
     pub fn register_virtual_param(&mut self, ty: &StableHLOType, flat_idx: &mut usize) -> Register {
         match ty {
             StableHLOType::Tuple(elems, _) => {
@@ -335,7 +313,7 @@ impl StableHLOEmitter {
         }
     }
 
-    /// Recursively collect leaf registers from a (possibly virtual) tuple.
+    /// Flattens a virtual tuple into its leaf registers.
     pub fn collect_virtual_leaves(&self, reg: Register, ty: &StableHLOType) -> Vec<(Register, StableHLOType)> {
         if let Some(constituents) = self.virtual_tuples.get(&reg) {
             constituents.iter()
@@ -346,7 +324,6 @@ impl StableHLOEmitter {
         }
     }
 
-    /// Compile an expression to a register
     pub fn compile_expr(&mut self, expr: &SheafValue) -> (Register, StableHLOType) {
         match expr {
             SheafValue::Float(x, _) => {
@@ -436,7 +413,6 @@ impl StableHLOEmitter {
         }
     }
 
-    /// Parse a shape vector like [2 8] into vec![2, 8]
     fn parse_shape_vector(&self, expr: &SheafValue) -> Vec<i64> {
         if let SheafValue::Vector(elems, _) = expr {
             elems
@@ -517,9 +493,9 @@ mod tests {
     #[test]
     fn test_emit_float() {
         let mut emitter = StableHLOEmitter::new();
-        let expr = make_float(3.14);
-        let mlir = emitter.emit_function("pi", &expr);
+        let expr = make_float(3.125);
+        let mlir = emitter.emit_function("float", &expr);
 
-        assert!(mlir.contains("dense<3.14>"));
+        assert!(mlir.contains("dense<3.125>"));
     }
 }

@@ -181,6 +181,20 @@ fn classify_vectors_rec(
     }
 }
 
+/// Whether `expr` is an inline value-and-grad call, which always returns
+/// the two-element tuple `[value gradient]`.
+fn is_inline_value_and_grad(expr: &CompiledExpr) -> bool {
+    matches!(
+        expr,
+        CompiledExpr::LambdaCall { callee, .. }
+            if matches!(
+                callee.as_ref(),
+                CompiledExpr::FunctionCall { name, args, .. }
+                    if name == "__value-and-grad-hof__" && args.len() == 1
+            )
+    )
+}
+
 /// Classify a destructuring source.
 enum DestructKind {
     Tuple,
@@ -192,6 +206,7 @@ enum DestructKind {
 fn kind_of(expr: &CompiledExpr, symbol_types: &HashMap<String, StableHLOType>) -> DestructKind {
     match expr {
         CompiledExpr::Tuple(_) => DestructKind::Tuple,
+        expr if is_inline_value_and_grad(expr) => DestructKind::Tuple,
         CompiledExpr::Vector(_) => DestructKind::Vector1D,
         CompiledExpr::Symbol(s) => match symbol_types.get(s) {
             Some(StableHLOType::Tuple(_, _)) => DestructKind::Tuple,
@@ -217,6 +232,7 @@ fn static_length_with_types(
     match expr {
         CompiledExpr::Vector(elems) => Some(elems.len()),
         CompiledExpr::Tuple(elems) => Some(elems.len()),
+        expr if is_inline_value_and_grad(expr) => Some(2),
         CompiledExpr::Symbol(s) => symbol_types.get(s).and_then(|ty| match ty {
             StableHLOType::Tuple(tys, _) => Some(tys.len()),
             other => {

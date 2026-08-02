@@ -1,23 +1,12 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Memory profiler for `--mem-profile` mode.
-//!
-//! Spawns a background thread that samples RSS every 100 ms and tracks the
-//! peak value. Callers take snapshots at named checkpoints and retrieve the
-//! formatted report via `report()`.  The background thread is cleanly joined
-//! when the profiler is dropped.
+//! Process and IREE allocator memory profiling for `--mem-profile`.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-
-
-
-// ---------------------------------------------------------------------------
-// Internal types
-// ---------------------------------------------------------------------------
 
 struct Snapshot {
     label: String,
@@ -25,7 +14,7 @@ struct Snapshot {
     delta_bytes: i64,
 }
 
-/// IREE HAL allocator statistics (matches iree_hal_allocator_statistics_t with IREE_STATISTICS_ENABLE=1).
+/// ABI mirror of `iree_hal_allocator_statistics_t` when statistics are enabled.
 #[cfg(iree_runtime)]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -46,12 +35,7 @@ unsafe extern "C" {
     );
 }
 
-/// Manages RSS sampling and reports peak memory usage.
-///
-/// On creation a background thread is started that samples the process RSS
-/// every 100 ms and tracks the peak value. Callers take snapshots at named checkpoints and retrieve the
-/// formatted report via `report()`.  The background thread is cleanly joined
-/// when the profiler is dropped.
+/// Tracks process RSS in a background thread and records named checkpoints.
 pub struct MemProfiler {
     snapshots: Vec<Snapshot>,
     start_rss: usize,
@@ -63,12 +47,12 @@ pub struct MemProfiler {
     #[cfg(iree_runtime)]
     iree_host_peak: AtomicUsize,
     #[cfg(iree_runtime)]
-    iree_last: Mutex<(usize, usize, usize, usize)>, // (dev_peak, dev_live, host_peak, host_live)
+    // Device peak, device live, host peak, host live.
+    iree_last: Mutex<(usize, usize, usize, usize)>,
 }
 
 impl MemProfiler {
-    /// Creates a new `MemProfiler`, capturing the current RSS as the baseline
-    /// and starting a background sampling thread to track the true peak.
+    /// Starts RSS sampling with the current usage as the baseline.
     pub fn new() -> Self {
         let start_rss = current_rss();
 
@@ -108,8 +92,7 @@ impl MemProfiler {
         }
     }
 
-    /// Takes a named snapshot of the current RSS relative to the previous
-    /// sample (or the baseline if this is the first snapshot).
+    /// Records RSS and its change from the previous checkpoint.
     pub fn sample(&mut self, label: &str) {
         let rss = current_rss();
         let prev = self
@@ -125,11 +108,12 @@ impl MemProfiler {
         });
     }
 
-    /// Query IREE device allocator stats. Call before/after IREE dispatches.
+    /// Samples allocator totals from the session's IREE device.
     #[cfg(iree_runtime)]
-    pub fn sample_iree(&self, allocator: *mut crate::runtime::iree_ffi::iree_hal_allocator_t) {
+    pub fn sample_iree(&self, session: &crate::runtime::iree_session::IreeSession) {
+        let allocator = session.device_allocator_ptr();
         if allocator.is_null() { return; }
-        let mut stats: IreeAllocStats = unsafe { std::mem::zeroed() };
+        let mut stats = IreeAllocStats::default();
         unsafe { iree_hal_allocator_query_statistics(allocator, &mut stats) };
         let dev_peak = stats.device_bytes_peak;
         let host_peak = stats.host_bytes_peak;
@@ -146,10 +130,7 @@ impl MemProfiler {
         }
     }
 
-    /// Returns the formatted memory profile report as a `String`.
-    ///
-    /// Call this *after* all profiling is done and before the profiler is
-    /// dropped.
+    /// Formats the process and allocator measurements.
     pub fn report(&self) -> String {
         let start_human = format_bytes(self.start_rss);
 
@@ -225,17 +206,7 @@ impl Drop for MemProfiler {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Platform-specific RSS helpers
-// ---------------------------------------------------------------------------
-
-/// Returns the current RSS of the process in bytes.
-///
-/// On macOS, uses `task_info` with `MACH_TASK_BASIC_INFO`.
-/// On Linux, reads `/proc/self/status` to get `VmRSS`.
-///
-/// Note: `getrusage(RUSAGE_SELF).ru_maxrss` is monotonic (max RSS since
-/// process start) and cannot measure RSS fluctuations, so we avoid it.
+/// Reads current resident memory rather than the monotonic `ru_maxrss` value.
 fn current_rss() -> usize {
     #[cfg(target_os = "macos")]
     {
@@ -287,7 +258,6 @@ fn current_rss() -> usize {
                 s.lines()
                     .find(|l| l.starts_with("VmRSS:"))
                     .and_then(|l| {
-                        // "VmRSS:    12345 kB"
                         l.split_whitespace()
                             .nth(1)
                             .and_then(|v| v.parse::<usize>().ok())
@@ -361,23 +331,19 @@ fn current_phys_footprint() -> usize {
     if ret == 0 { info.phys_footprint as usize } else { 0 }
 }
 
-/// Returns the high-water mark RSS of the process using getrusage.
+/// Reads the process RSS high-water mark.
 fn peak_rss_from_getrusage() -> usize {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
     let ret = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
     if ret == 0 {
         #[cfg(target_os = "macos")]
-        { unsafe { usage.assume_init().ru_maxrss as usize } }  // bytes on macOS
+        { unsafe { usage.assume_init().ru_maxrss as usize } }
         #[cfg(target_os = "linux")]
-        { unsafe { (usage.assume_init().ru_maxrss as usize) * 1024 } }  // KiB on Linux
+        { unsafe { (usage.assume_init().ru_maxrss as usize) * 1024 } }
     } else {
         0
     }
 }
-
-// ---------------------------------------------------------------------------
-// Formatting helpers
-// ---------------------------------------------------------------------------
 
 fn format_bytes(bytes: usize) -> String {
     if bytes == 0 {
