@@ -1,12 +1,7 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! Expression tracing for autodiff.
-//!
-//! Partially evaluates a `CompiledExpr` using concrete runtime values to
-//! eliminate structural operations (get, reduce) while keeping tensor
-//! computations symbolic. The result is a flat expression the symbolic
-//! AD engine can differentiate.
+//! Simplifies an expression before symbolic autodiff.
 
 use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::SheafError;
@@ -16,7 +11,7 @@ use crate::interpreter::eval;
 use crate::interpreter::hof::{dict_scan_length, slice_dict};
 use std::collections::HashMap;
 
-/// Map from synthetic leaf symbol names to their concrete tensor Values.
+/// Values stored under temporary names while tracing.
 pub struct LeafMap {
     pub leaves: Vec<(String, Value)>,
     counter: usize,
@@ -30,7 +25,7 @@ impl LeafMap {
     pub fn register(&mut self, val: Value) -> String {
         let name = format!("__leaf_{}__", self.counter);
         self.counter += 1;
-        // Materialize DeviceBuffers to host so values_equal can compare them later.
+        // Later comparisons need the tensor data on the host.
         let host_val = val.ensure_host().unwrap_or(val);
         self.leaves.push((name.clone(), host_val));
         name
@@ -41,7 +36,7 @@ fn is_tensor_leaf(val: &Value) -> bool {
     matches!(val, Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::DeviceBuffer(_))
 }
 
-/// Differentiable function names that should be kept symbolic.
+/// Returns whether autodiff needs to see this operation.
 fn is_differentiable_op(name: &str) -> bool {
     matches!(name,
         "+" | "-" | "*" | "/" | "@" | "**"
@@ -52,16 +47,10 @@ fn is_differentiable_op(name: &str) -> bool {
     )
 }
 
-/// Symbolic environment: maps local variable names to their traced expressions.
-/// This avoids emitting Let bindings (which cause problems with the AD
-/// substitute_bindings approach for shadowed names).
+/// Local names and the expressions they stand for.
 type SymEnv = HashMap<String, CompiledExpr>;
 
-/// Trace an expression, eliminating structural ops by evaluating them
-/// with concrete runtime values. Tensor-producing ops stay symbolic.
-///
-/// Returns a FLAT expression (no Let bindings) that the AD engine can
-/// differentiate via simple symbol substitution.
+/// Simplifies collection operations but leaves tensor math unchanged.
 pub fn trace_expr(
     expr: &CompiledExpr,
     env: &mut Env,
@@ -85,26 +74,14 @@ fn trace_rec(
             Ok(expr.clone())
         }
 
-        CompiledExpr::Symbol(name) => {
-            // Check symbolic env first (traced Let bindings)
-            if let Some(traced_expr) = sym_env.get(name) {
-                return Ok(traced_expr.clone());
-            }
-            // Check runtime env
-            if let Ok(val) = env.get(name) {
-                if is_tensor_leaf(&val) {
-                    Ok(CompiledExpr::Symbol(name.clone()))
-                } else {
-                    Ok(CompiledExpr::Symbol(name.clone()))
-                }
-            } else {
-                Ok(CompiledExpr::Symbol(name.clone()))
-            }
-        }
+        CompiledExpr::Symbol(name) => Ok(sym_env
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| CompiledExpr::Symbol(name.clone()))),
 
         CompiledExpr::FunctionCall { name, args, .. } => {
             if name == "mean" && args.len() == 1 {
-                // Rewrite mean(x) -> sum(x) / N
+                // Express mean using operations understood by symbolic autodiff.
                 let traced_arg = trace_rec(&args[0], env, leaf_map, sym_env)?;
                 let concrete = eval(&args[0], env)?;
                 let n = match &concrete {
@@ -136,7 +113,7 @@ fn trace_rec(
                 });
             }
 
-            // (first (scan f init coll)) -> unroll scan, return carry only
+            // `(first (scan ...))` only needs the final carry.
             if name == "first" && args.len() == 1 {
                 if let CompiledExpr::FunctionCall { name: inner, args: inner_args, .. } = &args[0] {
                     if inner == "scan" {
@@ -163,55 +140,47 @@ fn trace_rec(
 
         CompiledExpr::Let { bindings, body } => {
             env.push_scope();
+            let outer_sym_env = sym_env.clone();
 
-            for (bname, bval) in bindings {
-                match bname {
-                    BindingPattern::Destructure(names) => {
-                        // Destructuring: evaluate concretely
-                        let concrete = eval(bval, env)?;
-                        let items = match concrete {
-                            Value::List(items) | Value::Tuple(items) => items,
-                            other => return Err(runtime_error(format!(
-                                "trace: destructuring expected list/tuple, got {}", other.type_name()
-                            ))),
-                        };
-                        for (i, v) in items.into_iter().enumerate() {
-                            if let Some(BindingPattern::Simple(n)) = names.get(i) {
-                                if is_tensor_leaf(&v) {
-                                    let sym = leaf_map.register(v.clone());
-                                    sym_env.insert(n.clone(), CompiledExpr::Symbol(sym));
+            let result = (|| {
+                for (bname, bval) in bindings {
+                    match bname {
+                        BindingPattern::Destructure(names) => {
+                            let concrete = eval(bval, env)?;
+                            let items = match concrete {
+                                Value::List(items) | Value::Tuple(items) => items,
+                                other => return Err(runtime_error(format!(
+                                    "trace: destructuring expected list/tuple, got {}", other.type_name()
+                                ))),
+                            };
+                            for (i, v) in items.into_iter().enumerate() {
+                                if let Some(BindingPattern::Simple(n)) = names.get(i) {
+                                    if is_tensor_leaf(&v) {
+                                        let sym = leaf_map.register(v.clone());
+                                        sym_env.insert(n.clone(), CompiledExpr::Symbol(sym));
+                                    }
+                                    env.set(n, v);
                                 }
-                                env.set(n, v);
+                            }
+                        }
+                        BindingPattern::Simple(name) => {
+                            let traced_val = trace_rec(bval, env, leaf_map, sym_env)?;
+                            let concrete = eval(bval, env)?;
+                            env.set(name, concrete.clone());
+
+                            if is_tensor_leaf(&concrete) {
+                                sym_env.insert(name.clone(), traced_val);
                             }
                         }
                     }
-                    BindingPattern::Simple(name) => {
-                        // Trace the value
-                        let traced_val = trace_rec(bval, env, leaf_map, sym_env)?;
-
-                        // Evaluate concretely to bind in env
-                        let concrete = eval(bval, env)?;
-                        env.set(name, concrete.clone());
-
-                        if is_tensor_leaf(&concrete) {
-                            // Store traced expression for this symbol
-                            sym_env.insert(name.clone(), traced_val);
-                        }
-                    }
                 }
-            }
 
-            let traced_body = trace_rec(body, env, leaf_map, sym_env)?;
+                trace_rec(body, env, leaf_map, sym_env)
+            })();
+
             env.pop_scope();
-
-            // Clean up sym_env (remove bindings from this scope)
-            // Note: we don't actually need to clean up because shadowing
-            // is handled by HashMap::insert overwriting prior values,
-            // and the scope is exited. But for correctness with outer
-            // scopes we should restore. For now, Let scopes in traced
-            // expressions are rare enough that this works.
-
-            Ok(traced_body)
+            *sym_env = outer_sym_env;
+            result
         }
 
         CompiledExpr::Do(exprs) => {
@@ -237,7 +206,7 @@ fn trace_rec(
     }
 }
 
-/// Trace `(get collection key)`: evaluate concretely, register tensor leaves.
+/// Resolves a collection lookup and registers tensor results as leaves.
 fn trace_get(
     args: &[CompiledExpr],
     env: &mut Env,
@@ -259,7 +228,7 @@ fn trace_get(
     }
 }
 
-/// Trace `(reduce f init coll)`: unroll the loop into a flat expression.
+/// Unrolls a reduction or scan into a flat expression.
 fn trace_reduce(
     args: &[CompiledExpr],
     env: &mut Env,
@@ -287,30 +256,27 @@ fn trace_reduce(
     let acc_param = &lambda_params[0];
     let item_param = &lambda_params[1];
 
-    // Evaluate collection concretely
     let coll_val = eval(coll, env)?;
     let items = match &coll_val {
         Value::List(items) => items.clone(),
         Value::Dict(map) => {
             let n = dict_scan_length(map)?;
-            (0..n).map(|i| slice_dict(map, i).unwrap()).collect()
+            (0..n)
+                .map(|i| slice_dict(map, i))
+                .collect::<Result<Vec<_>, _>>()?
         }
         _ => return Err(runtime_error("trace: reduce collection must be a list or dict of tensors")),
     };
 
-    // Trace init
     let mut acc_expr = trace_rec(init, env, leaf_map, sym_env)?;
     let mut acc_val = eval(init, env)?;
 
-    // Unroll each iteration
     for (_i, item_val) in items.iter().enumerate() {
         env.push_scope();
         env.set(acc_param, acc_val.clone());
         env.set(item_param, item_val.clone());
 
-        // Map the accumulator param to its traced expression
         let saved_acc = sym_env.insert(acc_param.clone(), acc_expr.clone());
-        // Map the item param: if tensor, register as leaf
         let saved_item = if is_tensor_leaf(item_val) {
             let leaf_sym = leaf_map.register(item_val.clone());
             env.set(&leaf_sym, item_val.clone());
@@ -319,17 +285,13 @@ fn trace_reduce(
             sym_env.remove(item_param)
         };
 
-        // Trace the lambda body: result is a flat expression
         let step_expr = trace_rec(&lambda_body, env, leaf_map, sym_env)?;
 
-        // Evaluate concretely to get the new accumulator value
         let step_val = eval(&lambda_body, env)?;
         env.pop_scope();
 
         if is_scan {
-            // scan: lambda returns [carry output], extract carry for next iteration.
-            // [tensor tensor] with same-shape tensors gets auto-stacked into a single
-            // tensor by eval_vector, so we handle both List/Tuple and stacked Tensor.
+            // A scan result can be a pair or two tensors stacked along a new axis.
             let extract_carry = |val: &Value| -> Option<Value> {
                 match val {
                     Value::List(items) | Value::Tuple(items) if items.len() == 2 => {
@@ -344,13 +306,12 @@ fn trace_reduce(
 
             if let Some(carry_val) = extract_carry(&step_val) {
                 acc_val = carry_val;
-                // Extract carry from traced expression
                 acc_expr = match step_expr {
                     CompiledExpr::Vector(ref elems) if elems.len() == 2 => {
                         elems[0].clone()
                     }
                     _ => {
-                        // Fallback: register the carry value as a leaf
+                        // Keep the concrete carry when tracing lost the pair structure.
                         let sym = leaf_map.register(acc_val.clone());
                         env.set(&sym, acc_val.clone());
                         CompiledExpr::Symbol(sym)
@@ -364,7 +325,6 @@ fn trace_reduce(
             acc_expr = step_expr;
         }
 
-        // Restore sym_env
         match saved_acc {
             Some(v) => { sym_env.insert(acc_param.clone(), v); }
             None => { sym_env.remove(acc_param); }

@@ -1,13 +1,12 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Dot product and einsum operations for StableHLO.
+//! Lowers matrix multiplication and einsum to StableHLO.
 
 use super::{Register, StableHLOEmitter, StableHLOType};
 
 impl StableHLOEmitter {
-    /// Emit a matrix multiply (dot_general)
-    /// Follows NumPy @ semantics:
+    /// Emits matrix multiplication with NumPy `@` behavior:
     ///   [K] @ [K]               -> scalar   (dot product)
     ///   [K] @ [K, N]            -> [N]      (vec-mat)
     ///   [M, K] @ [K]            -> [M]      (mat-vec)
@@ -26,12 +25,12 @@ impl StableHLOEmitter {
         let lhs_rank = lhs_shape.len();
         let rhs_rank = rhs_shape.len();
 
-        // Scalar operand: broadcast multiply instead of matmul
+        // Multiplication handles scalar operands; dot_general does not.
         if lhs_rank == 0 || rhs_rank == 0 {
             return self.emit_binop("*", lhs, rhs, lhs_ty, rhs_ty);
         }
 
-        // Both 1D: dot product [K] @ [K] -> scalar
+        // [K] @ [K] -> scalar
         if lhs_rank == 1 && rhs_rank == 1 {
             let result_ty = StableHLOType::f32_tensor(vec![]);
             let reg = self.fresh_register();
@@ -43,7 +42,7 @@ impl StableHLOEmitter {
             return (reg, result_ty);
         }
 
-        // 1D lhs: [K] @ [K, N] -> [N] (vec-mat)
+        // [K] @ [K, N] -> [N]
         if lhs_rank == 1 && rhs_rank >= 2 {
             let mut result_shape: Vec<i64> = rhs_shape[..rhs_rank - 2].to_vec();
             result_shape.extend_from_slice(&rhs_shape[rhs_rank - 1..]);
@@ -59,7 +58,7 @@ impl StableHLOEmitter {
             return (reg, result_ty);
         }
 
-        // 1D rhs: [M, K] @ [K] -> [M] (mat-vec), or [..., M, K] @ [K] -> [..., M]
+        // [..., M, K] @ [K] -> [..., M]
         if rhs_rank == 1 {
             let result_shape: Vec<i64> = lhs_shape[..lhs_rank - 1].to_vec();
             let result_ty = StableHLOType::f32_tensor(result_shape);
@@ -74,7 +73,6 @@ impl StableHLOEmitter {
             return (reg, result_ty);
         }
 
-    // General case: both rank >= 2
     let n_batch = if rhs_rank <= 2 {
         0
     } else {
@@ -87,15 +85,14 @@ impl StableHLOEmitter {
     result_shape.extend_from_slice(&lhs_shape[n_batch..lhs_rank - 1]);
     result_shape.extend_from_slice(&rhs_shape[n_batch + 1..]);
 
-    // Flatten leading size-1 batch dims on the higher-rank operand when the
-    // other operand is 2D (e.g. [1,M,K] @ [K,N]). IREE generates much faster
-    // GEMM kernels for 2D dot_general than for batched 3D+ patterns.
+    // Remove leading batch dimensions of size one when the other operand is a
+    // matrix. IREE handles the resulting two-dimensional multiplication faster.
     let lhs_leading_1 = if lhs_rank > 2 && rhs_rank <= 2 {
         let mut n = 0;
         for &d in &lhs_shape[..lhs_rank - 2] {
             if d == 1 { n += 1; } else { break; }
         }
-        if n == lhs_rank - 2 { n } else { n }
+        n
     } else {
         0
     };
@@ -104,7 +101,7 @@ impl StableHLOEmitter {
         for &d in &rhs_shape[..rhs_rank - 2] {
             if d == 1 { n += 1; } else { break; }
         }
-        if n == rhs_rank - 2 { n } else { n }
+        n
     } else {
         0
     };
@@ -145,8 +142,7 @@ impl StableHLOEmitter {
         return (result_reg, result_ty);
     }
 
-    // If all batch dims are size 1, flatten to 2D matmul + reshape.
-    // This gives IREE a simpler GEMM pattern instead of a batched loop.
+    // Batch dimensions of size one can use a regular matrix multiplication.
     let all_batch_are_1 = n_batch > 0
         && lhs_shape[..n_batch].iter().all(|&d| d == 1)
         && rhs_shape[..n_batch].iter().all(|&d| d == 1);
@@ -171,8 +167,7 @@ impl StableHLOEmitter {
         return (result_reg, result_ty);
     }
 
-    // Peel leading size-1 batch dims.
-    // This reduces batch loop iterations in IREE's kernel generation.
+    // Remove shared batch dimensions of size one before generating the loop.
     let n_peel = if n_batch > 0 {
         let mut n = 0;
         for i in 0..n_batch {
@@ -245,9 +240,7 @@ impl StableHLOEmitter {
     (reg, result_ty)
     }
 
-    /// Emit einsum via dot_general + optional transpose.
-    /// Parses Einstein summation notation (e.g. "...nd,d->...n") and lowers to
-    /// stablehlo.dot_general with computed batching/contracting dimensions.
+    /// Emits a two-input einsum using `dot_general` and, when needed, a transpose.
     pub fn emit_einsum(
         &mut self,
         lhs: &Register,
@@ -259,7 +252,6 @@ impl StableHLOEmitter {
         let lhs_shape = lhs_ty.shape();
         let rhs_shape = rhs_ty.shape();
 
-        // Parse spec: "lhs_labels,rhs_labels->out_labels"
         let spec_clean: String = spec.chars().filter(|c| !c.is_whitespace()).collect();
         let arrow_pos = spec_clean
             .find("->")
@@ -272,7 +264,7 @@ impl StableHLOEmitter {
         let lhs_str = &inputs_str[..comma_pos];
         let rhs_str = &inputs_str[comma_pos + 1..];
 
-        // Parse labels, expanding ellipsis to concrete batch dims
+        // Give each dimension represented by `...` a temporary label.
         let parse_labels = |s: &str, shape: &[i64]| -> Result<Vec<char>, String> {
             if let Some(pos) = s.find("...") {
                 let prefix = &s[..pos];
@@ -306,8 +298,7 @@ impl StableHLOEmitter {
             ));
         }
 
-        // Parse output labels with same ellipsis expansion
-        // For output, infer batch count from lhs (which always has the batch dims)
+        // The left input tells us how many dimensions `...` represents.
         let n_batch_lhs = if lhs_str.contains("...") {
             let explicit_lhs = lhs_str.len() - 3;
             lhs_shape.len().saturating_sub(explicit_lhs)
@@ -328,7 +319,6 @@ impl StableHLOEmitter {
             out_str.chars().collect()
         };
 
-        // Build label->dim index maps
         let mut lhs_map: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
         for (i, &c) in lhs_labels.iter().enumerate() {
             lhs_map.insert(c, i);
@@ -340,10 +330,10 @@ impl StableHLOEmitter {
 
         let out_set: std::collections::HashSet<char> = out_labels.iter().copied().collect();
 
-        // Batching dims: in lhs AND rhs AND output
+        // A label present in both inputs and the output is a batch dimension.
         let mut lhs_batch_dims = Vec::new();
         let mut rhs_batch_dims = Vec::new();
-        // Contracting dims: in lhs AND rhs but NOT in output
+        // A label present in both inputs but not the output is summed over.
         let mut lhs_contract_dims = Vec::new();
         let mut rhs_contract_dims = Vec::new();
 
@@ -359,7 +349,7 @@ impl StableHLOEmitter {
             }
         }
 
-        // dot_general output order: batch dims (sorted by lhs order) + lhs remaining + rhs remaining
+        // dot_general puts batch dimensions first, followed by each input's remaining dimensions.
         let mut batch_pairs: Vec<(i64, i64, char)> = lhs_batch_dims
             .iter()
             .zip(rhs_batch_dims.iter())
@@ -380,7 +370,7 @@ impl StableHLOEmitter {
             .collect();
         let batch_set: std::collections::HashSet<char> = batch_labels_sorted.iter().copied().collect();
 
-        // lhs remaining dims (not batch, not contracting), in order
+        // Keep the remaining dimensions in their original order.
         let mut lhs_remaining_labels = Vec::new();
         for &c in lhs_labels.iter() {
             if !batch_set.contains(&c) && !contract_set.contains(&c) {
@@ -388,7 +378,6 @@ impl StableHLOEmitter {
             }
         }
 
-        // rhs remaining dims (not batch, not contracting), in order
         let mut rhs_remaining_labels = Vec::new();
         for &c in rhs_labels.iter() {
             if !batch_set.contains(&c) && !contract_set.contains(&c) {
@@ -396,13 +385,11 @@ impl StableHLOEmitter {
             }
         }
 
-        // dot_general native output label order
         let mut dot_output_labels: Vec<char> = Vec::new();
         dot_output_labels.extend(&batch_labels_sorted);
         dot_output_labels.extend(&lhs_remaining_labels);
         dot_output_labels.extend(&rhs_remaining_labels);
 
-        // Compute result shape from label->size mapping
         let mut label_sizes: std::collections::HashMap<char, i64> =
             std::collections::HashMap::new();
         for (i, &c) in lhs_labels.iter().enumerate() {
@@ -418,7 +405,6 @@ impl StableHLOEmitter {
             .collect();
         let dot_result_ty = StableHLOType::f32_tensor(dot_result_shape);
 
-        // Format dimension arrays
         let fmt_dims = |dims: &[i64]| -> String {
             dims.iter()
                 .map(|d| d.to_string())
@@ -460,7 +446,6 @@ impl StableHLOEmitter {
         if dot_output_labels == out_labels {
             Ok((reg, dot_result_ty))
         } else {
-            // Build permutation: for each output label, find its position in dot_output_labels
             let perm: Vec<i64> = out_labels
                 .iter()
                 .map(|c| {
