@@ -23,7 +23,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-pub(self) type R = Result<Value, crate::core::error::SheafError>;
+type R = Result<Value, crate::core::error::SheafError>;
 
 pub use losses::tree_zeros;
 
@@ -52,7 +52,7 @@ fn builtin_stop_gradient(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 /// Resolve a potentially negative index against a dimension length.
 /// Negative indices wrap from the end: -1 -> len-1, -2 -> len-2, etc.
 /// Returns an error if the resolved index is out of bounds or if the input is NaN.
-pub(self) fn resolve_idx(f: f64, len: usize) -> Result<usize, crate::core::error::SheafError> {
+fn resolve_idx(f: f64, len: usize) -> Result<usize, crate::core::error::SheafError> {
     if f.is_nan() {
         return Err(runtime_error("index cannot be NaN"));
     }
@@ -75,7 +75,7 @@ pub(self) fn resolve_idx(f: f64, len: usize) -> Result<usize, crate::core::error
     Ok(idx)
 }
 
-pub(self) fn to_array(val: &Value) -> Result<(Cow<'_, ArrayD<f32>>, Dtype), crate::core::error::SheafError> {
+fn to_array(val: &Value) -> Result<(Cow<'_, ArrayD<f32>>, Dtype), crate::core::error::SheafError> {
     match val {
         Value::Int(n) => Ok((Cow::Owned(ArrayD::from_elem(IxDyn(&[]), *n as f32)), Dtype::I32)),
         Value::Float(f) => Ok((Cow::Owned(ArrayD::from_elem(IxDyn(&[]), *f)), Dtype::F32)),
@@ -108,7 +108,7 @@ fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
     Some(result)
 }
 
-pub(self) fn result_dtype(a: Dtype, b: Dtype) -> Dtype {
+fn result_dtype(a: Dtype, b: Dtype) -> Dtype {
     if a == b { return a; }
     if a == Dtype::Bool { return b; }
     if b == Dtype::Bool { return a; }
@@ -120,11 +120,11 @@ pub(self) fn result_dtype(a: Dtype, b: Dtype) -> Dtype {
     }
 }
 
-pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
+fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
     if args.len() < 2 {
         return Err(runtime_error(format!("+: expected at least 2 arguments, got {}", args.len())));
     }
-    // Fast path for the common 2-arg case: borrow both operands from Arc, zero clones
+    // The common two-argument case borrows tensor storage instead of cloning it.
     if args.len() == 2 {
         return binary_op_two(&args[0], &args[1], op);
     }
@@ -142,7 +142,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
                 }
             }
             Value::Float(f) => {
-                let s = *f as f32;
+                let s = *f;
                 dt = result_dtype(dt, Dtype::F32);
                 if acc.ndim() == 0 {
                     acc = ArrayD::from_elem(IxDyn(&[]), op(as_scalar(&acc), s));
@@ -165,7 +165,7 @@ pub(self) fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
                     let scalar = as_scalar(&acc);
                     acc = b.mapv(|x| op(scalar, x));
                 } else if b.ndim() == 0 && acc.ndim() != 0 {
-                    let scalar = as_scalar(&b);
+                    let scalar = as_scalar(b);
                     acc = acc.mapv(|x| op(x, scalar));
                 } else if acc.shape() == b.shape() {
                     acc = ndarray::Zip::from(&acc).and(b.as_ref()).map_collect(|&a, &b| op(a, b));
@@ -208,7 +208,6 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
     let bdt = dtype_of(b);
     let dt = result_dtype(adt, bdt);
 
-    // scalar op scalar
     if let (Some(sa), Some(sb)) = (a_scalar, b_scalar) {
         let x = op(sa, sb);
         return if dt == Dtype::I32 && x == x.floor() {
@@ -218,7 +217,6 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
         };
     }
 
-    // scalar op tensor
     if let (Some(s), Value::Tensor { data, .. }) = (a_scalar, b) {
         let result = if data.ndim() == 0 {
             let x = op(s, as_scalar(data));
@@ -229,7 +227,6 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
         return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
     }
 
-    // tensor op scalar
     if let (Value::Tensor { data, .. }, Some(s)) = (a, b_scalar) {
         let result = if data.ndim() == 0 {
             let x = op(as_scalar(data), s);
@@ -240,16 +237,15 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
         return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
     }
 
-    // tensor op tensor
     if let (Value::Tensor { data: ad, .. }, Value::Tensor { data: bd, .. }) = (a, b) {
         let result = if ad.ndim() == 0 {
-            let s = as_scalar(&ad);
+            let s = as_scalar(ad);
             if bd.ndim() == 0 {
-                return Ok(Value::Float(op(s, as_scalar(&bd))));
+                return Ok(Value::Float(op(s, as_scalar(bd))));
             }
             bd.mapv(|x| op(s, x))
         } else if bd.ndim() == 0 {
-            let s = as_scalar(&bd);
+            let s = as_scalar(bd);
             ad.mapv(|x| op(x, s))
         } else if ad.shape() == bd.shape() {
             ndarray::Zip::from(ad.as_ref()).and(bd.as_ref()).map_collect(|&a, &b| op(a, b))
@@ -284,7 +280,7 @@ fn dtype_of(v: &Value) -> Dtype {
     }
 }
 
-pub(self) fn unary_op(args: &[Value], op: fn(f32) -> f32) -> R {
+fn unary_op(args: &[Value], op: fn(f32) -> f32) -> R {
     if args.is_empty() {
         return Err(runtime_error("Expected at least 1 argument, got 0"));
     }
@@ -297,7 +293,7 @@ pub(self) fn unary_op(args: &[Value], op: fn(f32) -> f32) -> R {
     }
 }
 
-pub(self) fn unary_op_f32(args: &[Value], op: fn(f32) -> f32) -> R {
+fn unary_op_f32(args: &[Value], op: fn(f32) -> f32) -> R {
     if args.is_empty() {
         return Err(runtime_error("Expected at least 1 argument, got 0"));
     }
@@ -310,7 +306,7 @@ pub(self) fn unary_op_f32(args: &[Value], op: fn(f32) -> f32) -> R {
     }
 }
 
-pub(self) fn get_axis(kw: &BTreeMap<String, Value>) -> Option<i64> {
+fn get_axis(kw: &BTreeMap<String, Value>) -> Option<i64> {
     kw.get("axis").and_then(|v| match v {
         Value::Int(n) => Some(*n),
         Value::Float(f) => Some(*f as i64),
@@ -319,7 +315,7 @@ pub(self) fn get_axis(kw: &BTreeMap<String, Value>) -> Option<i64> {
 }
 
 /// Extract dtype override from kwargs (e.g. `:bf16` flag).
-pub(self) fn get_dtype_kwarg(kw: &BTreeMap<String, Value>) -> Option<Dtype> {
+fn get_dtype_kwarg(kw: &BTreeMap<String, Value>) -> Option<Dtype> {
     for key in kw.keys() {
         if let Some(dt) = Dtype::from_keyword(key) {
             return Some(dt);
@@ -329,7 +325,7 @@ pub(self) fn get_dtype_kwarg(kw: &BTreeMap<String, Value>) -> Option<Dtype> {
 }
 
 /// Apply dtype kwarg override to a result value.
-pub(self) fn with_dtype_kwarg(result: R, kw: &BTreeMap<String, Value>) -> R {
+fn with_dtype_kwarg(result: R, kw: &BTreeMap<String, Value>) -> R {
     if let Some(dt) = get_dtype_kwarg(kw) {
         match result? {
             Value::Tensor { data, .. } => Ok(Value::Tensor { data, dtype: dt }),
@@ -340,7 +336,7 @@ pub(self) fn with_dtype_kwarg(result: R, kw: &BTreeMap<String, Value>) -> R {
     }
 }
 
-pub(self) fn reduce_along_axis(arr: &ArrayD<f32>, axis: usize, op: fn(&[f32]) -> f32) -> ArrayD<f32> {
+fn reduce_along_axis(arr: &ArrayD<f32>, axis: usize, op: fn(&[f32]) -> f32) -> ArrayD<f32> {
     let shape = arr.shape();
     if shape.is_empty() || axis >= shape.len() {
         let data: Vec<f32> = arr.iter().copied().collect();
@@ -367,7 +363,7 @@ pub(self) fn reduce_along_axis(arr: &ArrayD<f32>, axis: usize, op: fn(&[f32]) ->
     ArrayD::from_shape_vec(IxDyn(&new_shape), result_data).unwrap()
 }
 
-pub(self) fn argreduce_along_axis(arr: &ArrayD<f32>, axis: usize, cmp: fn(f32, f32) -> bool) -> ArrayD<f32> {
+fn argreduce_along_axis(arr: &ArrayD<f32>, axis: usize, cmp: fn(f32, f32) -> bool) -> ArrayD<f32> {
     let shape = arr.shape();
     let mut new_shape: Vec<usize> = shape.to_vec();
     new_shape.remove(axis);
@@ -397,7 +393,7 @@ pub(self) fn argreduce_along_axis(arr: &ArrayD<f32>, axis: usize, cmp: fn(f32, f
     ArrayD::from_shape_vec(IxDyn(&new_shape), result_data).unwrap()
 }
 
-pub(self) fn shape_from_value(val: &Value) -> Result<Vec<usize>, crate::core::error::SheafError> {
+fn shape_from_value(val: &Value) -> Result<Vec<usize>, crate::core::error::SheafError> {
     match val {
         Value::List(items) => {
             items.iter().map(|v| match v {
@@ -424,7 +420,7 @@ pub(self) fn shape_from_value(val: &Value) -> Result<Vec<usize>, crate::core::er
     }
 }
 
-pub(self) fn list_to_tensor(v: &Value) -> Option<(ArrayD<f32>, Dtype)> {
+fn list_to_tensor(v: &Value) -> Option<(ArrayD<f32>, Dtype)> {
     match v {
         Value::Tensor { data, dtype } => Some(((**data).clone(), *dtype)),
         Value::List(items) => {
@@ -452,7 +448,7 @@ pub(self) fn list_to_tensor(v: &Value) -> Option<(ArrayD<f32>, Dtype)> {
     }
 }
 
-pub(self) fn cmp_op(args: &[Value], op: fn(f32, f32) -> f32, _dt: Dtype) -> R {
+fn cmp_op(args: &[Value], op: fn(f32, f32) -> f32, _dt: Dtype) -> R {
     if args.len() != 2 { return Err(runtime_error(format!("Comparison: expected 2 arguments, got {}", args.len()))); }
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
@@ -474,6 +470,6 @@ pub(self) fn cmp_op(args: &[Value], op: fn(f32, f32) -> f32, _dt: Dtype) -> R {
     Ok(bool_tensor(result))
 }
 
-pub(self) fn bool_tensor(data: ArrayD<f32>) -> Value {
+fn bool_tensor(data: ArrayD<f32>) -> Value {
     Value::Tensor { data: Arc::new(data), dtype: Dtype::Bool }
 }
