@@ -57,13 +57,12 @@ impl CodeGenerator {
                                 continue;
                             }
                             _ => {
-                                // Try resolving via known scalar constants
-                                if let Ok((reg, _)) = self.generate(&args[i + 1]) {
-                                    if let Some(v) = self.emitter.known_scalar_value(&reg) {
-                                        axis = Some(v as i64);
-                                        i += 2;
-                                        continue;
-                                    }
+                                if let Ok((reg, _)) = self.generate(&args[i + 1])
+                                    && let Some(v) = self.emitter.known_scalar_value(&reg)
+                                {
+                                    axis = Some(v as i64);
+                                    i += 2;
+                                    continue;
                                 }
                             }
                         }
@@ -71,12 +70,12 @@ impl CodeGenerator {
                     i += 1;
                 }
                 CompiledExpr::Keyword(k) if k == "keepdims" => {
-                    if i + 1 < args.len() {
-                        if let CompiledExpr::Boolean(b) = &args[i + 1] {
-                            keepdims = *b;
-                            i += 2;
-                            continue;
-                        }
+                    if i + 1 < args.len()
+                        && let CompiledExpr::Boolean(b) = &args[i + 1]
+                    {
+                        keepdims = *b;
+                        i += 2;
+                        continue;
                     }
                     keepdims = true;
                     i += 1;
@@ -133,10 +132,10 @@ impl CodeGenerator {
                             CompiledExpr::Integer(n) => { axis = Some(*n); i += 2; continue; }
                             CompiledExpr::Float(f) => { axis = Some(*f as i64); i += 2; continue; }
                             _ => {
-                                if let Ok((reg, _)) = self.generate(&args[i + 1]) {
-                                    if let Some(v) = self.emitter.known_scalar_value(&reg) {
-                                        axis = Some(v as i64); i += 2; continue;
-                                    }
+                                if let Ok((reg, _)) = self.generate(&args[i + 1])
+                                    && let Some(v) = self.emitter.known_scalar_value(&reg)
+                                {
+                                    axis = Some(v as i64); i += 2; continue;
                                 }
                             }
                         }
@@ -144,12 +143,12 @@ impl CodeGenerator {
                     i += 1;
                 }
                 CompiledExpr::Keyword(k) if k == "keepdims" => {
-                    if i + 1 < args.len() {
-                        if let CompiledExpr::Boolean(b) = &args[i + 1] {
-                            keepdims = *b;
-                            i += 2;
-                            continue;
-                        }
+                    if i + 1 < args.len()
+                        && let CompiledExpr::Boolean(b) = &args[i + 1]
+                    {
+                        keepdims = *b;
+                        i += 2;
+                        continue;
                     }
                     keepdims = true;
                     i += 1;
@@ -199,10 +198,10 @@ impl CodeGenerator {
                             CompiledExpr::Integer(n) => { axis = Some(*n); i += 2; continue; }
                             CompiledExpr::Float(f) => { axis = Some(*f as i64); i += 2; continue; }
                             _ => {
-                                if let Ok((reg, _)) = self.generate(&args[i + 1]) {
-                                    if let Some(v) = self.emitter.known_scalar_value(&reg) {
-                                        axis = Some(v as i64); i += 2; continue;
-                                    }
+                                if let Ok((reg, _)) = self.generate(&args[i + 1])
+                                    && let Some(v) = self.emitter.known_scalar_value(&reg)
+                                {
+                                    axis = Some(v as i64); i += 2; continue;
                                 }
                             }
                         }
@@ -210,12 +209,12 @@ impl CodeGenerator {
                     i += 1;
                 }
                 CompiledExpr::Keyword(k) if k == "keepdims" => {
-                    if i + 1 < args.len() {
-                        if let CompiledExpr::Boolean(b) = &args[i + 1] {
-                            keepdims = *b;
-                            i += 2;
-                            continue;
-                        }
+                    if i + 1 < args.len()
+                        && let CompiledExpr::Boolean(b) = &args[i + 1]
+                    {
+                        keepdims = *b;
+                        i += 2;
+                        continue;
                     }
                     keepdims = true;
                     i += 1;
@@ -267,12 +266,11 @@ impl CodeGenerator {
         let mut axis: i64 = -1;
         let mut i = 1;
         while i + 1 < args.len() {
-            if let CompiledExpr::Keyword(k) = &args[i] {
-                if k == "axis" {
-                    if let CompiledExpr::Integer(n) = &args[i + 1] {
-                        axis = *n;
-                    }
-                }
+            if let CompiledExpr::Keyword(k) = &args[i]
+                && k == "axis"
+                && let CompiledExpr::Integer(n) = &args[i + 1]
+            {
+                axis = *n;
             }
             i += 2;
         }
@@ -310,13 +308,12 @@ impl CodeGenerator {
                                 continue;
                             }
                             _ => {
-                                // Try resolving via known scalar constants
-                                if let Ok((reg, _)) = self.generate(&args[i + 1]) {
-                                    if let Some(v) = self.emitter.known_scalar_value(&reg) {
-                                        axis = Some(v as i64);
-                                        i += 2;
-                                        continue;
-                                    }
+                                if let Ok((reg, _)) = self.generate(&args[i + 1])
+                                    && let Some(v) = self.emitter.known_scalar_value(&reg)
+                                {
+                                    axis = Some(v as i64);
+                                    i += 2;
+                                    continue;
                                 }
                             }
                         }
@@ -324,12 +321,12 @@ impl CodeGenerator {
                     i += 1;
                 }
                 CompiledExpr::Keyword(k) if k == "keepdims" => {
-                    if i + 1 < args.len() {
-                        if let CompiledExpr::Boolean(b) = &args[i + 1] {
-                            keepdims = *b;
-                            i += 2;
-                            continue;
-                        }
+                    if i + 1 < args.len()
+                        && let CompiledExpr::Boolean(b) = &args[i + 1]
+                    {
+                        keepdims = *b;
+                        i += 2;
+                        continue;
                     }
                     keepdims = true;
                     i += 1;

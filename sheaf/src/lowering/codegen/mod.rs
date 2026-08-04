@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! Code generation - translate CompiledExpr to StableHLO MLIR
+//! StableHLO code generation from `CompiledExpr`.
 
 mod autodiff;
 mod builtins;
@@ -40,30 +40,22 @@ fn flatten_type(ty: &StableHLOType, out: &mut Vec<StableHLOType>) {
     }
 }
 
-/// Code generator - converts CompiledExpr to StableHLO
+/// Converts CompiledExpr to StableHLO
 pub struct CodeGenerator {
     emitter: StableHLOEmitter,
-    /// Map from variable names to registers and their types
     bindings: HashMap<String, (Register, StableHLOType)>,
-    /// Lambdas bound in let forms: stored for inlining, not emitted as SSA.
+    /// Let-bound lambdas are inlined rather than emitted as SSA values.
     lambda_bindings: HashMap<String, CompiledExpr>,
-    /// Function registry for user-defined functions
     function_registry: HashMap<String, crate::core::expr::FunctionDef>,
-    /// Key-to-index layout for tuple-typed variables.
-    /// Allows `(get sym "key")` to resolve when `sym` is bound to a tuple.
-    /// Populated from param configs and propagated into reduce/scan lambdas.
+    /// Dict key layouts for tuple-valued bindings.
     tuple_key_layouts: HashMap<String, std::collections::BTreeMap<String, usize>>,
-    /// Reverse map: (param_name, tuple_index) -> key_name.
-    /// Used to resolve layouts for GetTupleElement collections in reduce/scan.
+    /// Reverse tuple layout lookup used while unrolling collections.
     idx_to_key: HashMap<(String, usize), String>,
-    /// Map from SSA register to layout key name.
-    /// Tracks which layout key a register corresponds to, enabling
-    /// `(get (get x :k1) :k2)` where the outer get's operand is not a Symbol.
+    /// Layout keys associated with registers selected from a tuple.
     layout_key_map: HashMap<Register, String>,
-    /// Scalar constants extracted from runtime values (e.g. config.n_embd = 384).
-    /// Used to resolve `(static (get config :key))` in inlined function bodies.
+    /// Runtime scalar constants needed during code generation.
     scalar_constants: HashMap<(String, Vec<usize>), f64>,
-    /// Full param index maps for dict-to-tuple lowering of inlined function bodies.
+    /// Dict-to-tuple indices used while lowering inlined calls.
     param_index_maps: Vec<(String, std::collections::BTreeMap<Vec<String>, Vec<usize>>)>,
 }
 
@@ -96,9 +88,7 @@ impl CodeGenerator {
         }
     }
 
-    /// Create a CodeGenerator with function parameters bound to %arg0, %arg1, etc.
-    /// Tuple parameters become virtual tuples in the emitter: each leaf maps to
-    /// a separate MLIR %arg, but the CodeGenerator sees normal tuple registers.
+    /// Binds function parameters to MLIR arguments and virtual tuples.
     pub fn with_function_params(
         registry: HashMap<String, crate::core::expr::FunctionDef>,
         param_names: &[String],
@@ -126,8 +116,7 @@ impl CodeGenerator {
         }
     }
 
-    /// Set key-to-index layouts for tuple-typed symbols (e.g. `hidden -> {"W":0, "b":1}`).
-    /// Called before codegen when dict param configs are available.
+    /// Installs dict key layouts before generating a function.
     pub fn set_tuple_key_layouts(
         &mut self,
         layouts: HashMap<String, std::collections::BTreeMap<String, usize>>,
@@ -143,9 +132,7 @@ impl CodeGenerator {
         self.scalar_constants = constants;
     }
 
-    /// Register known scalar parameter values for constant propagation.
-    /// For scalar f32 params, this records their compile-time value in the emitter
-    /// so that shape-critical ops (e.g. top_k) can resolve K at codegen time.
+    /// Records scalar parameters needed for shape-dependent operations.
     pub fn set_scalar_param_values(&mut self, values: &[(String, f64)]) {
         for (name, value) in values {
             if let Some(&(reg, _)) = self.bindings.get(name) {
@@ -158,13 +145,12 @@ impl CodeGenerator {
         self.param_index_maps = maps;
     }
 
-    /// Bind a symbol name to an SSA register (for use by external codegen paths).
+    /// Binds a symbol to an existing SSA register.
     pub fn bind_symbol(&mut self, name: &str, reg: Register, ty: StableHLOType) {
         self.bindings.insert(name.to_string(), (reg, ty));
     }
 
-    /// Return a map of symbol name -> shape for all current bindings.
-    /// Used by reverse-mode AD to generate shape-aware gradient expressions.
+    /// Returns known binding shapes for reverse-mode autodiff.
     pub fn binding_shapes(&self) -> std::collections::HashMap<String, Vec<i64>> {
         self.bindings
             .iter()
@@ -172,9 +158,7 @@ impl CodeGenerator {
             .collect()
     }
 
-    /// Generate and bind a single Let binding in the current scope.
-    /// Handles Lambda storage, destructuring, and layout propagation.
-    /// Same logic as the Let codegen but without scope save/restore.
+    /// Generates one let binding without changing the enclosing scope.
     pub fn generate_binding(&mut self, name: &str, value_expr: &CompiledExpr) -> SheafResult<()> {
         if matches!(value_expr, CompiledExpr::Lambda { .. }) {
             self.lambda_bindings.insert(name.to_string(), value_expr.clone());
@@ -199,18 +183,17 @@ impl CodeGenerator {
     } else {
         let (reg, ty) = self.generate(value_expr)?;
         if matches!(&ty, StableHLOType::Tuple(..)) {
-            if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args, .. } = value_expr {
-                if fn_name == "get" && fn_args.len() >= 2 {
-                    if let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last() {
-                        if let Some(sub_layout) = self.tuple_key_layouts.get(k).cloned() {
-                            self.tuple_key_layouts.insert(name.to_string(), sub_layout);
-                        }
-                    }
-                }
-            } else if let CompiledExpr::Symbol(src) = value_expr {
-                if let Some(layout) = self.tuple_key_layouts.get(src).cloned() {
-                    self.tuple_key_layouts.insert(name.to_string(), layout);
-                }
+            if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args, .. } = value_expr
+                && fn_name == "get"
+                && fn_args.len() >= 2
+                && let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last()
+                && let Some(sub_layout) = self.tuple_key_layouts.get(k).cloned()
+            {
+                self.tuple_key_layouts.insert(name.to_string(), sub_layout);
+            } else if let CompiledExpr::Symbol(src) = value_expr
+                && let Some(layout) = self.tuple_key_layouts.get(src).cloned()
+            {
+                self.tuple_key_layouts.insert(name.to_string(), layout);
             }
         }
             self.bindings.insert(name.to_string(), (reg, ty));
@@ -248,13 +231,13 @@ impl CodeGenerator {
                         }
                     }
                     "len" | "length" if args.len() == 1 => {
-                        if let CompiledExpr::FunctionCall { name: inner_name, args: inner_args, .. } = &args[0] {
-                            if inner_name == "shape" && inner_args.len() == 1 {
-                                if let CompiledExpr::Symbol(sym) = &inner_args[0] {
-                                    let (_, ty) = self.bindings.get(sym.as_str())?;
-                                    return Some(ty.shape().len() as f64);
-                                }
-                            }
+                        if let CompiledExpr::FunctionCall { name: inner_name, args: inner_args, .. } = &args[0]
+                            && inner_name == "shape"
+                            && inner_args.len() == 1
+                            && let CompiledExpr::Symbol(sym) = &inner_args[0]
+                        {
+                            let (_, ty) = self.bindings.get(sym.as_str())?;
+                            return Some(ty.shape().len() as f64);
                         }
                         None
                     }
@@ -427,13 +410,12 @@ impl CodeGenerator {
                 // Propagate sub-layout for Let-bound tuples
                 if matches!(&ty, StableHLOType::Tuple(..)) {
                     if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args, .. } = value_expr {
-                        if fn_name == "get" && fn_args.len() >= 2 {
-                            // Use the last keyword arg as the layout key
-                            if let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last() {
-                                if let Some(sub_layout) = self.tuple_key_layouts.get(k).cloned() {
-                                    self.tuple_key_layouts.insert(name.clone(), sub_layout);
-                                }
-                            }
+                        if fn_name == "get"
+                            && fn_args.len() >= 2
+                            && let Some(CompiledExpr::Keyword(k) | CompiledExpr::String(k)) = fn_args.last()
+                            && let Some(sub_layout) = self.tuple_key_layouts.get(k).cloned()
+                        {
+                            self.tuple_key_layouts.insert(name.clone(), sub_layout);
                         }
                     }
                     // GetTupleElement: walk idx_to_key chain to resolve layout
@@ -449,17 +431,17 @@ impl CodeGenerator {
                                 break;
                             }
                         }
-                        if resolved {
-                            if let Some(sub_layout) = self.tuple_key_layouts.get(&cur).cloned() {
-                                self.tuple_key_layouts.insert(name.clone(), sub_layout);
-                            }
+                        if resolved
+                            && let Some(sub_layout) = self.tuple_key_layouts.get(&cur).cloned()
+                        {
+                            self.tuple_key_layouts.insert(name.clone(), sub_layout);
                         }
                     }
                     // Symbol alias: (let [x y]) where y has a layout
-                    else if let CompiledExpr::Symbol(src) = value_expr {
-                        if let Some(layout) = self.tuple_key_layouts.get(src).cloned() {
-                            self.tuple_key_layouts.insert(name.clone(), layout);
-                        }
+                    else if let CompiledExpr::Symbol(src) = value_expr
+                        && let Some(layout) = self.tuple_key_layouts.get(src).cloned()
+                    {
+                        self.tuple_key_layouts.insert(name.clone(), layout);
                     }
                 }
                 self.bindings.insert(name.clone(), (reg, ty));

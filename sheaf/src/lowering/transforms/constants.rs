@@ -154,10 +154,10 @@ fn resolve_constants_rec(
                             }
                         }
                         CompiledExpr::Symbol(aliased) => {
-                            if let Some(sh) = shapes.get(aliased).cloned() {
-                                if let BindingPattern::Simple(k_str) = k {
-                                    shapes.insert(k_str.clone(), sh);
-                                }
+                            if let Some(sh) = shapes.get(aliased).cloned()
+                                && let BindingPattern::Simple(k_str) = k
+                            {
+                                shapes.insert(k_str.clone(), sh);
                             }
                         }
                         CompiledExpr::Vector(elems)
@@ -178,10 +178,10 @@ fn resolve_constants_rec(
                             }
                         }
                         _ => {
-                            if let BindingPattern::Simple(k_str) = k {
-                                if let Some(sh) = try_infer_shape(&resolved, shapes) {
-                                    shapes.insert(k_str.clone(), sh);
-                                }
+                            if let BindingPattern::Simple(k_str) = k
+                                && let Some(sh) = try_infer_shape(&resolved, shapes)
+                            {
+                                shapes.insert(k_str.clone(), sh);
                             }
                         }
                     }
@@ -332,10 +332,10 @@ pub fn substitute_scalar_param(expr: &CompiledExpr, name: &str, value: f64) -> C
                 } else {
                     substitute_scalar_param(bexpr, name, value)
                 };
-                if let BindingPattern::Simple(bname_str) = bname {
-                    if bname_str == name {
-                        shadowed = true;
-                    }
+                if let BindingPattern::Simple(bname_str) = bname
+                    && bname_str == name
+                {
+                    shadowed = true;
                 }
                 new_bindings.push((bname.clone(), new_expr));
             }
@@ -487,10 +487,10 @@ pub fn try_infer_shape(
         CompiledExpr::Let { bindings, body } => {
             let mut inner = shapes.clone();
             for (name, rhs) in bindings {
-                if let Some(sh) = try_infer_shape(rhs, &inner) {
-                    if let BindingPattern::Simple(name_str) = name {
-                        inner.insert(name_str.clone(), sh);
-                    }
+                if let Some(sh) = try_infer_shape(rhs, &inner)
+                    && let BindingPattern::Simple(name_str) = name
+                {
+                    inner.insert(name_str.clone(), sh);
                 }
             }
             try_infer_shape(body, &inner)
@@ -599,12 +599,11 @@ pub fn try_infer_shape(
                 }
                 let mut axis_raw: i64 = 0;
                 for (i, a) in args.iter().enumerate() {
-                    if let CompiledExpr::Keyword(k) = a {
-                        if k == "axis" {
-                            if let Some(CompiledExpr::Integer(n)) = args.get(i + 1) {
-                                axis_raw = *n;
-                            }
-                        }
+                    if let CompiledExpr::Keyword(k) = a
+                        && k == "axis"
+                        && let Some(CompiledExpr::Integer(n)) = args.get(i + 1)
+                    {
+                        axis_raw = *n;
                     }
                 }
                 let ndim = tensor_shape.len() as i64;
@@ -710,12 +709,12 @@ pub(crate) fn collect_shape_gtes(
         shape_gtes: &mut std::collections::HashSet<(String, Vec<usize>)>,
         locals: &HashMap<String, CompiledExpr>,
     ) {
-        if let CompiledExpr::FunctionCall { name, args, .. } = e {
-            if let Some(pos_list) = SHAPE_BEARING_OPS
+        if let CompiledExpr::FunctionCall { name, args, .. } = e
+            && let Some(pos_list) = SHAPE_BEARING_OPS
                 .iter()
                 .find(|(n, _)| *n == name)
                 .map(|(_, p)| *p)
-            {
+        {
                 for &pos in pos_list {
                     if pos < args.len() {
                         if let Some((param, indices)) = resolve_to_gte(&args[pos], locals) {
@@ -739,7 +738,6 @@ pub(crate) fn collect_shape_gtes(
                         }
                     }
                 }
-            }
         }
         match e {
             CompiledExpr::FunctionCall { args, .. } => {

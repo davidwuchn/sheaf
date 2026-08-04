@@ -123,13 +123,13 @@ impl CodeGenerator {
                 Ok((operand_reg, operand_ty))
             }
             _ => {
-        if let Some(vals) = self.emitter.known_tensor_values(&operand_reg) {
-            if !vals.is_empty() {
-                let val = vals[0];
-                let reg = self.emitter.emit_constant_f32(val);
-                self.emitter.set_known_scalar(reg, val);
-                return Ok((reg, StableHLOType::ScalarF32));
-            }
+        if let Some(vals) = self.emitter.known_tensor_values(&operand_reg)
+            && !vals.is_empty()
+        {
+            let val = vals[0];
+            let reg = self.emitter.emit_constant_f32(val);
+            self.emitter.set_known_scalar(reg, val);
+            return Ok((reg, StableHLOType::ScalarF32));
         }
                 let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, 0);
                 Ok((reg, ty))
@@ -173,20 +173,20 @@ impl CodeGenerator {
                 location: crate::core::error::SourceLocation::unknown(),
             });
         }
-        if let Some(vals) = self.emitter.known_tensor_values(&operand_reg) {
-            if !vals.is_empty() {
-                let val = vals[vals.len() - 1];
-                let reg = self.emitter.emit_constant_f32(val);
-                self.emitter.set_known_scalar(reg, val);
-                return Ok((reg, StableHLOType::ScalarF32));
-            }
+        if let Some(vals) = self.emitter.known_tensor_values(&operand_reg)
+            && !vals.is_empty()
+        {
+            let val = vals[vals.len() - 1];
+            let reg = self.emitter.emit_constant_f32(val);
+            self.emitter.set_known_scalar(reg, val);
+            return Ok((reg, StableHLOType::ScalarF32));
         }
         let last_idx = shape[0] - 1;
         let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, last_idx);
-        if let Some(vals) = self.emitter.known_tensor_values(&operand_reg) {
-            if (last_idx as usize) < vals.len() {
-                self.emitter.set_known_scalar(reg, vals[last_idx as usize]);
-            }
+        if let Some(vals) = self.emitter.known_tensor_values(&operand_reg)
+            && (last_idx as usize) < vals.len()
+        {
+            self.emitter.set_known_scalar(reg, vals[last_idx as usize]);
         }
         Ok((reg, ty))
     }
@@ -212,18 +212,17 @@ impl CodeGenerator {
                         let mut cur_key = start_key.clone();
                         let mut ok = true;
                         for key in &keywords {
-                            if let StableHLOType::Tuple(sub_types, _) = &cur_ty {
-                                if let Some(layout) = self.tuple_key_layouts.get(&cur_key).cloned() {
-                                    if let Some(&idx) = layout.get(key) {
-                                        let sub_ty = sub_types[idx].clone();
-                                        cur_reg = self.emitter.emit_get_tuple_element(
-                                            &cur_reg, &cur_ty, idx, &sub_ty,
-                                        );
-                                        cur_ty = sub_ty;
-                                        cur_key = key.clone();
-                                        continue;
-                                    }
-                                }
+                            if let StableHLOType::Tuple(sub_types, _) = &cur_ty
+                                && let Some(layout) = self.tuple_key_layouts.get(&cur_key).cloned()
+                                && let Some(&idx) = layout.get(key)
+                            {
+                                let sub_ty = sub_types[idx].clone();
+                                cur_reg = self.emitter.emit_get_tuple_element(
+                                    &cur_reg, &cur_ty, idx, &sub_ty,
+                                );
+                                cur_ty = sub_ty;
+                                cur_key = key.clone();
+                                continue;
                             }
                             ok = false;
                             break;
@@ -266,13 +265,15 @@ impl CodeGenerator {
                                 );
                                 Ok((reg, ty))
                             } else if let CompiledExpr::FunctionCall { name: range_name, args: range_args, .. } = &args[2] {
-                                if (range_name == "range" || range_name == "arange") && range_args.len() == 2 {
-                                    if let (CompiledExpr::Integer(start), CompiledExpr::Integer(end)) = (&range_args[0], &range_args[1]) {
-                                        let (reg, ty) = self.emitter.emit_slice_last_axis(
-                                            &operand_reg, &operand_ty, *start, *end,
-                                        );
-                                        return Ok((reg, ty));
-                                    }
+                                if (range_name == "range" || range_name == "arange")
+                                    && range_args.len() == 2
+                                    && let (CompiledExpr::Integer(start), CompiledExpr::Integer(end)) =
+                                        (&range_args[0], &range_args[1])
+                                {
+                                    let (reg, ty) = self.emitter.emit_slice_last_axis(
+                                        &operand_reg, &operand_ty, *start, *end,
+                                    );
+                                    return Ok((reg, ty));
                                 }
                                 Err(SheafError::Compile {
                                     message: "get with ellipsis: index must be integer or (range start end)".to_string(),

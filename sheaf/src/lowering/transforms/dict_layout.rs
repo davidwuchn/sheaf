@@ -28,11 +28,11 @@ fn lower_inlined_gets_rec(
         CompiledExpr::FunctionCall { name, args, .. }
             if (name == "get" || name == "get-in") && args.len() >= 2 =>
         {
-            if let CompiledExpr::Symbol(alias) = &args[0] {
-                if let Some((root_param, prefix_path)) = aliases.get(alias) {
+            if let CompiledExpr::Symbol(alias) = &args[0]
+                && let Some((root_param, prefix_path)) = aliases.get(alias)
+            {
                     let mut path = prefix_path.clone();
                     let resolved = if name == "get-in" {
-                        // (get-in alias [:k1 :k2 ...])
                         if let CompiledExpr::Vector(keys) = &args[1] {
                             let mut ok = true;
                             for k in keys {
@@ -49,7 +49,6 @@ fn lower_inlined_gets_rec(
                             false
                         }
                     } else {
-                        // (get alias :k1 :k2 ...)
                         let mut ok = true;
                         for arg in &args[1..] {
                             match arg {
@@ -62,22 +61,19 @@ fn lower_inlined_gets_rec(
                         }
                         ok
                     };
-                    if resolved {
-                        if let Some(imap) = index_maps
+                    if resolved
+                        && let Some(imap) = index_maps
                             .iter()
                             .find(|(p, _)| p == root_param)
                             .map(|(_, m)| m)
-                        {
-                            if let Some(indices) = imap.get(&path) {
-                                return CompiledExpr::GetTupleElement {
-                                    param: root_param.clone(),
-                                    indices: indices.clone(),
-                                };
-                            }
-                        }
+                        && let Some(indices) = imap.get(&path)
+                    {
+                        return CompiledExpr::GetTupleElement {
+                            param: root_param.clone(),
+                            indices: indices.clone(),
+                        };
                     }
                 }
-            }
             let resolved_args: Vec<_> = args
                 .iter()
                 .map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse))
@@ -115,17 +111,15 @@ fn lower_inlined_gets_rec(
                         }
                         ok
                     };
-                    if keys_ok {
-                        if let Some(imap) =
+                    if keys_ok
+                        && let Some(imap) =
                             index_maps.iter().find(|(p, _)| p == param).map(|(_, m)| m)
-                        {
-                            if let Some(full_indices) = imap.get(&path) {
-                                return CompiledExpr::GetTupleElement {
-                                    param: param.clone(),
-                                    indices: full_indices.clone(),
-                                };
-                            }
-                        }
+                        && let Some(full_indices) = imap.get(&path)
+                    {
+                        return CompiledExpr::GetTupleElement {
+                            param: param.clone(),
+                            indices: full_indices.clone(),
+                        };
                     }
                 }
             }
@@ -143,10 +137,10 @@ fn lower_inlined_gets_rec(
                     match &resolved {
                         CompiledExpr::GetTupleElement { param, indices } => {
                             let key = (param.clone(), indices.clone());
-                            if let Some(path) = reverse.get(&key) {
-                                if let BindingPattern::Simple(k_str) = k {
-                                    aliases.insert(k_str.clone(), (param.clone(), path.clone()));
-                                }
+                            if let Some(path) = reverse.get(&key)
+                                && let BindingPattern::Simple(k_str) = k
+                            {
+                                aliases.insert(k_str.clone(), (param.clone(), path.clone()));
                             }
                         }
                         CompiledExpr::Symbol(s) => {
@@ -154,10 +148,10 @@ fn lower_inlined_gets_rec(
                                 if let BindingPattern::Simple(k_str) = k {
                                     aliases.insert(k_str.clone(), existing);
                                 }
-                            } else if index_maps.iter().any(|(p, _)| p == s) {
-                                if let BindingPattern::Simple(k_str) = k {
-                                    aliases.insert(k_str.clone(), (s.clone(), vec![]));
-                                }
+                            } else if index_maps.iter().any(|(p, _)| p == s)
+                                && let BindingPattern::Simple(k_str) = k
+                            {
+                                aliases.insert(k_str.clone(), (s.clone(), vec![]));
                             }
                         }
                         _ => {}
@@ -258,12 +252,11 @@ pub fn propagate_let_layouts(
                             break;
                         }
                     }
-                    if resolved {
-                        if let Some(sub_layout) = layouts.get(&cur).cloned() {
-                            if let BindingPattern::Simple(var_name_str) = var_name {
-                                layouts.insert(var_name_str.clone(), sub_layout);
-                            }
-                        }
+                    if resolved
+                        && let Some(sub_layout) = layouts.get(&cur).cloned()
+                        && let BindingPattern::Simple(var_name_str) = var_name
+                    {
+                        layouts.insert(var_name_str.clone(), sub_layout);
                     }
                 }
                 propagate_let_layouts(value_expr, idx_to_key, layouts);
