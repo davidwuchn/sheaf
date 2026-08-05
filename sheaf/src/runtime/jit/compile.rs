@@ -69,8 +69,7 @@ impl JitCompiler {
             .identities
             .get(&module_name)
             .cloned()
-        {
-            if existing != cache_key {
+            && existing != cache_key {
                 sheaf_msg!(
                     "ERROR jit: module fingerprint collision for {} (refusing to load)",
                     module_name
@@ -78,7 +77,6 @@ impl JitCompiler {
                 self.failed_keys.insert(cache_key);
                 return None;
             }
-        }
 
         // Reserve the variant without holding the catalogue lock during compilation.
         {
@@ -442,12 +440,11 @@ impl JitCompiler {
                     .any(|(t, _)| t == &sig.return_type)
             {
                 for (t, layout) in sig.arg_type_layouts.clone() {
-                    if let StableHLOType::Tuple(param_elems, param_keys) = &t {
-                        if param_elems.len() == ret_elems.len() && param_keys == ret_keys {
+                    if let StableHLOType::Tuple(param_elems, param_keys) = &t
+                        && param_elems.len() == ret_elems.len() && param_keys == ret_keys {
                             sig.arg_type_layouts.push((sig.return_type.clone(), layout));
                             break;
                         }
-                    }
                 }
             }
         }

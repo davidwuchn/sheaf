@@ -53,9 +53,10 @@ fn builtin_transpose(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Ok(Value::tensor_f32(arr.into_owned()))
     } else {
         let mut axes: Vec<usize> = (0..arr.ndim()).rev().collect();
-        if args.len() > 1 {
-            if let Value::List(items) = &args[1] {
-                let mut resolved_axes = Vec::with_capacity(items.len());
+        if args.len() > 1
+            && let Value::List(items) = &args[1]
+        {
+            let mut resolved_axes = Vec::with_capacity(items.len());
                 for v in items {
                     let ax = v.to_f64()
                         .ok_or_else(|| runtime_error(format!("transpose: expected numeric axis, got {}", v.type_name())))?;
@@ -65,7 +66,6 @@ fn builtin_transpose(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                     resolved_axes.push(ax as usize);
             }
             axes = resolved_axes;
-        }
         }
         Ok(Value::tensor_f32(arr.into_owned().permuted_axes(IxDyn(&axes))))
     }
@@ -77,15 +77,15 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 
     let maybe_arrays: Option<Vec<(ArrayD<f32>, Dtype)>> = args.iter().map(|a| list_to_tensor(a)).collect();
 
-    if let Some(arrays) = maybe_arrays {
-        if has_axis_kw || args.iter().any(|a| matches!(a, Value::Tensor { .. })) {
-            let all_i32 = arrays.iter().all(|(_, dt)| *dt == Dtype::I32);
+    if let Some(arrays) = maybe_arrays
+        && (has_axis_kw || args.iter().any(|a| matches!(a, Value::Tensor { .. })))
+    {
+        let all_i32 = arrays.iter().all(|(_, dt)| *dt == Dtype::I32);
             let dtype = if all_i32 { Dtype::I32 } else { Dtype::F32 };
             let views: Vec<ndarray::ArrayViewD<f32>> = arrays.iter().map(|(a, _)| a.view()).collect();
             let result = ndarray::concatenate(ndarray::Axis(axis), &views)
                 .map_err(|e| runtime_error(e.to_string()))?;
-            return Ok(Value::Tensor { data: Arc::new(result), dtype });
-        }
+        return Ok(Value::Tensor { data: Arc::new(result), dtype });
     }
 
     if matches!(&args[0], Value::String(_)) {
@@ -250,13 +250,12 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                     .map_err(|e| runtime_error(format!("get: gather reshape: {}", e)))?;
                 return Ok(Value::tensor_f32(arr));
             }
-            // Check if it's a quoted list of numbers
-            if let Value::List(items) = &args[1] {
-                if items.iter().all(|v| matches!(v, Value::Int(_) | Value::Float(_))) {
-                    return Err(runtime_error(format!(
-                        "get: expected tensor index, got quoted list.\n  = hint: use [...] (tensor) instead of '[...] (quoted list)."
-                    )));
-                }
+            if let Value::List(items) = &args[1]
+                && items.iter().all(|v| matches!(v, Value::Int(_) | Value::Float(_)))
+            {
+                return Err(runtime_error(
+                    "get: expected tensor index, got quoted list.\n  = hint: use [...] (tensor) instead of '[...] (quoted list)."
+                ));
             }
             return Err(runtime_error(format!("get: expected integer or tensor index, got {}", args[1].type_name())));
         }

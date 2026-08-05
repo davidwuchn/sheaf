@@ -88,18 +88,17 @@ fn format_value_with_spec(val: &Value, spec: &str) -> String {
         return format!("{}", val);
     }
     let spec = spec.strip_prefix(':').unwrap_or(spec);
-    if let Some(rest) = spec.strip_prefix('.') {
-        if let Some(prec_str) = rest.strip_suffix('f') {
-            if let Ok(prec) = prec_str.parse::<usize>() {
-                let f = match val {
+    if let Some(rest) = spec.strip_prefix('.')
+        && let Some(prec_str) = rest.strip_suffix('f')
+        && let Ok(prec) = prec_str.parse::<usize>()
+    {
+        let f = match val {
                     Value::Float(x) => *x as f64,
                     Value::Int(n) => *n as f64,
                     Value::Tensor { data, .. } => data.first().copied().unwrap_or(0.0) as f64,
                     _ => return format!("{}", val),
                 };
-                return format!("{:.prec$}", f, prec = prec);
-            }
-        }
+        return format!("{:.prec$}", f, prec = prec);
     }
     format!("{}", val)
 }
@@ -203,11 +202,11 @@ fn builtin_io(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                 Some(v) => v,
                 None => return Err(runtime_error("io save: expected value to save")),
             };
-            if let Some(parent) = std::path::Path::new(path).parent() {
-                if !parent.exists() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| runtime_error(format!("io save: mkdir '{}': {}", parent.display(), e)))?;
-                }
+            if let Some(parent) = std::path::Path::new(path).parent()
+                && !parent.exists()
+            {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| runtime_error(format!("io save: mkdir '{}': {}", parent.display(), e)))?;
             }
             // safetensors has its own binary format; everything else uses JSON.
             let data = if path.ends_with(".safetensors") {

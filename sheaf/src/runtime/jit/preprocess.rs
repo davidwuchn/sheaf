@@ -67,8 +67,7 @@ fn preprocess_vag_lambda_rec(
                 args: inner_args,
                 ..
             } = &new_callee
-            {
-                if name == "__value-and-grad-hof__" && inner_args.len() == 1 {
+                && name == "__value-and-grad-hof__" && inner_args.len() == 1 {
                     let preprocessed_lambda = preprocess_one_vag_lambda(
                         &inner_args[0],
                         registry,
@@ -87,7 +86,6 @@ fn preprocess_vag_lambda_rec(
                         args: new_args,
                     };
                 }
-            }
             CompiledExpr::LambdaCall {
                 callee: Box::new(new_callee),
                 args: new_args,

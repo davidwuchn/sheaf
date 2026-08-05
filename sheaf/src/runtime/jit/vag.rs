@@ -744,10 +744,9 @@ impl JitCompiler {
         if backend == "metal-spirv" {
             cmd.arg("--iree-metal-compile-to-metallib=false");
         }
-        if backend == "cuda" {
-            if let Some(target) = detect_cuda_target() {
-                cmd.arg(format!("--iree-cuda-target={}", target));
-            }
+        if backend == "cuda" && let Some(target) = detect_cuda_target()
+        {
+            cmd.arg(format!("--iree-cuda-target={}", target));
         }
         if backend == "llvm-cpu" {
             cmd.arg("--iree-llvmcpu-target-cpu=host");
@@ -769,11 +768,9 @@ impl JitCompiler {
             Err(_) => false,
         };
 
-        if ok {
-            if let Ok(data) = std::fs::read(&vmfb_path) {
-                let _ = std::fs::remove_file(&vmfb_path);
-                return Some(data);
-            }
+        if ok && let Ok(data) = std::fs::read(&vmfb_path) {
+            let _ = std::fs::remove_file(&vmfb_path);
+            return Some(data);
         }
         let _ = std::fs::remove_file(&vmfb_path);
         None

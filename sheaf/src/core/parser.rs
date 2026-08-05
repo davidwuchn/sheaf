@@ -355,22 +355,21 @@ impl Parser {
                 let vec_loc = token.location.clone();
                 let vec_val = self.parse_vector(token.location)?;
                 // Desugar [1 2 3] :bf16 -> (cast [1 2 3] :bf16)
-                if let Some(next) = self.peek() {
-                    if let Token::Keyword(ref k) = next.token {
-                        if matches!(k.as_str(), "bf16" | "f16" | "f32" | "i32" | "bool") {
-                            let kw_str = k.clone();
-                            let kw_loc = next.location.clone();
-                            self.advance();
-                            return Ok(SheafValue::List(
-                                vec![
-                                    SheafValue::Symbol("cast".to_string(), vec_loc.clone()),
-                                    vec_val,
-                                    SheafValue::Keyword(kw_str, kw_loc),
-                                ],
-                                vec_loc,
-                            ));
-                        }
-                    }
+                if let Some(next) = self.peek()
+                    && let Token::Keyword(ref k) = next.token
+                    && matches!(k.as_str(), "bf16" | "f16" | "f32" | "i32" | "bool")
+                {
+                    let kw_str = k.clone();
+                    let kw_loc = next.location.clone();
+                    self.advance();
+                    return Ok(SheafValue::List(
+                        vec![
+                            SheafValue::Symbol("cast".to_string(), vec_loc.clone()),
+                            vec_val,
+                            SheafValue::Keyword(kw_str, kw_loc),
+                        ],
+                        vec_loc,
+                    ));
                 }
                 Ok(vec_val)
             }
@@ -543,8 +542,8 @@ pub fn parse(source: &str, filename: impl Into<String>) -> ParseResult<Vec<Sheaf
         if let SheafError::Parse { ref message, ref location } = e {
             let balance = count_paren_balance(source);
             // Enrich "Unexpected closing" errors with paren balance info
-            if message.contains("Unexpected closing") && !message.contains("hint:") {
-                if balance.extra_close > 0 {
+            if message.contains("Unexpected closing") && !message.contains("hint:")
+                && balance.extra_close > 0 {
                     return SheafError::Parse {
                         message: format!(
                             "{}\n  = hint: Found {} extra closing delimiter{}. \
@@ -556,7 +555,6 @@ pub fn parse(source: &str, filename: impl Into<String>) -> ParseResult<Vec<Sheaf
                         location: location.clone(),
                     };
                 }
-            }
             // Enrich "Unclosed" errors with count of missing delimiters
             if message.starts_with("Unclosed") && balance.unclosed > 0 {
                 let hint = if balance.unclosed == 1 {

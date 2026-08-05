@@ -504,14 +504,13 @@ let has_kwargs = matches!(name,
         }
 
         // Check evaluation deadline (used by auto-trace to avoid running forever)
-        if let Some(deadline) = env.eval_deadline {
-            if std::time::Instant::now() > deadline {
+        if let Some(deadline) = env.eval_deadline
+            && std::time::Instant::now() > deadline {
                 return Err(SheafError::Runtime {
                     message: "auto-trace timeout".to_string(),
                     location: None,
                 });
             }
-        }
 
         // Record the first call for tracing (sheaf build --trace-with)
         if let Some(ref mut records) = env.call_records {

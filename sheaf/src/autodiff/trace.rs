@@ -114,12 +114,11 @@ fn trace_rec(
             }
 
             // `(first (scan ...))` only needs the final carry.
-            if name == "first" && args.len() == 1 {
-                if let CompiledExpr::FunctionCall { name: inner, args: inner_args, .. } = &args[0] {
-                    if inner == "scan" {
-                        return trace_reduce(inner_args, env, leaf_map, sym_env, true);
-                    }
-                }
+            if name == "first" && args.len() == 1
+                && let CompiledExpr::FunctionCall { name: inner, args: inner_args, .. } = &args[0]
+                && inner == "scan"
+            {
+                return trace_reduce(inner_args, env, leaf_map, sym_env, true);
             }
 
             match name.as_str() {

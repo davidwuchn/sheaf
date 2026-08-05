@@ -159,13 +159,13 @@ pub fn simplify(expr: CompiledExpr) -> CompiledExpr {
                 },
                 "transpose" | "tr" => {
                     // Detect: transpose(transpose(x)) → x (double transpose elimination)
-                    if args.len() == 1 {
-                        if let CompiledExpr::FunctionCall { name, args: inner_args, .. } = &args[0] {
-                            if (name == "transpose" || name == "tr") && inner_args.len() == 1 {
-                                // Double transpose cancels out
-                                return inner_args[0].clone();
-                            }
-                        }
+                    if args.len() == 1
+                        && let CompiledExpr::FunctionCall { name, args: inner_args, .. } = &args[0]
+                        && (name == "transpose" || name == "tr")
+                        && inner_args.len() == 1
+                    {
+                        // Double transpose cancels out
+                        return inner_args[0].clone();
                     }
                     call(&name, args)
                 },
@@ -414,15 +414,15 @@ fn has_shadowed_bindings(bindings: &[(BindingPattern, CompiledExpr)]) -> bool {
 fn unshadow_let(bindings: &[(BindingPattern, CompiledExpr)], body: &CompiledExpr) -> CompiledExpr {
     let mut seen = std::collections::HashSet::new();
     for (i, (name, _)) in bindings.iter().enumerate() {
-        if let BindingPattern::Simple(n) = name {
-            if !seen.insert(n.as_str()) {
-                let outer = bindings[..i].to_vec();
-                let inner = unshadow_let(&bindings[i..], body);
-                return CompiledExpr::Let {
-                    bindings: outer,
-                    body: Box::new(inner),
-                };
-            }
+        if let BindingPattern::Simple(n) = name
+            && !seen.insert(n.as_str()) 
+        {
+            let outer = bindings[..i].to_vec();
+            let inner = unshadow_let(&bindings[i..], body);
+            return CompiledExpr::Let {
+                bindings: outer,
+                body: Box::new(inner),
+            };
         }
     }
     CompiledExpr::Let {
@@ -535,39 +535,38 @@ fn grad_function_call(
             //
             // When grad is scalar (e.g. from sum), we multiply after einsum
             // with identity subscripts to avoid shape mismatch.
-            if args.len() == 3 {
-                if let CompiledExpr::String(ref sub) = args[0] {
-                    if let Some((inputs, output)) = sub.split_once("->") {
-                        let parts: Vec<&str> = inputs.split(',').collect();
-                        if parts.len() == 2 {
-                            let lhs_sub = parts[0].trim();
-                            let rhs_sub = parts[1].trim();
-                            let out_sub = output.trim();
+            if args.len() == 3
+                && let CompiledExpr::String(ref sub) = args[0]
+                && let Some((inputs, output)) = sub.split_once("->")
+            {
+                let parts: Vec<&str> = inputs.split(',').collect();
+                if parts.len() == 2 {
+                    let lhs_sub = parts[0].trim();
+                    let rhs_sub = parts[1].trim();
+                    let out_sub = output.trim();
 
-                            // For dA: use identity einsum on B to get lhs shape, then multiply by grad
-                            let grad_lhs_sub = format!("{},{}->{}", out_sub, rhs_sub, lhs_sub);
-                            let grad_rhs_sub = format!("{},{}->{}", lhs_sub, out_sub, rhs_sub);
+                    // For dA: use identity einsum on B to get lhs shape, then multiply by grad
+                    let grad_lhs_sub = format!("{},{}->{}", out_sub, rhs_sub, lhs_sub);
+                    let grad_rhs_sub = format!("{},{}->{}", lhs_sub, out_sub, rhs_sub);
 
-                            // Broadcast grad to output shape: g * ones(einsum_output)
-                            let fwd = call("einsum", vec![args[0].clone(), args[1].clone(), args[2].clone()]);
-                            let g_broadcast = add(mul(fwd.clone(), CompiledExpr::Float(0.0)), g.clone());
+                    // Broadcast grad to output shape: g * ones(einsum_output)
+                    let fwd = call("einsum", vec![args[0].clone(), args[1].clone(), args[2].clone()]);
+                    let g_broadcast = add(mul(fwd.clone(), CompiledExpr::Float(0.0)), g.clone());
 
-                            let g_a = call("einsum", vec![
-                                CompiledExpr::String(grad_lhs_sub),
-                                g_broadcast.clone(),
-                                args[2].clone(),
-                            ]);
-                            let g_b = call("einsum", vec![
-                                CompiledExpr::String(grad_rhs_sub),
-                                args[1].clone(),
-                                g_broadcast,
-                            ]);
-                            return Ok(add(
-                                grad_with(&args[1], wrt, g_a)?,
-                                grad_with(&args[2], wrt, g_b)?,
-                            ));
-                        }
-                    }
+                    let g_a = call("einsum", vec![
+                        CompiledExpr::String(grad_lhs_sub),
+                        g_broadcast.clone(),
+                        args[2].clone(),
+                    ]);
+                    let g_b = call("einsum", vec![
+                        CompiledExpr::String(grad_rhs_sub),
+                        args[1].clone(),
+                        g_broadcast,
+                    ]);
+                    return Ok(add(
+                        grad_with(&args[1], wrt, g_a)?,
+                        grad_with(&args[2], wrt, g_b)?,
+                    ));
                 }
             }
             let function_call = CompiledExpr::FunctionCall {

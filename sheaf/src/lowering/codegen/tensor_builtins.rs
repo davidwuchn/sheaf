@@ -380,14 +380,14 @@ impl CodeGenerator {
         let mut axis: Option<i64> = None;
         let mut i = 1;
         while i < args.len() {
-            if let CompiledExpr::Keyword(k) = &args[i] {
-                if k == "axis" && i + 1 < args.len() {
-                    if let CompiledExpr::Integer(n) = &args[i + 1] {
-                        axis = Some(*n);
-                    }
-                    i += 2;
-                    continue;
+            if let CompiledExpr::Keyword(k) = &args[i]
+               && k == "axis" && i + 1 < args.len() 
+            {
+                if let CompiledExpr::Integer(n) = &args[i + 1] {
+                    axis = Some(*n);
                 }
+                i += 2;
+                continue;
             }
             positionals.push(&args[i]);
             i += 1;
@@ -612,13 +612,12 @@ impl CodeGenerator {
         let mut probs_expr = None;
         let mut i = 1;
         while i < args.len() {
-            if let CompiledExpr::Keyword(k) = &args[i] {
-                if k == "p" && i + 1 < args.len() {
+            if let CompiledExpr::Keyword(k) = &args[i]
+               && k == "p" && i + 1 < args.len() {
                     probs_expr = Some(&args[i + 1]);
                     i += 2;
                     continue;
                 }
-            }
             i += 1;
         }
         match probs_expr {

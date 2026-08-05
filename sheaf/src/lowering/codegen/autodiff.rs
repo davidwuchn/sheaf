@@ -28,18 +28,16 @@ fn collect_param_aliases(expr: &CompiledExpr, param_name: &str, aliases: &mut Ve
             for (name, value) in bindings {
                 match value {
                     CompiledExpr::Symbol(s) if s == param_name => {
-                        if let BindingPattern::Simple(name_str) = &name {
-                            if !aliases.contains(name_str) {
+                        if let BindingPattern::Simple(name_str) = &name
+                            && !aliases.contains(name_str) {
                                 aliases.push(name_str.clone());
                             }
-                        }
                     }
                     CompiledExpr::GetTupleElement { param, .. } if param == param_name => {
-                        if let BindingPattern::Simple(name_str) = &name {
-                            if !aliases.contains(name_str) {
+                        if let BindingPattern::Simple(name_str) = &name
+                            && !aliases.contains(name_str) {
                                 aliases.push(name_str.clone());
                             }
-                        }
                     }
                     _ => {}
                 }

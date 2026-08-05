@@ -54,20 +54,20 @@ fn inline_calls_rec(
                 return inline_calls_rec(&inlined, registry, local_lambdas, depth + 1);
             }
 
-            if let Some(func_def) = registry.get(name.as_str()) {
-                if let Some(body) = &func_def.body_compiled {
-                    let bindings: Vec<(BindingPattern, CompiledExpr)> = func_def
-                        .params
-                        .iter()
-                        .zip(inlined_args.iter())
-                        .map(|(p, a)| (BindingPattern::Simple(p.clone()), a.clone()))
-                        .collect();
-                    let inlined = CompiledExpr::Let {
-                        bindings,
-                        body: Box::new(body.clone()),
-                    };
-                    return inline_calls_rec(&inlined, registry, local_lambdas, depth + 1);
-                }
+            if let Some(func_def) = registry.get(name.as_str())
+                && let Some(body) = &func_def.body_compiled
+            {
+                let bindings: Vec<(BindingPattern, CompiledExpr)> = func_def
+                    .params
+                    .iter()
+                    .zip(inlined_args.iter())
+                    .map(|(p, a)| (BindingPattern::Simple(p.clone()), a.clone()))
+                    .collect();
+                let inlined = CompiledExpr::Let {
+                    bindings,
+                    body: Box::new(body.clone()),
+                };
+                return inline_calls_rec(&inlined, registry, local_lambdas, depth + 1);
             }
 
             CompiledExpr::FunctionCall {
@@ -83,10 +83,10 @@ fn inline_calls_rec(
                 .iter()
                 .map(|(k, v)| {
                     let inlined_v = inline_calls_rec(v, registry, &new_lambdas, depth);
-                    if let BindingPattern::Simple(name) = k {
-                        if matches!(&inlined_v, CompiledExpr::Lambda { .. }) {
-                            new_lambdas.insert(name.clone(), inlined_v.clone());
-                        }
+                    if let BindingPattern::Simple(name) = k
+                        && matches!(&inlined_v, CompiledExpr::Lambda { .. })
+                    {
+                        new_lambdas.insert(name.clone(), inlined_v.clone());
                     }
                     (k.clone(), inlined_v)
                 })
@@ -192,14 +192,14 @@ fn fold_dict_gets_rec(
             // (get sym :key) where sym is bound to a dict literal
             if let (CompiledExpr::Symbol(dict_name), CompiledExpr::Keyword(key)) =
                 (&args[0], &args[1])
+                && let Some(pairs) = dict_bindings.get(dict_name.as_str())
             {
-                if let Some(pairs) = dict_bindings.get(dict_name.as_str()) {
-                    for (k, v) in pairs {
-                        if let CompiledExpr::Keyword(kw) = k {
-                            if kw == key {
-                                return fold_dict_gets_rec(v, dict_bindings);
-                            }
-                        }
+                for (k, v) in pairs
+                {
+                    if let CompiledExpr::Keyword(kw) = k
+                        && kw == key
+                    {
+                        return fold_dict_gets_rec(v, dict_bindings);
                     }
                 }
             }

@@ -136,11 +136,10 @@ pub fn try_load_vmfb(
 
     // Tag functions for IREE dispatch and load signatures from manifest
     for fn_name in &valid_fns {
-        if let Some(fd) = compiler.registry.get_mut(fn_name) {
-            if let Some(sig) = signatures.get(fn_name) {
+        if let Some(fd) = compiler.registry.get_mut(fn_name)
+            && let Some(sig) = signatures.get(fn_name) {
                 fd.signature = Some(sig.clone());
             }
-        }
     }
 
     // For functions without manifest signatures, trace at runtime
@@ -148,15 +147,12 @@ pub fn try_load_vmfb(
         let needs_trace = compiler.registry.get(fn_name)
             .map(|fd| fd.signature.is_none())
             .unwrap_or(false);
-        if needs_trace {
-            if let Some(fd) = compiler.registry.get(fn_name).cloned() {
-                if let Ok(traced_sig) = crate::core::trace::trace_function_signature(compiler, &fd) {
-                    if let Some(fd_mut) = compiler.registry.get_mut(fn_name) {
+        if needs_trace
+            && let Some(fd) = compiler.registry.get(fn_name).cloned()
+            && let Ok(traced_sig) = crate::core::trace::trace_function_signature(compiler, &fd)
+            && let Some(fd_mut) = compiler.registry.get_mut(fn_name) {
                         fd_mut.signature = Some(traced_sig);
                     }
-                }
-            }
-        }
     }
 
     if let Err(e) = session.register_precompiled_functions(&module_name, &function_keys) {

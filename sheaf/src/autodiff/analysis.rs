@@ -269,7 +269,7 @@ fn find_undiffable_rec(expr: &CompiledExpr, ops: &mut Vec<String>) {
             find_undiffable_rec(callee, ops);
             for a in args {
                 find_undiffable_rec(a, ops);
-        }
+            }
         }
         CompiledExpr::If {
             condition,
@@ -317,7 +317,7 @@ pub fn contains_undiffable_ops(expr: &CompiledExpr) -> bool {
         CompiledExpr::FunctionCall { name, args, .. } => match name.as_str() {
             "get" | "reduce" | "map" | "filter" | "find" | "range" | "len" | "first" | "last"
             | "rest" | "cons" | "append" | "concat" | "slice" | "shape" | "print" | "io" => true,
-                _ => args.iter().any(contains_undiffable_ops),
+            _ => args.iter().any(contains_undiffable_ops),
         },
         CompiledExpr::LambdaCall { .. } => true,
         CompiledExpr::If { .. } | CompiledExpr::While { .. } | CompiledExpr::Repeat { .. } => true,

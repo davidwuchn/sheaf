@@ -103,11 +103,10 @@ fn builtin_lt(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_gt(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    if args.len() == 2 {
-        if let (Some(a), Some(b)) = (args[0].to_f64(), args[1].to_f64()) {
+    if args.len() == 2
+       && let (Some(a), Some(b)) = (args[0].to_f64(), args[1].to_f64()) {
             return Ok(Value::Bool(a > b));
         }
-    }
     cmp_op(args, |a, b| if a > b { 1.0 } else { 0.0 }, Dtype::I32)
 }
 

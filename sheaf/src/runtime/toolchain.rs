@@ -13,11 +13,10 @@ pub(crate) const IREE_COMPILER_VERSION: &str = env!("IREE_VERSION");
 /// Locate `iree-compile`. Returns None if not found.
 pub fn find_iree_compile() -> Option<String> {
     // Explicit env var
-    if let Ok(path) = std::env::var("IREE_COMPILE") {
-        if std::path::Path::new(&path).exists() {
+    if let Ok(path) = std::env::var("IREE_COMPILE")
+        && std::path::Path::new(&path).exists() {
             return Some(path);
         }
-    }
     // Auto-downloaded toolchain cache
     if let Some(path) = find_cached_toolchain() {
         return Some(path);

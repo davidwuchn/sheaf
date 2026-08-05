@@ -34,13 +34,12 @@ pub(super) fn inject_tuple_shapes(
             for (i, elem_ty) in elems.iter().enumerate() {
                 let mut child_indices = indices.to_vec();
                 child_indices.push(i);
-                if let Some(key_names) = keys {
-                    if let Some(key) = key_names.get(i) {
+                if let Some(key_names) = keys
+                    && let Some(key) = key_names.get(i) {
                         shapes.insert(key.clone(), elem_ty.shape().to_vec());
                         inject_tuple_shapes(key, elem_ty, &child_indices, shapes);
                         continue;
                     }
-                }
                 inject_tuple_shapes(param_name, elem_ty, &child_indices, shapes);
             }
         }

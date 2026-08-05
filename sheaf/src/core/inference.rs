@@ -224,21 +224,21 @@ fn seed_tuple_element_types(
     match expr {
         CompiledExpr::GetTupleElement { param, indices } => {
             // Resolve the type of this element from the known param type
-            if let Some((_, param_ty)) = known.iter().find(|(n, _)| n == param) {
-                if let Some(element_ty) = resolve_tuple_index(param_ty, indices) {
-                    // We can't directly name this node, but its type is used in FunctionCall args
-                    // Store it in a synthetic key for context
-                    let key = format!(
-                        "__get_tuple_{}__{}",
-                        param,
-                        indices
-                            .iter()
-                            .map(|i| i.to_string())
-                            .collect::<Vec<_>>()
-                            .join("_")
-                    );
-                    symbol_types.insert(key, element_ty);
-                }
+            if let Some((_, param_ty)) = known.iter().find(|(n, _)| n == param)
+               && let Some(element_ty) = resolve_tuple_index(param_ty, indices)
+            {
+                // We can't directly name this node, but its type is used in FunctionCall args
+                // Store it in a synthetic key for context
+                let key = format!(
+                    "__get_tuple_{}__{}",
+                    param,
+                    indices
+                        .iter()
+                        .map(|i| i.to_string())
+                        .collect::<Vec<_>>()
+                        .join("_")
+                );
+                symbol_types.insert(key, element_ty);
             }
         }
         CompiledExpr::FunctionCall { args, .. } => {
@@ -319,12 +319,13 @@ fn infer_symbol_types(
             }
 
             // sum/mean: first arg should be at least 2D
-            if (name == "sum" || name == "mean") && !args.is_empty() {
-                if let CompiledExpr::Symbol(sym) = &args[0] {
-                    symbol_types
-                        .entry(sym.clone())
-                        .or_insert(StableHLOType::f32_tensor(vec![1, 1]));
-                }
+            if (name == "sum" || name == "mean")
+                && !args.is_empty()
+                && let CompiledExpr::Symbol(sym) = &args[0]
+            {
+                symbol_types
+                    .entry(sym.clone())
+                    .or_insert(StableHLOType::f32_tensor(vec![1, 1]));
             }
 
             // Recurse into arguments
@@ -390,10 +391,10 @@ pub(crate) fn infer_type_with_context(
 
         CompiledExpr::GetTupleElement { param, indices } => {
             // Resolve element type from the param's tuple type in symbol_types
-            if let Some(param_ty) = symbol_types.get(param) {
-                if let Some(element_ty) = resolve_tuple_index(param_ty, indices) {
-                    return Ok(element_ty);
-                }
+            if let Some(param_ty) = symbol_types.get(param)
+               && let Some(element_ty) = resolve_tuple_index(param_ty, indices)
+            {
+                return Ok(element_ty);
             }
             Ok(StableHLOType::scalar_f32())
         }
@@ -491,7 +492,7 @@ fn infer_type(expr: &CompiledExpr) -> SheafResult<StableHLOType> {
     match expr {
         CompiledExpr::Integer(_) => Ok(StableHLOType::scalar_f32()),
         CompiledExpr::Float(_) => Ok(StableHLOType::scalar_f32()),
-        CompiledExpr::Boolean(_) => Ok(StableHLOType::scalar_f32()), // For now
+        CompiledExpr::Boolean(_) => Ok(StableHLOType::scalar_f32()),
 
         CompiledExpr::Vector(elements) => {
             Ok(StableHLOType::f32_tensor(infer_vector_shape(elements)))
@@ -506,12 +507,10 @@ fn infer_type(expr: &CompiledExpr) -> SheafResult<StableHLOType> {
             else_branch,
             ..
         } => {
-            // Infer from then branch (assume both branches have same type)
+            // Both branches are expected to have the same type.
             let then_ty = infer_type(then_branch)?;
             if let Some(else_expr) = else_branch {
                 let else_ty = infer_type(else_expr)?;
-                // For Phase 1, just return then_ty
-                // Phase 2: check compatibility
                 let _ = else_ty;
             }
             Ok(then_ty)
@@ -530,7 +529,7 @@ fn infer_type(expr: &CompiledExpr) -> SheafResult<StableHLOType> {
             Ok(StableHLOType::scalar_f32())
         }
 
-        _ => Ok(StableHLOType::scalar_f32()), // Default fallback
+        _ => Ok(StableHLOType::scalar_f32()),
     }
 }
 

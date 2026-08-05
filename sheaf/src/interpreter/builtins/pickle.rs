@@ -505,10 +505,10 @@ impl<'a> PickleVM<'a> {
                     PV::Tuple(v) => v,
                     _ => return Ok(PV::Placeholder),
                 };
-                if let Some(PV::Str(s)) = args_vec.first() {
-                    if let Some(dt) = NpDtype::from_str(s) {
-                        return Ok(PV::NumpyDtype(dt));
-                    }
+                if let Some(PV::Str(s)) = args_vec.first()
+                    && let Some(dt) = NpDtype::from_str(s)
+                {
+                    return Ok(PV::NumpyDtype(dt));
                 }
                 Ok(PV::Placeholder)
             }
@@ -545,10 +545,10 @@ impl<'a> PickleVM<'a> {
                     }
                 }
                 // Extract state tuple (index 2) and reconstruct from it
-                if let Some(PV::Tuple(state)) = args_vec.get(2) {
-                    if let Some(arr) = extract_numpy_from_state(state) {
-                        return Ok(arr);
-                    }
+                if let Some(PV::Tuple(state)) = args_vec.get(2)
+                    && let Some(arr) = extract_numpy_from_state(state)
+                {
+                    return Ok(arr);
                 }
                 Ok(PV::Placeholder)
             }
@@ -588,10 +588,10 @@ impl<'a> PickleVM<'a> {
                     PV::List(items) => {
                         // List of (key, value) tuples
                         for item in items {
-                            if let PV::Tuple(kv) = item {
-                                if kv.len() == 2 {
-                                    pairs.push((kv[0].clone(), kv[1].clone()));
-                                }
+                            if let PV::Tuple(kv) = item
+                                && kv.len() == 2
+                            {
+                                pairs.push((kv[0].clone(), kv[1].clone()));
                             }
                         }
                         Ok(PV::Dict(pairs))
@@ -602,10 +602,10 @@ impl<'a> PickleVM<'a> {
 
             // NumpyArray getting its state updated
             PV::NumpyArray { dtype, shape, data } => {
-                if let PV::Tuple(state_vec) = state {
-                    if let Some(arr) = extract_numpy_from_state(&state_vec) {
-                        return Ok(arr);
-                    }
+                if let PV::Tuple(state_vec) = state
+                    && let Some(arr) = extract_numpy_from_state(&state_vec)
+                {
+                    return Ok(arr);
                 }
                 Ok(PV::NumpyArray { dtype, shape, data })
             }
@@ -627,10 +627,10 @@ fn extract_numpy_from_state(state: &[PV]) -> Option<PV> {
                     PV::Int(n) => Some(*n as usize),
                     _ => None,
                 }).collect();
-                if let Some(s) = maybe_shape {
-                    if shape.is_none() || !s.is_empty() {
-                        shape = Some(s);
-                    }
+                if let Some(s) = maybe_shape
+                    && (shape.is_none() || !s.is_empty())
+                {
+                    shape = Some(s);
                 }
             }
             PV::NumpyDtype(dt) => np_dtype = Some(*dt),

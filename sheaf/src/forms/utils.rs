@@ -62,19 +62,19 @@ impl SpecialForm for GetInForm {
         loc: &SourceLocation,
     ) -> SheafResult<CompiledExpr> {
         // Desugar (get-in m [:k1 :k2 :k3]) -> (get (get (get m :k1) :k2) :k3)
-        if args.len() == 2 {
-            if let SheafValue::Vector(keys, _) = &args[1] {
-                let mut result = compiler.compile(&args[0])?;
-                for key in keys {
-                    let compiled_key = compiler.compile(key)?;
-                    result = CompiledExpr::FunctionCall {
-                        name: "get".to_string(),
-                        args: vec![result, compiled_key],
-                        loc: Some(loc.clone()),
-                    };
-                }
-                return Ok(result);
+        if args.len() == 2
+            && let SheafValue::Vector(keys, _) = &args[1]
+        {
+            let mut result = compiler.compile(&args[0])?;
+            for key in keys {
+                let compiled_key = compiler.compile(key)?;
+                result = CompiledExpr::FunctionCall {
+                    name: "get".to_string(),
+                    args: vec![result, compiled_key],
+                    loc: Some(loc.clone()),
+                };
             }
+            return Ok(result);
         }
         // Fallback: compile as function call
         let compiled: SheafResult<Vec<CompiledExpr>> =

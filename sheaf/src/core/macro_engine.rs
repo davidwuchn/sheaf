@@ -58,28 +58,27 @@ impl MacroEngine {
         let loc = exp.location().clone();
 
         // Check if head is a registered macro
-        if let Some(op_name) = elements[0].as_symbol() {
-            if let Some(macro_def) = self.macros.get(op_name).cloned() {
-                if self.expansion_depth >= self.max_expansion_depth {
-                    return Err(SheafError::Compile {
-                        message: format!(
-                            "Macro expansion depth exceeded {} (possible infinite recursion in '{}')",
-                            self.max_expansion_depth, op_name
-                        ),
-                        location: loc,
-                    });
-                }
-
-                self.expansion_depth += 1;
-                let args = &elements[1..];
-                let bindings = Self::bind_params(&macro_def, args, &loc)?;
-                let expanded =
-                    self.expand_template(&macro_def.body_template, &bindings, compiler_env, registry, &loc)?;
-                // Recursively expand (the result may contain more macro calls)
-                let result = self.expand(&expanded, compiler_env, registry);
-                self.expansion_depth -= 1;
-                return result;
+        if let Some(op_name) = elements[0].as_symbol()
+            && let Some(macro_def) = self.macros.get(op_name).cloned()
+        {
+            if self.expansion_depth >= self.max_expansion_depth {
+                return Err(SheafError::Compile {
+                    message: format!(
+                        "Macro expansion depth exceeded {} (possible infinite recursion in '{}')",
+                        self.max_expansion_depth, op_name
+                    ),
+                    location: loc,
+                });
             }
+            self.expansion_depth += 1;
+            let args = &elements[1..];
+            let bindings = Self::bind_params(&macro_def, args, &loc)?;
+            let expanded =
+                self.expand_template(&macro_def.body_template, &bindings, compiler_env, registry, &loc)?;
+            // Recursively expand (the result may contain more macro calls)
+            let result = self.expand(&expanded, compiler_env, registry);
+            self.expansion_depth -= 1;
+            return result;
         }
 
         // Not a macro call: recursively expand children
@@ -210,11 +209,10 @@ impl MacroEngine {
             }
 
             SheafValue::Symbol(name, _) => {
-                if depth == 0 {
-                    if let Some(bound) = bindings.get(name) {
+                if depth == 0
+                    && let Some(bound) = bindings.get(name) {
                         return Ok(bound.clone());
                     }
-                }
                 Ok(template.clone())
             }
 
@@ -232,21 +230,21 @@ impl MacroEngine {
         registry: &HashMap<String, FunctionDef>,
         loc: &SourceLocation,
     ) -> SheafResult<ExpandedItem> {
-        if let SheafValue::UnquoteSplicing(inner, _) = elem {
-            if depth == 0 {
-                let substituted = substitute_symbols(inner, bindings);
-                let evaled =
-                    eval_at_compile_time(&substituted, bindings, compiler_env, registry, loc)?;
-                match evaled {
-                    SheafValue::List(items, _) => return Ok(ExpandedItem::Splice(items)),
-                    SheafValue::Vector(items, _) => return Ok(ExpandedItem::Splice(items)),
-                    SheafValue::Nil(_) => return Ok(ExpandedItem::Splice(vec![])),
-                    other => {
-                        return Err(SheafError::Compile {
-                            message: format!("~@ splice requires a list, got: {}", other),
-                            location: loc.clone(),
-                        });
-                    }
+        if let SheafValue::UnquoteSplicing(inner, _) = elem
+            && depth == 0
+        {
+            let substituted = substitute_symbols(inner, bindings);
+            let evaled =
+                eval_at_compile_time(&substituted, bindings, compiler_env, registry, loc)?;
+            match evaled {
+                SheafValue::List(items, _) => return Ok(ExpandedItem::Splice(items)),
+                SheafValue::Vector(items, _) => return Ok(ExpandedItem::Splice(items)),
+                SheafValue::Nil(_) => return Ok(ExpandedItem::Splice(vec![])),
+                other => {
+                    return Err(SheafError::Compile {
+                        message: format!("~@ splice requires a list, got: {}", other),
+                        location: loc.clone(),
+                    });
                 }
             }
         }

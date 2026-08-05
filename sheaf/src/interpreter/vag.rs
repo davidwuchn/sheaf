@@ -52,8 +52,8 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
 
     use crate::autodiff::{collect_free_vars, collect_function_call_names, contains_undiffable_ops, grad_simplified, inline_function_calls};
 
-    if let Value::Function { params: fn_params, body, closure, .. } = func {
-        if fn_params.len() == 1 {
+    if let Value::Function { params: fn_params, body, closure, .. } = func
+        && fn_params.len() == 1 {
             let param_name = &fn_params[0];
 
         let mut aug_registry = env.registry.clone();
@@ -84,13 +84,11 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
         // Builtins (BuiltinFn) and registry defns are already resolvable.
         let mut aug_closure = closure.clone();
         for name in &free {
-            if !env.registry.contains_key(*name) {
-                if let Ok(val) = env.get(name) {
-                    if !matches!(val, Value::BuiltinFn { .. }) {
+            if !env.registry.contains_key(*name)
+                && let Ok(val) = env.get(name)
+                && !matches!(val, Value::BuiltinFn { .. }) {
                         aug_closure.push((name.to_string(), val.clone()));
                     }
-                }
-            }
         }
 
         for (name, val) in &aug_closure {
@@ -187,7 +185,6 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
                 }
             }
         }
-    }
 
     Err(runtime_error("value-and-grad: cannot differentiate this function"))
 }
@@ -246,11 +243,10 @@ fn build_grad_tree_by_value(
         Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::DeviceBuffer(_) => {
             let params_host = params.ensure_host_cow().unwrap_or_else(|_| Cow::Borrowed(params));
             for (sym, leaf_val) in leaves {
-                if values_equal(&params_host, leaf_val) {
-                    if let Some(grad_val) = leaf_grads.get(sym) {
+                if values_equal(&params_host, leaf_val)
+                    && let Some(grad_val) = leaf_grads.get(sym) {
                         return reduce_grad_to_param_shape(grad_val, &params_host);
                     }
-                }
             }
             Ok(zeros_like(&params_host))
         }

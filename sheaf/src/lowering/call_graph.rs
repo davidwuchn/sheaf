@@ -240,11 +240,10 @@ impl CallGraph {
                     let is_scc_root = low[popped_v] == disc[popped_v];
                     work.pop();
 
-                    if let Some(parent) = work.last() {
-                        if popped_low < low[parent.v] {
+                    if let Some(parent) = work.last()
+                        && popped_low < low[parent.v] {
                             low[parent.v] = popped_low;
                         }
-                    }
 
                     if is_scc_root {
                         let mut size: usize = 0;

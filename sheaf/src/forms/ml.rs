@@ -9,11 +9,7 @@ use crate::core::expr::{CompiledExpr, CompilerContext, ParamField, ParamLayout};
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 use crate::forms::base::{SpecialForm, check_min_arity};
 
-// ---------------------------------------------------------------------------
-// with-params
-// ---------------------------------------------------------------------------
-
-/// with-params - Destructure a typed parameter tuple into local scope.
+/// Binds fields of a typed parameter tuple in the local scope.
 ///
 /// Syntax:
 ///   (with-params [param-name] body...)
@@ -270,11 +266,7 @@ fn parse_with_params_binding(
 }
 
 
-// ---------------------------------------------------------------------------
-// value-and-grad
-// ---------------------------------------------------------------------------
-
-/// Compile a `value-and-grad` form into a deferred IR node.
+/// Compiles `value-and-grad` into a deferred IR node.
 ///
 /// Syntax:
 ///   (value-and-grad name f config :wrt [p1 p2 ...])
@@ -403,29 +395,29 @@ impl SpecialForm for ValueAndGradForm {
         let mut wrt_names: Vec<String> = Vec::new();
         let mut i = rest_start;
         while i < args.len() {
-            if let SheafValue::Keyword(k, _) = &args[i] {
-                if k == "wrt" {
-                    i += 1;
-                    match args.get(i) {
-                        Some(SheafValue::Vector(elems, _)) => {
-                            for elem in elems {
-                                let name = elem.as_symbol().ok_or_else(|| SheafError::Compile {
-                                    message: "value-and-grad: :wrt elements must be symbols"
-                                        .to_string(),
-                                    location: loc.clone(),
-                                })?;
-                                wrt_names.push(name.to_string());
-                            }
-                        }
-                        other => {
-                            return Err(SheafError::Compile {
-                                message: format!(
-                                    "value-and-grad: :wrt must be followed by a vector, got {}",
-                                    other.map(|v| v.to_string()).unwrap_or("nothing".into())
-                                ),
+            if let SheafValue::Keyword(k, _) = &args[i]
+               && k == "wrt"
+            {
+                i += 1;
+                match args.get(i) {
+                    Some(SheafValue::Vector(elems, _)) => {
+                        for elem in elems {
+                            let name = elem.as_symbol().ok_or_else(|| SheafError::Compile {
+                                message: "value-and-grad: :wrt elements must be symbols"
+                                    .to_string(),
                                 location: loc.clone(),
-                            });
+                            })?;
+                            wrt_names.push(name.to_string());
                         }
+                    }
+                    other => {
+                        return Err(SheafError::Compile {
+                            message: format!(
+                                "value-and-grad: :wrt must be followed by a vector, got {}",
+                                other.map(|v| v.to_string()).unwrap_or("nothing".into())
+                            ),
+                            location: loc.clone(),
+                        });
                     }
                 }
             }
@@ -459,11 +451,7 @@ impl SpecialForm for ValueAndGradForm {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ParamLayout -> StableHLOType conversion
-// ---------------------------------------------------------------------------
-
-/// Convert a ParamLayout into a StableHLO tuple type.
+/// Converts a parameter layout to its StableHLO tuple type.
 ///
 /// Flat layout:  {:W [4 8] :b [8]}
 ///   -> tuple<tensor<4x8xf32>, tensor<8xf32>>

@@ -310,17 +310,18 @@ impl CompilerContext {
             paths.push(PathBuf::from(lib));
         }
 
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(bin_dir) = exe.parent() {
-                let candidate = bin_dir.join("../lib");
-                if candidate.exists() {
-                    paths.push(candidate.canonicalize().unwrap_or(candidate));
-                }
-                // Also try <binary>/../../sheaf/lib/ for dev layout (rust/target/debug/sheaf)
-                let dev_candidate = bin_dir.join("../../../sheaf/lib");
-                if dev_candidate.exists() {
-                    paths.push(dev_candidate.canonicalize().unwrap_or(dev_candidate));
-                }
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(bin_dir) = exe.parent()
+        {
+            let candidate = bin_dir.join("../lib");
+            if candidate.exists() {
+                paths.push(candidate.canonicalize().unwrap_or(candidate));
+            }
+            // Also try <binary>/../../sheaf/lib/ for dev layout (rust/target/debug/sheaf)
+            let dev_candidate = bin_dir.join("../../../sheaf/lib");
+            if dev_candidate.exists()
+            {
+                paths.push(dev_candidate.canonicalize().unwrap_or(dev_candidate));
             }
         }
 
@@ -340,33 +341,22 @@ impl CompilerContext {
     fn init_env() -> HashMap<String, SheafValue> {
         let env = HashMap::new();
 
-        // Built-in constants
-        // env.insert("true".to_string(), SheafValue::Boolean(true, SourceLocation::unknown()));
-        // env.insert("false".to_string(), SheafValue::Boolean(false, SourceLocation::unknown()));
-        // env.insert("nil".to_string(), SheafValue::Nil(SourceLocation::unknown()));
-
-        // Built-in functions will be added as we port runtime ops
-
         env
     }
 
     /// Compile a Sheaf expression
     pub fn compile(&mut self, exp: &SheafValue) -> SheafResult<CompiledExpr> {
         match exp {
-            // --- Literals ---
             SheafValue::Integer(n, _) => Ok(CompiledExpr::Integer(*n)),
             SheafValue::Float(x, _) => Ok(CompiledExpr::Float(*x)),
             SheafValue::Boolean(b, _) => Ok(CompiledExpr::Boolean(*b)),
             SheafValue::Nil(_) => Ok(CompiledExpr::Nil),
             SheafValue::String(s, _) => Ok(CompiledExpr::String(s.clone())),
 
-            // --- Symbols ---
             SheafValue::Symbol(name, loc) => self.resolve_symbol(name, loc),
 
-            // --- Keywords ---
             SheafValue::Keyword(k, _) => Ok(CompiledExpr::Keyword(k.clone())),
 
-            // --- Runtime quasiquote: compile as template with unquote evaluation ---
             SheafValue::Quasiquote(inner, _) => {
                 let lowered = lower_quasiquote(inner);
                 self.compile(&lowered)
@@ -380,7 +370,6 @@ impl CompilerContext {
                 location: loc.clone(),
             }),
 
-            // --- Lists (function calls, special forms) ---
             SheafValue::List(elements, loc) => {
                 if elements.is_empty() {
                     return Err(SheafError::Compile {
@@ -390,11 +379,11 @@ impl CompilerContext {
                 }
 
                 // Check for macro expansion before special forms
-                if let Some(op_name) = elements[0].as_symbol() {
-                    if self.macro_engine.macros.contains_key(op_name) {
-                        let expanded = self.macro_engine.expand(exp, &self.env, &self.registry)?;
-                        return self.compile(&expanded).map_err(|e| e.with_location(&loc));
-                    }
+                if let Some(op_name) = elements[0].as_symbol()
+                    && self.macro_engine.macros.contains_key(op_name) 
+                {
+                    let expanded = self.macro_engine.expand(exp, &self.env, &self.registry)?;
+                    return self.compile(&expanded).map_err(|e| e.with_location(&loc));
                 }
 
                 // Check for special forms
@@ -419,7 +408,6 @@ impl CompilerContext {
                 }
             }
 
-            // --- Vectors ---
             SheafValue::Vector(elements, _) => {
                 // Compile each element
                 let compiled: SheafResult<Vec<CompiledExpr>> =
@@ -427,7 +415,6 @@ impl CompilerContext {
                 Ok(CompiledExpr::Vector(compiled?))
             }
 
-            // --- Dicts ---
             SheafValue::Dict(pairs, _) => {
                 let compiled: SheafResult<Vec<(CompiledExpr, CompiledExpr)>> = pairs
                     .iter()
@@ -436,7 +423,6 @@ impl CompilerContext {
                 Ok(CompiledExpr::Dict(compiled?))
             }
 
-            // --- Quotes ---
             SheafValue::Quote(inner, _) => {
                 // Quote prevents evaluation
                 Ok(CompiledExpr::Quoted(inner.clone()))
@@ -461,8 +447,7 @@ impl CompilerContext {
 
         // Check local variables
         if let Some(val) = self.local_vars.get(name).cloned() {
-            // Compile-time constants (from def): inline the value directly.
-            // This allows def values to work inside JIT-traced functions.
+            // Inline constants so JIT-traced functions can use `def` values.
             match &val {
                 SheafValue::Integer(_, _)
                 | SheafValue::Float(_, _)

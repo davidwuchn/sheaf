@@ -144,10 +144,10 @@ fn param_layout_to_dummy_value(layout: &ParamLayout) -> Value {
     // Group fields by top-level key
     let mut top_keys: Vec<String> = Vec::new();
     for field in &layout.fields {
-        if let Some(k) = field.path.first() {
-            if !top_keys.contains(k) {
-                top_keys.push(k.clone());
-            }
+        if let Some(k) = field.path.first()
+            && !top_keys.contains(k)
+        {
+            top_keys.push(k.clone());
         }
     }
 

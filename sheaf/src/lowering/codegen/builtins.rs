@@ -40,8 +40,8 @@ impl CodeGenerator {
             // problem of emitting a func.call to a function compiled with the
             // wrong (scalar) type from inference.
             let func_def = self.function_registry.get(name).cloned();
-            if let Some(func_def) = func_def {
-                if let Some(body) = &func_def.body_compiled {
+            if let Some(func_def) = func_def
+                && let Some(body) = &func_def.body_compiled {
                     // Bind arg registers to param names in our bindings map
                     let saved_bindings = self.bindings.clone();
                     let saved_layouts = self.tuple_key_layouts.clone();
@@ -79,7 +79,6 @@ impl CodeGenerator {
                     self.idx_to_key = saved_idx_to_key;
                     return result;
                 }
-            }
 
             // Fallback: emit func.call (may have type issues if not monomorphic)
             let sig = self

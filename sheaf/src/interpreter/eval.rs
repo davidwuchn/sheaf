@@ -25,12 +25,12 @@ pub fn eval_source_with_path(
         .unwrap_or("<eval>");
     let exprs = crate::core::parse(source, filename)?;
     let mut compiler = CompilerContext::new();
-    if let Some(path) = file_path {
-        if let Some(dir) = path.parent() {
-            compiler.set_current_dir(
-                dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()),
-            );
-        }
+    if let Some(path) = file_path
+        && let Some(dir) = path.parent()
+    {
+        compiler.set_current_dir(
+            dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()),
+        );
     }
     let mut compiled = Vec::new();
     for expr in &exprs {
@@ -64,12 +64,12 @@ pub fn eval_source_with_tracing(
         .unwrap_or("<eval>");
     let exprs = crate::core::parse(source, filename)?;
     let mut compiler = CompilerContext::new();
-    if let Some(path) = file_path {
-        if let Some(dir) = path.parent() {
-            compiler.set_current_dir(
-                dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()),
-            );
-        }
+    if let Some(path) = file_path
+        && let Some(dir) = path.parent()
+    {
+        compiler.set_current_dir(
+            dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()),
+        );
     }
     let mut compiled = Vec::new();
     for expr in &exprs {
@@ -137,12 +137,12 @@ fn eval_source_with_blame_internal(
         .unwrap_or("<eval>");
     let exprs = crate::core::parse(source, filename)?;
     let mut compiler = CompilerContext::new();
-    if let Some(path) = file_path {
-        if let Some(dir) = path.parent() {
-            compiler.set_current_dir(
-                dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()),
-            );
-        }
+    if let Some(path) = file_path
+        && let Some(dir) = path.parent()
+    {
+        compiler.set_current_dir(
+            dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()),
+        );
     }
     let mut compiled = Vec::new();
     for expr in &exprs {
@@ -175,23 +175,22 @@ fn eval_source_with_blame_internal(
             last = interpreter::eval(c, &mut env)?;
         }
     }
-    if mem_profile {
-        if let Some(ref mut mp) = env.mem_profiler {
-            mp.sample("after eval");
-        }
+    if mem_profile
+        && let Some(ref mut mp) = env.mem_profiler
+    {
+        mp.sample("after eval");
     }
     #[cfg(iree_runtime)]
-    if mem_profile {
-        if let Some(ref mut mp) = env.mem_profiler {
-            if let Some(session) = crate::runtime::iree_session::initialized_shared_session() {
-                mp.sample_iree(&session);
-            }
-        }
+    if mem_profile
+        && let Some(ref mut mp) = env.mem_profiler
+        && let Some(session) = crate::runtime::iree_session::initialized_shared_session()
+    {
+        mp.sample_iree(&session);
     }
-    if blame_report {
-        if let Some(ref profiler) = env.profiler {
-            profiler.report();
-        }
+    if blame_report
+        && let Some(ref profiler) = env.profiler
+    {
+        profiler.report();
     }
 
     // Dropping the environment first includes IREE teardown in the peak measurement.

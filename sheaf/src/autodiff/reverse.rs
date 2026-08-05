@@ -1065,13 +1065,11 @@ fn distribute_fn_adjoint_named(
 /// E.g. for args [x, Keyword("axis"), Integer(-1)], returns Some(-1).
 fn parse_keyword_int(args: &[CompiledExpr], key: &str) -> Option<i64> {
     for (i, arg) in args.iter().enumerate() {
-        if let CompiledExpr::Keyword(k) = arg {
-            if k == key {
-                if let Some(CompiledExpr::Integer(n)) = args.get(i + 1) {
+        if let CompiledExpr::Keyword(k) = arg
+            && k == key
+            && let Some(CompiledExpr::Integer(n)) = args.get(i + 1) {
                     return Some(*n);
                 }
-            }
-        }
     }
     None
 }
