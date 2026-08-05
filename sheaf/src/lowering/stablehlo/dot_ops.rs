@@ -282,8 +282,8 @@ impl StableHLOEmitter {
             }
         };
 
-        let lhs_labels = parse_labels(lhs_str, &lhs_shape)?;
-        let rhs_labels = parse_labels(rhs_str, &rhs_shape)?;
+        let lhs_labels = parse_labels(lhs_str, lhs_shape)?;
+        let rhs_labels = parse_labels(rhs_str, rhs_shape)?;
 
         if lhs_labels.len() != lhs_shape.len() {
             return Err(format!(

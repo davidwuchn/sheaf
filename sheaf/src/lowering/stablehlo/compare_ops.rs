@@ -49,7 +49,8 @@ impl StableHLOEmitter {
                 ));
 
                 let needs_plus_one = matches!(op, ">=" | "<=");
-                let clamped = if needs_plus_one {
+
+                if needs_plus_one {
                     // clamp(0, sign(diff) + 1, 1)
                     let shifted = self.fresh_register();
                     self.body.push(format!(
@@ -70,8 +71,7 @@ impl StableHLOEmitter {
                         c.to_mlir(), zero_bc.to_mlir(), sgn.to_mlir(), one_bc.to_mlir(), ty.to_mlir()
                     ));
                     c
-                };
-                clamped
+                }
             }
             "=" | "==" => {
                 // 1 - min(abs(a-b), 1)

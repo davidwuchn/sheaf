@@ -148,7 +148,7 @@ impl CodeGenerator {
         let grad_elems: i64 = grad_shape.iter().product();
         let param_elems: i64 = param_shape.iter().product();
         if grad_elems == param_elems && grad_elems > 0 && grad_shape != param_shape {
-            let (r, t) = self.emitter.emit_reshape(&grad_reg, grad_ty, &param_shape);
+            let (r, t) = self.emitter.emit_reshape(&grad_reg, grad_ty, param_shape);
             return Ok((r, t));
         }
 
@@ -198,7 +198,7 @@ impl CodeGenerator {
         }
 
         let (wrt_reg, wrt_ty) = self.generate(&call_args[0])?;
-        let param_name = fn_params.get(0)
+        let param_name = fn_params.first()
             .ok_or_else(|| SheafError::Compile {
                 message: "value-and-grad: lambda must have at least 1 parameter".to_string(),
                 location: crate::core::error::SourceLocation::unknown(),
@@ -223,7 +223,7 @@ impl CodeGenerator {
     }
 
     let fn_body = if self.tuple_key_layouts.contains_key(param_name) {
-        let index_map = build_deep_index_map(&param_name, &self.tuple_key_layouts);
+        let index_map = build_deep_index_map(param_name, &self.tuple_key_layouts);
         let mut param_aliases = vec![param_name.clone()];
         collect_param_aliases(&fn_body, param_name, &mut param_aliases);
         let mut body = fn_body;

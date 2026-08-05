@@ -318,7 +318,7 @@ impl CodeGenerator {
         let elem_layout = coll_sym
             .as_deref()
             .and_then(|s| self.tuple_key_layouts.get(s))
-            .and_then(|layout| resolve_elem_layout(layout))
+            .and_then(&resolve_elem_layout)
             .or_else(|| {
                 let layout_key = self.layout_key_map.get(&coll_reg)?;
                 let layout = self.tuple_key_layouts.get(layout_key)?;
@@ -590,7 +590,7 @@ impl CodeGenerator {
             for (key, &idx) in layout.iter() {
                 index_map.insert(vec![key.clone()], vec![idx]);
             }
-            for (key, _) in layout {
+            for key in layout.keys() {
                 let deep = build_deep_index_map(key, &self.tuple_key_layouts);
                 index_map.extend(deep);
             }
@@ -738,7 +738,7 @@ impl CodeGenerator {
                                 StableHLOType::Tuple(tys, _) => &tys[idx],
                                 _ => unreachable!(),
                             };
-                            self.emitter.emit_zeros(&field_ty.shape())
+                            self.emitter.emit_zeros(field_ty.shape())
                         })
                     })
                     .collect();
@@ -768,7 +768,7 @@ impl CodeGenerator {
 
                     let old_shape = field_ty.shape();
                     let mut expanded_shape = vec![1i64];
-                    expanded_shape.extend_from_slice(&old_shape);
+                    expanded_shape.extend_from_slice(old_shape);
 
                     let mut reshaped_regs = Vec::new();
                     let mut reshaped_types = Vec::new();
@@ -794,7 +794,7 @@ impl CodeGenerator {
 
                 let old_shape = field_ty.shape();
                 let mut expanded_shape = vec![1i64];
-                expanded_shape.extend_from_slice(&old_shape);
+                expanded_shape.extend_from_slice(old_shape);
 
                 let mut reshaped_regs = Vec::new();
                 let mut reshaped_types = Vec::new();

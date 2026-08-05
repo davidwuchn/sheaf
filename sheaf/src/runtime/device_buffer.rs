@@ -134,13 +134,13 @@ pub(super) unsafe fn libc_stderr() -> *mut c_void {
 pub(super) fn suppress_stderr() -> Option<i32> {
     unsafe {
         unsafe extern "C" {
-            fn open(path: *const u8, oflag: i32) -> i32;
+            fn open(path: *const std::ffi::c_char, oflag: i32) -> i32;
             fn close(fd: i32) -> i32;
             fn dup(fd: i32) -> i32;
             fn dup2(fd: i32, fd2: i32) -> i32;
         }
         const O_WRONLY: i32 = 1;
-        let devnull = open(b"/dev/null\0".as_ptr(), O_WRONLY);
+        let devnull = open(c"/dev/null".as_ptr(), O_WRONLY);
         if devnull < 0 { return None; }
         let saved = dup(2);
         if saved < 0 { close(devnull); return None; }

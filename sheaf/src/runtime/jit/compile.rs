@@ -238,21 +238,23 @@ impl JitCompiler {
                             top_fields
                                 .entry(indices[0])
                                 .or_insert((path[0].clone(), ty_str));
-                        } else if !top_fields.contains_key(&indices[0]) {
-                            // Nested field: show as tuple<...>
-                            let ty_str = if let StableHLOType::Tuple(elems, _) = pty {
-                                if let Some(StableHLOType::Tuple(sub, _)) = elems.get(indices[0]) {
-                                    format!("tuple<...> ({} fields)", sub.len())
+                        } else {
+                            top_fields.entry(indices[0]).or_insert_with(|| {
+                                // Nested field: show as tuple<...>
+                                let ty_str = if let StableHLOType::Tuple(elems, _) = pty {
+                                    if let Some(StableHLOType::Tuple(sub, _)) = elems.get(indices[0]) {
+                                        format!("tuple<...> ({} fields)", sub.len())
+                                    } else {
+                                        "tuple<...>".to_string()
+                                    }
                                 } else {
                                     "tuple<...>".to_string()
-                                }
-                            } else {
-                                "tuple<...>".to_string()
-                            };
-                            top_fields.insert(indices[0], (path[0].clone(), ty_str));
+                                };
+                                (path[0].clone(), ty_str)
+                            });
                         }
                     }
-                    for (_, (key, ty_str)) in &top_fields {
+                    for (key, ty_str) in top_fields.values() {
                         sheaf_msg!("jit: {} | {}.{}: {}", name, pname, key, ty_str);
                     }
                 } else {

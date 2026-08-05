@@ -17,6 +17,12 @@ pub struct LeafMap {
     counter: usize,
 }
 
+impl Default for LeafMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LeafMap {
     pub fn new() -> Self {
         Self { leaves: Vec::new(), counter: 0 }
@@ -270,7 +276,7 @@ fn trace_reduce(
     let mut acc_expr = trace_rec(init, env, leaf_map, sym_env)?;
     let mut acc_val = eval(init, env)?;
 
-    for (_i, item_val) in items.iter().enumerate() {
+    for item_val in items.iter() {
         env.push_scope();
         env.set(acc_param, acc_val.clone());
         env.set(item_param, item_val.clone());

@@ -46,7 +46,7 @@ impl StableHLOEmitter {
 
         // Transpose of a scalar or 1D is identity
         if operand_shape.len() <= 1 {
-            return (operand.clone(), operand_ty.clone());
+            return (*operand, operand_ty.clone());
         }
 
         let result_shape: Vec<i64> = permutation

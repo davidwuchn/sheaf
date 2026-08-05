@@ -185,7 +185,7 @@ impl StableHLOEmitter {
         let shift = ((shift % n) + n) % n; // normalize to [0, n)
 
         if shift == 0 {
-            return (input.clone(), input_ty.clone());
+            return (*input, input_ty.clone());
         }
 
         // Split point: elements from [n-shift..n-1] go first, then [0..n-shift-1]
@@ -241,7 +241,7 @@ impl StableHLOEmitter {
 
         // Reshape value to have leading dim of 1 for the update slice
         let mut update_shape = vec![1i64];
-        update_shape.extend_from_slice(&value_ty.shape());
+        update_shape.extend_from_slice(value_ty.shape());
         // If value is scalar and tensor is 1D, update_shape = [1]
         if value_ty.shape().is_empty() && ndim == 1 {
             // scalar update into 1D tensor

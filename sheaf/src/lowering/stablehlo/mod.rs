@@ -364,7 +364,7 @@ impl StableHLOEmitter {
                             _ => panic!("Vector element must be number"),
                         })
                         .collect();
-                    self.emit_tensor_constant(&vec![values])
+                    self.emit_tensor_constant(&[values])
                 }
             }
 

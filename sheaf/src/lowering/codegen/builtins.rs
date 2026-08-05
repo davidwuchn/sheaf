@@ -108,7 +108,7 @@ impl CodeGenerator {
             return result;
         }
         if let Some(result) = self.generate_collection_builtin(name, args) {
-            return result;
+            result
         }
 
         // einsum: (einsum "spec" lhs rhs)

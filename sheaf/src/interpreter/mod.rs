@@ -225,17 +225,15 @@ pub fn apply_guard_check(
     match check {
         GuardCheck::NoNan => {
             match val {
-                Value::Tensor { data, .. } => {
-                    if data.iter().any(|x| !x.is_finite()) {
+                Value::Tensor { data, .. }
+                    if data.iter().any(|x| !x.is_finite()) => {
                         let stats = format_value_brief(val);
                         return Err(format!("Tensor contains NaN or Inf values: {}", stats));
                     }
-                }
-                Value::Float(f) => {
-                    if !f.is_finite() {
+                Value::Float(f)
+                    if !f.is_finite() => {
                         return Err(format!("Value is {}", f));
                     }
-                }
                 Value::Dict(map) => {
                     for (k, v) in map {
                         if let Err(e) = apply_guard_check(check, v) {
@@ -411,7 +409,7 @@ fn sheaf_value_to_value(sv: &SheafValue) -> Result<Value, SheafError> {
         SheafValue::Symbol(s, _) => Ok(Value::String(s.clone())),
         SheafValue::Keyword(k, _) => Ok(Value::Keyword(k.clone())),
         SheafValue::List(elems, _) | SheafValue::Vector(elems, _) => {
-            let items: Result<Vec<Value>, _> = elems.iter().map(|e| sheaf_value_to_value(e)).collect();
+            let items: Result<Vec<Value>, _> = elems.iter().map(sheaf_value_to_value).collect();
             Ok(Value::List(items?))
         }
         SheafValue::Dict(pairs, _) => {
@@ -523,14 +521,13 @@ let has_kwargs = matches!(name,
             if is_new {
                 env.trace_stale_calls = 0;
                 // Check if all target functions have been observed
-                if let Some(ref targets) = env.trace_targets {
-                    if targets.iter().all(|t| records.contains_key(t.as_str())) {
+                if let Some(ref targets) = env.trace_targets
+                    && targets.iter().all(|t| records.contains_key(t.as_str())) {
                         return Err(SheafError::Runtime {
                             message: "trace complete".to_string(),
                             location: None,
                         });
                     }
-                }
             } else {
                 env.trace_stale_calls += 1;
                 // No new recordings for many calls, we're in a loop, stop
@@ -584,7 +581,7 @@ let has_kwargs = matches!(name,
 
         // Interpret (only reached when no VMFB exists yet, i.e. first-time tracing)
         if let Some(ref body) = func_def.body_compiled {
-            let tracing = env.tracer.as_ref().map_or(false, |t| t.is_active(name));
+            let tracing = env.tracer.as_ref().is_some_and(|t| t.is_active(name));
             if tracing {
                 let mut tracer = env.tracer.take().unwrap();
                 tracer.log_call(name, &pos_args);
@@ -733,10 +730,10 @@ fn get_nested(val: &Value, indices: &[usize]) -> Result<Value, SheafError> {
                 })?
             }
             Value::Dict(map) => {
-                let entry = map.values().nth(idx).cloned().ok_or_else(|| {
+
+                map.values().nth(idx).cloned().ok_or_else(|| {
                     runtime_error(format!("Tuple index {} out of bounds (len {})", idx, map.len()))
-                })?;
-                entry
+                })?
             }
             _ => return Err(runtime_error(format!("Cannot index into {}", current.type_name()))),
         };

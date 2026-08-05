@@ -91,7 +91,7 @@ fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(BindingPattern, CompiledExpr)>) -
                 for (old, new_name) in &rename_map {
                     val = replace_symbol(&val, old, &CompiledExpr::Symbol(new_name.clone()));
                 }
-                
+
                 let anf_val = anf_rec(&val, out);
                 let fresh = fresh_anf_name();
                 out.push((BindingPattern::Simple(fresh.clone()), anf_val));
@@ -997,7 +997,7 @@ fn distribute_fn_adjoint_named(
                 CompiledExpr::Integer(_) | CompiledExpr::Float(_)
             ) || matches!(&args[1], CompiledExpr::Symbol(s) if {
                 // Check if the symbol's shape in the shape map is scalar
-                shapes.get(s.as_str()).map_or(false, |sh| sh.is_empty() || sh == &[1])
+                shapes.get(s.as_str()).is_some_and(|sh| sh.is_empty() || sh == &[1])
             });
 
             // V = shape(table)[0]

@@ -207,7 +207,7 @@ impl CodeGenerator {
                         _ => None,
                     }).collect();
                     if keywords.len() == args.len() - 1 && !keywords.is_empty() {
-                        let mut cur_reg = operand_reg.clone();
+                        let mut cur_reg = operand_reg;
                         let mut cur_ty = operand_ty.clone();
                         let mut cur_key = start_key.clone();
                         let mut ok = true;

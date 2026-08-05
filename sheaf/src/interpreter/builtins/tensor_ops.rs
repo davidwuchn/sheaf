@@ -75,7 +75,7 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let axis = get_axis(kw).unwrap_or(0) as usize;
     let has_axis_kw = kw.contains_key("axis");
 
-    let maybe_arrays: Option<Vec<(ArrayD<f32>, Dtype)>> = args.iter().map(|a| list_to_tensor(a)).collect();
+    let maybe_arrays: Option<Vec<(ArrayD<f32>, Dtype)>> = args.iter().map(list_to_tensor).collect();
 
     if let Some(arrays) = maybe_arrays
         && (has_axis_kw || args.iter().any(|a| matches!(a, Value::Tensor { .. })))
@@ -201,7 +201,7 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                         let sliced = data.index_axis(last_axis, idx).to_owned();
                         Ok(Value::tensor_f32(sliced))
                     }
-                    Value::Tensor { data: range_t, .. } if range_t.ndim() == 1 && range_t.len() > 0 => {
+                    Value::Tensor { data: range_t, .. } if range_t.ndim() == 1 && !range_t.is_empty() => {
                         let start = as_scalar(range_t) as usize;
                         let end = *range_t.iter().last().unwrap() as usize + 1;
                         let last_dim = data.shape()[data.ndim() - 1];
@@ -257,7 +257,7 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                     "get: expected tensor index, got quoted list.\n  = hint: use [...] (tensor) instead of '[...] (quoted list)."
                 ));
             }
-            return Err(runtime_error(format!("get: expected integer or tensor index, got {}", args[1].type_name())));
+            Err(runtime_error(format!("get: expected integer or tensor index, got {}", args[1].type_name())))
         }
         Value::List(items) => {
             let f = args[1].to_f64()

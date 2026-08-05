@@ -109,7 +109,7 @@ pub struct iree_hal_buffer_params_t {
 }
 
 impl iree_string_view_t {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_utf8(s: &str) -> Self {
         Self {
             data: s.as_ptr() as *const c_char,
             size: s.len(),

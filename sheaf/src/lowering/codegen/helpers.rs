@@ -30,15 +30,14 @@ fn collect_tuple_leaves_rec(
     seen: &mut HashSet<Vec<usize>>,
 ) {
     match expr {
-        CompiledExpr::GetTupleElement { param, indices } if param == param_name => {
-            if seen.insert(indices.clone()) {
+        CompiledExpr::GetTupleElement { param, indices } if param == param_name
+            && seen.insert(indices.clone()) => {
                 let symbol = format!("{}_{}", param_name, indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("_"));
                 out.push(TupleLeaf {
                     indices: indices.clone(),
                     symbol,
                 });
             }
-        }
         CompiledExpr::FunctionCall { args, .. } => {
             for a in args {
                 collect_tuple_leaves_rec(a, param_name, out, seen);

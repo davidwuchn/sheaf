@@ -149,6 +149,7 @@ impl SpecialForm for LastForm {
 /// Resolution order:
 ///   1. Paths with '/' treated as relative to current_dir (or cwd)
 ///   2. Bare names searched in load_path (stdlib dirs, then cwd)
+///
 /// Both `(use nn)` and `(use nn.shf)` are accepted.
 /// Already-loaded modules (by absolute path) are silently skipped.
 pub struct UseForm;

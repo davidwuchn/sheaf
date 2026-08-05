@@ -283,7 +283,7 @@ fn value_to_json(val: &Value) -> Result<serde_json::Value, crate::core::error::S
         }
         Value::DeviceBuffer(db) => {
             let data = db.to_host().map_err(|e| runtime_error(format!("io save: {}", e)))?;
-            value_to_json(&Value::Tensor { data: std::sync::Arc::new(data), dtype: *&db.dtype })
+            value_to_json(&Value::Tensor { data: std::sync::Arc::new(data), dtype: db.dtype })
         }
         Value::Function { .. } | Value::BuiltinFn { .. } => {
             Err(runtime_error("io save: cannot serialize functions"))

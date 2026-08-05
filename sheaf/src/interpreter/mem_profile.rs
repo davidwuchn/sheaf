@@ -51,6 +51,12 @@ pub struct MemProfiler {
     iree_last: Mutex<(usize, usize, usize, usize)>,
 }
 
+impl Default for MemProfiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemProfiler {
     /// Starts RSS sampling with the current usage as the baseline.
     pub fn new() -> Self {

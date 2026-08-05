@@ -76,7 +76,7 @@ impl StableHLOEmitter {
             let r = self.emit_broadcast(condition, condition_ty, &target);
             (r, target)
         } else {
-            (condition.clone(), condition_ty.clone())
+            (*condition, condition_ty.clone())
         };
 
         // Broadcast x (on_true) to result shape if needed
@@ -85,7 +85,7 @@ impl StableHLOEmitter {
             let r = self.emit_broadcast(x, x_ty, &target);
             (r, target)
         } else {
-            (x.clone(), x_ty.clone())
+            (*x, x_ty.clone())
         };
 
         // Broadcast y (on_false) to result shape if needed
@@ -94,7 +94,7 @@ impl StableHLOEmitter {
             let r = self.emit_broadcast(y, y_ty, &target);
             (r, target)
         } else {
-            (y.clone(), y_ty.clone())
+            (*y, y_ty.clone())
         };
 
         self.emit_select(&actual_cond, &actual_x, &actual_y, &actual_cond_ty, &actual_x_ty, &actual_y_ty)

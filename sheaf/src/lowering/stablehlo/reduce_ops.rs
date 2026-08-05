@@ -20,7 +20,7 @@ impl StableHLOEmitter {
         let shape = input_ty.shape();
         // Scalar reduce is a no-op: nothing to sum over
         if shape.is_empty() {
-            return (input.clone(), input_ty.clone());
+            return (*input, input_ty.clone());
         }
         let ndim = shape.len();
         let axis_usize = if axis < 0 {
@@ -95,7 +95,7 @@ impl StableHLOEmitter {
 
         // mean of a scalar is identity
         if ndim == 0 {
-            return (input.clone(), input_ty.clone());
+            return (*input, input_ty.clone());
         }
 
         let axis_usize = if axis < 0 {
@@ -156,7 +156,7 @@ impl StableHLOEmitter {
     ) -> (Register, StableHLOType) {
         let shape = input_ty.shape();
         if shape.is_empty() {
-            return (input.clone(), input_ty.clone());
+            return (*input, input_ty.clone());
         }
         let ndim = shape.len();
         let axis_usize = if axis < 0 {
@@ -228,7 +228,7 @@ impl StableHLOEmitter {
     ) -> (Register, StableHLOType) {
         let shape = input_ty.shape();
         if shape.is_empty() {
-            return (input.clone(), input_ty.clone());
+            return (*input, input_ty.clone());
         }
         let ndim = shape.len();
         let axis_usize = if axis < 0 {
@@ -300,7 +300,7 @@ impl StableHLOEmitter {
     ) -> (Register, StableHLOType) {
         let shape = input_ty.shape();
         if shape.is_empty() {
-            return (input.clone(), input_ty.clone());
+            return (*input, input_ty.clone());
         }
         let ndim = shape.len();
         let axis_usize = if axis < 0 {
@@ -380,7 +380,7 @@ impl StableHLOEmitter {
         let (mask_reg, mask_ty) = self.emit_compare("==", input, &max_reg, input_ty, &max_ty);
 
         // Create iota indices along axis
-        let (iota_reg, iota_ty) = self.emit_iota(&shape, axis_usize as i64);
+        let (iota_reg, iota_ty) = self.emit_iota(shape, axis_usize as i64);
 
         // +inf constant, broadcast to input shape
         let inf_scalar = self.fresh_register();
@@ -425,7 +425,7 @@ impl StableHLOEmitter {
         let (mask_reg, mask_ty) = self.emit_compare("==", input, &min_reg, input_ty, &min_ty);
 
         // Create iota indices along axis
-        let (iota_reg, iota_ty) = self.emit_iota(&shape, axis_usize as i64);
+        let (iota_reg, iota_ty) = self.emit_iota(shape, axis_usize as i64);
 
         // +inf constant, broadcast to input shape
         let inf_scalar = self.fresh_register();

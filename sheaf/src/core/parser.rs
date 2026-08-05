@@ -199,8 +199,8 @@ impl Tokenizer {
         }
 
         // Try to parse as keyword (:foo)
-        if s.starts_with(':') {
-            return Ok(Token::Keyword(s[1..].to_string()));
+        if let Some(keyword) = s.strip_prefix(':') {
+            return Ok(Token::Keyword(keyword.to_string()));
         }
 
         // Try to parse as number

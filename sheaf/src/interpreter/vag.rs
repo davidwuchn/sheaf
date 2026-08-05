@@ -150,7 +150,7 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
             Ok(traced) => {
                 if !contains_undiffable_ops(&traced) {
                         env.pop_scope();
-                        let loss_val = call_function(func, &[params.clone()], env)?;
+                        let loss_val = call_function(func, std::slice::from_ref(params), env)?;
                         let loss = scalar_from_value(&loss_val)?;
 
                         env.push_scope();
@@ -222,8 +222,8 @@ fn build_grad_from_leaves(
 fn values_equal(a: &Value, b: &Value) -> bool {
     let a_cow = a.ensure_host_cow().ok();
     let b_cow = b.ensure_host_cow().ok();
-    let a = a_cow.as_ref().map(|c| &**c).unwrap_or(a);
-    let b = b_cow.as_ref().map(|c| &**c).unwrap_or(b);
+    let a = a_cow.as_deref().unwrap_or(a);
+    let b = b_cow.as_deref().unwrap_or(b);
     match (a, b) {
         (Value::Tensor { data: da, .. }, Value::Tensor { data: db, .. }) => {
             da.shape() == db.shape() && da.iter().zip(db.iter()).all(|(x, y)| x.to_bits() == y.to_bits())

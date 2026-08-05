@@ -23,9 +23,7 @@ pub fn arity_error(name: &str, expected: usize, got: usize) -> SheafError {
             name, arg_list.join(" "), ordinal(expected + 1)
         )
     } else {
-        format!(
-            "\n  = hint: A closing parenthesis may be too early, cutting off arguments.",
-        )
+        "\n  = hint: A closing parenthesis may be too early, cutting off arguments.".to_string()
     };
     runtime_error(format!(
         "{} requires {} argument{}, got {}{}",
@@ -77,6 +75,12 @@ pub struct Env {
     /// JIT compiler for transparent on-demand compilation of pure functions.
     #[cfg(iree_runtime)]
     pub jit_compiler: Option<crate::runtime::jit::JitCompiler>,
+}
+
+impl Default for Env {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Env {

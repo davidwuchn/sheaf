@@ -57,7 +57,7 @@ impl NpDtype {
     }
 
     fn from_str(s: &str) -> Option<NpDtype> {
-        let s = s.trim_start_matches(|c: char| c == '<' || c == '>' || c == '=' || c == '|');
+        let s = s.trim_start_matches(['<', '>', '=', '|']);
         match s {
             "f4" | "float32" => Some(NpDtype::F32),
             "f8" | "float64" => Some(NpDtype::F64),
@@ -634,11 +634,10 @@ fn extract_numpy_from_state(state: &[PV]) -> Option<PV> {
                 }
             }
             PV::NumpyDtype(dt) => np_dtype = Some(*dt),
-            PV::Bytes(b) => {
-                if raw_data.is_none() || b.len() > raw_data.map_or(0, |r| r.len()) {
+            PV::Bytes(b)
+                if (raw_data.is_none() || b.len() > raw_data.map_or(0, |r| r.len())) => {
                     raw_data = Some(b);
                 }
-            }
             _ => {}
         }
     }

@@ -21,7 +21,7 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("index-of", builtin_index_of);
 }
 
-fn builtin_first(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
+fn builtin_first(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::List(items) | Value::Tuple(items) => items.first().cloned().ok_or_else(|| runtime_error("first: empty list")),
         Value::Tensor { data, .. } => {
@@ -34,13 +34,13 @@ fn builtin_first(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         }
         Value::DeviceBuffer(_) => {
             let host = args[0].ensure_host_cow()?;
-            builtin_first(std::slice::from_ref(&*host), kw)
+            builtin_first(std::slice::from_ref(&*host), _kw)
         }
         other => Err(runtime_error(format!("first: expected a list or a tensor, got {}", other.type_name()))),
     }
 }
 
-fn builtin_second(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
+fn builtin_second(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::List(items) | Value::Tuple(items) => items.get(1).cloned().ok_or_else(|| runtime_error("second: list too short")),
         Value::Tensor { data, .. } => {
@@ -53,13 +53,13 @@ fn builtin_second(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         }
         Value::DeviceBuffer(_) => {
             let host = args[0].ensure_host_cow()?;
-            builtin_second(std::slice::from_ref(&*host), kw)
+            builtin_second(std::slice::from_ref(&*host), _kw)
         }
         other => Err(runtime_error(format!("second: expected a list or a tensor, got {}", other.type_name()))),
     }
 }
 
-fn builtin_last(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
+fn builtin_last(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::List(items) => items.last().cloned().ok_or_else(|| runtime_error("last: empty list")),
         Value::Tensor { data, .. } => {
@@ -73,7 +73,7 @@ fn builtin_last(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         }
         Value::DeviceBuffer(_) => {
             let host = args[0].ensure_host_cow()?;
-            builtin_last(std::slice::from_ref(&*host), kw)
+            builtin_last(std::slice::from_ref(&*host), _kw)
         }
         other => Err(runtime_error(format!("last: expected a list or a tensor, got {}", other.type_name()))),
     }
@@ -89,7 +89,7 @@ fn builtin_rest(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     }
 }
 
-fn builtin_nth(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
+fn builtin_nth(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let f = args[1].to_f64().ok_or_else(|| runtime_error(format!("nth: expected numeric index, got {}", args[1].type_name())))?;
     match &args[0] {
         Value::List(items) => {
@@ -105,7 +105,7 @@ fn builtin_nth(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         }
         Value::DeviceBuffer(_) => {
             let host = args[0].ensure_host_cow()?.into_owned();
-            builtin_nth(&[host, args[1].clone()], kw)
+            builtin_nth(&[host, args[1].clone()], _kw)
         }
         other => Err(runtime_error(format!("nth: expected a list or a tensor, got {}", other.type_name()))),
     }
@@ -194,7 +194,7 @@ fn builtin_get_in(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_assoc(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    if args.len() < 3 || (args.len() - 1) % 2 != 0 {
+    if args.len() < 3 || !(args.len() - 1).is_multiple_of(2) {
         return Err(runtime_error("assoc: expected (assoc dict key val ...)"));
     }
     match &args[0] {

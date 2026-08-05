@@ -34,6 +34,12 @@ pub struct Profiler {
     wall_start: Instant,
 }
 
+impl Default for Profiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Profiler {
     pub fn new() -> Self {
         Self {
@@ -90,7 +96,7 @@ impl Profiler {
         sheaf_msg!("\nProfiler: {} wall\n", format_duration(wall_ns));
 
         let mut entries: Vec<(&String, &ProfileEntry)> = self.stats.iter().collect();
-        entries.sort_by(|a, b| b.1.self_ns.cmp(&a.1.self_ns));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.1.self_ns));
 
         eprintln!(
             "  {:<30} {:>8} {:>10} {:>10} {:>10}",
@@ -144,7 +150,7 @@ impl Profiler {
             let threshold = wall_ns / 100;
 
             let mut sorted: Vec<_> = top_children.iter().collect();
-            sorted.sort_by(|a, b| b.1.total_ns.cmp(&a.1.total_ns));
+            sorted.sort_by_key(|entry| std::cmp::Reverse(entry.1.total_ns));
 
             let mut significant: Vec<(&String, &TreeEdge)> = Vec::new();
             let mut others_calls: u64 = 0;
@@ -206,7 +212,7 @@ impl Profiler {
             let threshold = parent_total_ns / 100;
 
             let mut sorted: Vec<_> = children.iter().collect();
-            sorted.sort_by(|a, b| b.1.total_ns.cmp(&a.1.total_ns));
+            sorted.sort_by_key(|entry| std::cmp::Reverse(entry.1.total_ns));
 
             let mut significant: Vec<(&String, &TreeEdge)> = Vec::new();
             let mut others_calls: u64 = 0;

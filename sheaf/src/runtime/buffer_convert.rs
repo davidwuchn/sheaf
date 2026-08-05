@@ -188,7 +188,7 @@ pub(super) unsafe fn buffer_view_to_value(
 /// Dicts are sorted by key (matching codegen convention), then recursed.
 /// Tuples are recursed. Scalars/tensors pass through.
 /// Returns references to avoid cloning tensor data.
-pub(super) fn flatten_values<'a>(inputs: &'a [Value]) -> Result<Vec<&'a Value>, SheafError> {
+pub(super) fn flatten_values(inputs: &[Value]) -> Result<Vec<&Value>, SheafError> {
     let mut flat = Vec::new();
     for val in inputs {
         flatten_value(val, &mut flat)?;

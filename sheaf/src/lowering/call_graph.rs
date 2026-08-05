@@ -128,7 +128,7 @@ impl CallGraph {
         for (id, name) in id_to_name.iter().enumerate() {
             let Some(fd) = registry.get(name) else { continue };
             let Some(body) = &fd.body_compiled else { continue };
-            
+
             let mut succs: Vec<NodeId> = direct_callees(body)
                 .into_iter()
                 .filter_map(|callee| name_to_id.get(&callee).copied())
@@ -176,8 +176,8 @@ impl CallGraph {
         }
 
         let mut out: Vec<NodeId> = Vec::with_capacity(count);
-        for v in 0..n {
-            if visited[v] {
+        for (v, &is_visited) in visited.iter().enumerate() {
+            if is_visited {
                 out.push(v);
             }
         }
@@ -259,7 +259,7 @@ impl CallGraph {
                         // A size-1 SCC is only cyclic if it self-loops.
                         if size == 1 {
                             in_cycle[popped_v] =
-                                self.edges[popped_v].iter().any(|&w| w == popped_v);
+                                self.edges[popped_v].contains(&popped_v);
                         }
                     }
                 }
@@ -267,8 +267,8 @@ impl CallGraph {
         }
 
         let mut out: Vec<NodeId> = Vec::new();
-        for v in 0..n {
-            if in_cycle[v] {
+        for (v, &is_in_cycle) in in_cycle.iter().enumerate() {
+            if is_in_cycle {
                 out.push(v);
             }
         }

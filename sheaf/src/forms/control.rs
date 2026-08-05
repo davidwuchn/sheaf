@@ -88,7 +88,7 @@ impl SpecialForm for CaseForm {
         check_min_arity("case", args, 2, loc)?;
         let target = compiler.compile(&args[0])?;
         let pairs = &args[1..];
-        if pairs.len() % 2 == 0 {
+        if pairs.len().is_multiple_of(2) {
             // Even: all key-value pairs, no default
             build_case_chain(compiler, &target, pairs, CompiledExpr::Nil)
         } else {

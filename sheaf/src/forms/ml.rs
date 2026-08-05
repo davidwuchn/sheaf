@@ -181,16 +181,15 @@ fn collect_symbols_in(
     out: &mut std::collections::HashSet<String>,
 ) {
     match expr {
-        SheafValue::Symbol(name, _) => {
+        SheafValue::Symbol(name, _)
             // Only collect if not already known (not in registry, not in local_vars, not a special form)
             if !compiler.registry.contains_key(name)
                 && !compiler.local_vars.contains_key(name)
                 && !compiler.env.contains_key(name)
                 && !is_special_form(name)
-            {
+            => {
                 out.insert(name.clone());
             }
-        }
         SheafValue::List(elems, _) | SheafValue::Vector(elems, _) => {
             // Skip first element if it looks like a function call (symbol = function name)
             let start = if matches!(elems.first(), Some(SheafValue::Symbol(..))) { 1 } else { 0 };
@@ -279,7 +278,6 @@ fn parse_with_params_binding(
 ///
 /// Returns `CompiledExpr::ValueAndGrad` recording the intent. Actual codegen
 /// or interpretation is deferred to the backend.
-
 /// Parse a shape config dict into raw (name, dims) pairs, without
 /// constructing StableHLOType -- keeps the frontend free from codegen types.
 fn parse_shape_dims(

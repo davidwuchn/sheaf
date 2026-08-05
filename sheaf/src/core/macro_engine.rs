@@ -34,6 +34,12 @@ enum ExpandedItem {
 
 type Bindings = HashMap<String, SheafValue>;
 
+impl Default for MacroEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MacroEngine {
     pub fn new() -> Self {
         Self {

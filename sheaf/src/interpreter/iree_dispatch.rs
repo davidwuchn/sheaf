@@ -201,7 +201,7 @@ pub(super) fn try_jit_vag(
     if crate::core::config::verbosity() >= 2 {
         let desc = match &result {
             Value::Tuple(elems) => format!("Tuple(len={})", elems.len()),
-            other => format!("{}", other.type_name()),
+            other => other.type_name().to_string(),
         };
         sheaf_msg!("jit: [vag] result structure: {}", desc);
         if let Value::Tuple(elems) = &result {

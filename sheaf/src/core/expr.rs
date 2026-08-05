@@ -339,9 +339,7 @@ impl CompilerContext {
 
     /// Initialize global environment with built-in operations
     fn init_env() -> HashMap<String, SheafValue> {
-        let env = HashMap::new();
-
-        env
+        HashMap::new()
     }
 
     /// Compile a Sheaf expression
@@ -380,10 +378,10 @@ impl CompilerContext {
 
                 // Check for macro expansion before special forms
                 if let Some(op_name) = elements[0].as_symbol()
-                    && self.macro_engine.macros.contains_key(op_name) 
+                    && self.macro_engine.macros.contains_key(op_name)
                 {
                     let expanded = self.macro_engine.expand(exp, &self.env, &self.registry)?;
-                    return self.compile(&expanded).map_err(|e| e.with_location(&loc));
+                    return self.compile(&expanded).map_err(|e| e.with_location(loc));
                 }
 
                 // Check for special forms

@@ -22,13 +22,13 @@ impl StableHLOEmitter {
         let actual_lhs = if lhs_shape != result_shape && !result_shape.is_empty() {
             self.emit_broadcast(lhs, lhs_ty, result_ty)
         } else {
-            lhs.clone()
+            *lhs
         };
 
         let actual_rhs = if rhs_shape != result_shape && !result_shape.is_empty() {
             self.emit_broadcast(rhs, rhs_ty, result_ty)
         } else {
-            rhs.clone()
+            *rhs
         };
 
         (actual_lhs, actual_rhs)
@@ -62,8 +62,8 @@ impl StableHLOEmitter {
                 let mut mapping = Vec::with_capacity(from_shape.len());
                 let mut search_start = 0;
                 for &src_dim in from_shape {
-                    for j in search_start..to_shape.len() {
-                        if to_shape[j] == src_dim || src_dim == 1 {
+                    for (j, &target_dim) in to_shape.iter().enumerate().skip(search_start) {
+                        if target_dim == src_dim || src_dim == 1 {
                             mapping.push(j);
                             search_start = j + 1;
                             break;

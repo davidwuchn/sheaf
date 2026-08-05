@@ -54,7 +54,7 @@ fn classify_vectors_rec(
                 let old_ty = symbol_types.remove(param);
                 let active = old_ty
                     .clone()
-                    .unwrap_or_else(|| StableHLOType::scalar_f32());
+                    .unwrap_or_else(StableHLOType::scalar_f32);
                 symbol_types.insert(param.clone(), active);
                 saved.push((param.clone(), old_ty));
             }
@@ -249,7 +249,6 @@ fn static_length_with_types(
 }
 
 /// Desugar destructuring `Let` bindings.
-
 pub fn lower_tuples_and_destructuring(
     body: CompiledExpr,
     param_shapes: &HashMap<String, Vec<i64>>,
@@ -333,9 +332,7 @@ pub fn desugar_destructuring_lets(
                                 }
                                 DestructKind::Unknown => {
                                     return Err(SheafError::Compile {
-                                        message: format!(
-                                            "Destructuring the result of a runtime tensor of unknown shape is not supported"
-                                        ),
+                                        message: "Destructuring the result of a runtime tensor of unknown shape is not supported".to_string(),
                                         location: crate::core::error::SourceLocation::unknown(),
                                     });
                                 }

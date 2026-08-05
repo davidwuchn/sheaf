@@ -20,7 +20,7 @@ pub(super) fn eval_map(args: &[Value], env: &mut Env) -> Result<Value, SheafErro
         Value::List(items) => {
             let mut results = Vec::with_capacity(items.len());
             for item in items {
-                results.push(call_function(func, &[item.clone()], env)?);
+                results.push(call_function(func, std::slice::from_ref(item), env)?);
             }
             Ok(Value::List(results))
         }
@@ -57,7 +57,7 @@ pub(super) fn eval_filter(args: &[Value], env: &mut Env) -> Result<Value, SheafE
         Value::List(items) => {
             let mut results = Vec::new();
             for item in items {
-                let result = call_function(func, &[item.clone()], env)?;
+                let result = call_function(func, std::slice::from_ref(item), env)?;
                 if result.is_truthy() {
                     results.push(item.clone());
                 }
@@ -84,7 +84,7 @@ pub(super) fn eval_reduce(args: &[Value], env: &mut Env) -> Result<Value, SheafE
                 items[0].clone()
             }
             Value::Tensor { data, .. } => {
-                if data.len() == 0 {
+                if data.is_empty() {
                     return Err(runtime_error("reduce: cannot reduce empty tensor without init"));
                 }
                 if data.ndim() == 1 {
@@ -281,7 +281,7 @@ pub(super) fn eval_find(args: &[Value], env: &mut Env) -> Result<Value, SheafErr
     match &args[1] {
         Value::List(items) => {
             for item in items {
-                let result = call_function(func, &[item.clone()], env)?;
+                let result = call_function(func, std::slice::from_ref(item), env)?;
                 if result.is_truthy() {
                     return Ok(item.clone());
                 }

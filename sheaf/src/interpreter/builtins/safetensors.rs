@@ -219,7 +219,6 @@ fn tree_to_value(node: TreeNode) -> Value {
 /// store the raw tensor data.
 ///
 /// This is the inverse of `load_safetensors` for tensor-containing values.
-
 pub fn save_safetensors(value: &Value) -> Result<Vec<u8>, SheafError> {
     let mut entries: Vec<(String, TensorEntry)> = Vec::new();
     flatten_into(value, "", &mut entries)?;

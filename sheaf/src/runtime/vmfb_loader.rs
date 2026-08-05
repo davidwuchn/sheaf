@@ -317,7 +317,7 @@ fn parse_manifest_signature(
         .map(|p| {
             params_obj.get(p)
                 .and_then(|v| v.as_str())
-                .and_then(|s| crate::lowering::stablehlo::StableHLOType::parse(s))
+                .and_then(crate::lowering::stablehlo::StableHLOType::parse)
                 .unwrap_or_else(crate::lowering::stablehlo::StableHLOType::scalar_f32)
         })
         .collect();

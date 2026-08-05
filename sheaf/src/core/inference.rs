@@ -209,7 +209,7 @@ fn find_return_dict_keys(expr: &CompiledExpr) -> Option<Vec<String>> {
             Some(keys)
         }
         CompiledExpr::Let { body, .. } => find_return_dict_keys(body),
-        CompiledExpr::Do(exprs) => exprs.last().and_then(|e| find_return_dict_keys(e)),
+        CompiledExpr::Do(exprs) => exprs.last().and_then(find_return_dict_keys),
         _ => None,
     }
 }

@@ -196,7 +196,7 @@ impl IreeSession {
             let mut device: *mut iree_hal_device_t = std::ptr::null_mut();
             let mut chosen_driver = "";
             for name in &driver_names {
-                let driver = iree_string_view_t::from_str(name);
+                let driver = iree_string_view_t::from_utf8(name);
                 let status =
                     iree_runtime_instance_try_create_default_device(instance, driver, &mut device);
                 if iree_status_is_ok(status) {
@@ -490,7 +490,7 @@ impl IreeSession {
                 return Err(iree_err("failed to create output list"));
             }
 
-            let name = iree_string_view_t::from_str(fn_name);
+            let name = iree_string_view_t::from_utf8(fn_name);
             let status = iree_runtime_session_call_by_name(
                 self.session,
                 name,
@@ -672,7 +672,7 @@ impl IreeSession {
                 return Err(iree_err("failed to create output list"));
             }
 
-            let name = iree_string_view_t::from_str(fn_name);
+            let name = iree_string_view_t::from_utf8(fn_name);
             let status = iree_runtime_session_call_by_name(
                 self.session,
                 name,

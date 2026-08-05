@@ -84,14 +84,13 @@ impl JitCompiler {
         let mut all_param_names: Vec<String> = Vec::new();
         let mut all_arg_values: Vec<Value> = Vec::new();
         let mut scalar_substitutions: Vec<(String, f64)> = Vec::new();
-        let wrt_indices: Vec<usize>;
 
         // fn params (the wrt parameters)
         for p in fn_params {
             all_param_names.push(p.clone());
             all_arg_values.push(wrt_arg.clone());
         }
-        wrt_indices = (0..fn_params.len()).collect();
+        let wrt_indices: Vec<usize> = (0..fn_params.len()).collect();
 
         // Build an augmented registry with closure-captured functions.
         // These will be inlined (not passed as IREE parameters).
@@ -219,20 +218,22 @@ impl JitCompiler {
                             top_fields
                                 .entry(indices[0])
                                 .or_insert((path[0].clone(), ty_str));
-                        } else if !top_fields.contains_key(&indices[0]) {
-                            let ty_str = if let StableHLOType::Tuple(elems, _) = pty {
-                                if let Some(StableHLOType::Tuple(sub, _)) = elems.get(indices[0]) {
-                                    format!("tuple<...> ({} fields)", sub.len())
+                        } else {
+                            top_fields.entry(indices[0]).or_insert_with(|| {
+                                let ty_str = if let StableHLOType::Tuple(elems, _) = pty {
+                                    if let Some(StableHLOType::Tuple(sub, _)) = elems.get(indices[0]) {
+                                        format!("tuple<...> ({} fields)", sub.len())
+                                    } else {
+                                        "tuple<...>".to_string()
+                                    }
                                 } else {
                                     "tuple<...>".to_string()
-                                }
-                            } else {
-                                "tuple<...>".to_string()
-                            };
-                            top_fields.insert(indices[0], (path[0].clone(), ty_str));
+                                };
+                                (path[0].clone(), ty_str)
+                            });
                         }
                     }
-                    for (_, (key, ty_str)) in &top_fields {
+                    for (key, ty_str) in top_fields.values() {
                         sheaf_msg!("jit: value-and-grad | {}.{}: {}", pname, key, ty_str);
                     }
                 } else {

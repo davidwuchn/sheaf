@@ -49,6 +49,12 @@ pub struct Tracer {
     call_start: Option<Instant>,
 }
 
+impl Default for Tracer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Tracer {
     pub fn new() -> Self {
         Self {
@@ -163,11 +169,10 @@ impl Tracer {
 
     pub fn check_cli_guards(&self, fn_name: &str, val: &Value) {
         for guard in &self.cli_guards {
-            if let Some(ref scope) = guard.scope {
-                if scope != fn_name {
+            if let Some(ref scope) = guard.scope
+                && scope != fn_name {
                     continue;
                 }
-            }
             if let Err(msg) = super::apply_guard_check(&guard.check, val) {
                 sheaf_msg!("/!\\ Guard Breached: {:?}", guard.check);
                 sheaf_msg!("Function: {}", fn_name);
