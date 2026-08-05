@@ -25,10 +25,10 @@ pub fn parse_reference() -> Vec<DocCategory> {
 
         // Category header: ## Name
         if trimmed.starts_with("## ") && !trimmed.starts_with("###") {
-            if let Some(cat) = current.take() {
-                if !cat.functions.is_empty() {
-                    categories.push(cat);
-                }
+            if let Some(cat) = current.take()
+                && !cat.functions.is_empty()
+            {
+                categories.push(cat);
             }
             current = Some(DocCategory {
                 name: trimmed[3..].to_string(),
@@ -36,18 +36,19 @@ pub fn parse_reference() -> Vec<DocCategory> {
             });
         }
         // Function header: ### name[, name...]
-        else if let Some(header) = trimmed.strip_prefix("### ") {
-            if let Some(ref mut cat) = current {
-                cat.functions.extend(header.split(',').map(|name| name.trim().to_string()));
-            }
+        else if let Some(header) = trimmed.strip_prefix("### ")
+            && let Some(ref mut cat) = current
+        {
+            cat.functions
+                .extend(header.split(',').map(|name| name.trim().to_string()));
         }
     }
 
     // Push last category
-    if let Some(cat) = current.take() {
-        if !cat.functions.is_empty() {
-            categories.push(cat);
-        }
+    if let Some(cat) = current.take()
+        && !cat.functions.is_empty()
+    {
+        categories.push(cat);
     }
 
     categories

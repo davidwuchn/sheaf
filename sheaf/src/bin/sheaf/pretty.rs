@@ -149,7 +149,7 @@ fn break_fn(elems: &[SheafValue], col: usize) -> String {
     if body_forms.len() == 1 {
         let inline_col = col + out.len() + 1; // after "(fn [params] "
         let body_flat = flat(&body_forms[0]);
-        if inline_col + body_flat.len() + 1 <= MAX_WIDTH {
+        if inline_col + body_flat.len() < MAX_WIDTH {
             out.push(' ');
             out.push_str(&body_flat);
             out.push(')');

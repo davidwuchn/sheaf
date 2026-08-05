@@ -810,6 +810,67 @@ fn precompiled_registry_error() -> SheafError {
     }
 }
 
+impl Drop for IreeSession {
+    fn drop(&mut self) {
+        record_session_drop();
+        if self.profile {
+            let n = self.n_calls.load(Ordering::Relaxed);
+            if n > 0 {
+                let flatten = self.t_flatten_ns.load(Ordering::Relaxed) as f64 / 1e6;
+                let buffers = self.t_buffers_ns.load(Ordering::Relaxed) as f64 / 1e6;
+                let call = self.t_call_ns.load(Ordering::Relaxed) as f64 / 1e6;
+                let output = self.t_output_ns.load(Ordering::Relaxed) as f64 / 1e6;
+                let total = flatten + buffers + call + output;
+                let hits = self.n_cache_hits.load(Ordering::Relaxed);
+                let misses = self.n_cache_misses.load(Ordering::Relaxed);
+                sheaf_msg!(
+                    "\njit: dispatch profile ({} calls, {:.1}ms total):",
+                    n,
+                    total
+                );
+                sheaf_msg!(
+                    "  flatten:  {:7.1}ms ({:4.1}%)",
+                    flatten,
+                    flatten / total * 100.0
+                );
+                sheaf_msg!(
+                    "  buffers:  {:7.1}ms ({:4.1}%)  [hits: {}, misses: {}]",
+                    buffers,
+                    buffers / total * 100.0,
+                    hits,
+                    misses
+                );
+                sheaf_msg!("  call:     {:7.1}ms ({:4.1}%)", call, call / total * 100.0);
+                sheaf_msg!(
+                    "  output:   {:7.1}ms ({:4.1}%)",
+                    output,
+                    output / total * 100.0
+                );
+            }
+        }
+        unsafe {
+            // Release all cached buffer views before tearing down the session
+            if let Ok(cache) = self.buffer_cache.lock() {
+                for positions in cache.values() {
+                    for slot in positions {
+                        for entry in slot {
+                            iree_hal_buffer_view_release(entry.bv);
+                        }
+                    }
+                }
+            }
+            if !self.session.is_null() {
+                iree_runtime_session_release(self.session);
+            }
+            // device_handle (Arc<IreeDeviceHandle>) releases the device when
+            // the last DeviceBuffer is dropped. No explicit release here.
+            if !self.instance.is_null() {
+                iree_runtime_instance_release(self.instance);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod lifetime_counter_tests {
     use super::{
@@ -896,49 +957,5 @@ mod lifetime_counter_tests {
         LIVE_SESSION_COUNT.store(0, Ordering::Relaxed);
         record_session_drop();
         assert_eq!(live_session_count(), 0);
-    }
-}
-
-impl Drop for IreeSession {
-    fn drop(&mut self) {
-        record_session_drop();
-        if self.profile {
-            let n = self.n_calls.load(Ordering::Relaxed);
-            if n > 0 {
-                let flatten = self.t_flatten_ns.load(Ordering::Relaxed) as f64 / 1e6;
-                let buffers = self.t_buffers_ns.load(Ordering::Relaxed) as f64 / 1e6;
-                let call = self.t_call_ns.load(Ordering::Relaxed) as f64 / 1e6;
-                let output = self.t_output_ns.load(Ordering::Relaxed) as f64 / 1e6;
-                let total = flatten + buffers + call + output;
-                let hits = self.n_cache_hits.load(Ordering::Relaxed);
-                let misses = self.n_cache_misses.load(Ordering::Relaxed);
-                sheaf_msg!("\njit: dispatch profile ({} calls, {:.1}ms total):", n, total);
-                sheaf_msg!("  flatten:  {:7.1}ms ({:4.1}%)", flatten, flatten / total * 100.0);
-                sheaf_msg!("  buffers:  {:7.1}ms ({:4.1}%)  [hits: {}, misses: {}]",
-                    buffers, buffers / total * 100.0, hits, misses);
-                sheaf_msg!("  call:     {:7.1}ms ({:4.1}%)", call, call / total * 100.0);
-                sheaf_msg!("  output:   {:7.1}ms ({:4.1}%)", output, output / total * 100.0);
-            }
-        }
-        unsafe {
-            // Release all cached buffer views before tearing down the session
-            if let Ok(cache) = self.buffer_cache.lock() {
-                for positions in cache.values() {
-                    for slot in positions {
-                        for entry in slot {
-                            iree_hal_buffer_view_release(entry.bv);
-                        }
-                    }
-                }
-            }
-            if !self.session.is_null() {
-                iree_runtime_session_release(self.session);
-            }
-            // device_handle (Arc<IreeDeviceHandle>) releases the device when
-            // the last DeviceBuffer is dropped. No explicit release here.
-            if !self.instance.is_null() {
-                iree_runtime_instance_release(self.instance);
-            }
-        }
     }
 }

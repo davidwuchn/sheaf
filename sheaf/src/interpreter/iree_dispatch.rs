@@ -97,45 +97,6 @@ fn jit_dispatch_name(
     dispatch_name(&module.module_name, function_name)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{dispatch_name, jit_dispatch_name};
-    use crate::core::inference::FunctionSignature;
-    use crate::runtime::jit::CompiledModuleInfo;
-
-    fn signature() -> FunctionSignature {
-        FunctionSignature {
-            param_types: vec![crate::StableHLOType::scalar_f32()],
-            return_type: crate::StableHLOType::scalar_f32(),
-            return_dict_keys: None,
-            arg_type_layouts: Vec::new(),
-            captured_scalars: std::collections::HashMap::new(),
-        }
-    }
-
-    #[test]
-    fn dispatch_name_uses_registered_module_name() {
-        assert_eq!(
-            dispatch_name("aot_model_42", "predict-value?"),
-            "aot_model_42.predict_value_q"
-        );
-    }
-
-    #[test]
-    fn jit_dispatch_name_uses_catalogued_variant_namespace() {
-        let module = CompiledModuleInfo {
-            function_name: "predict-value?".to_string(),
-            module_name: "jit_variant_42".to_string(),
-            sig: signature(),
-        };
-
-        assert_eq!(
-            jit_dispatch_name(&module, "predict-value?"),
-            "jit_variant_42.predict_value_q"
-        );
-    }
-}
-
 /// Try to JIT-compile a value-and-grad call into a single VMFB (forward + backward).
 pub(super) fn try_jit_vag(
     func: &Value,
@@ -371,4 +332,43 @@ fn tuple_to_list(tuple_val: &Value, original: &[Value]) -> Option<Value> {
         result.push(val);
     }
     Some(Value::List(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dispatch_name, jit_dispatch_name};
+    use crate::core::inference::FunctionSignature;
+    use crate::runtime::jit::CompiledModuleInfo;
+
+    fn signature() -> FunctionSignature {
+        FunctionSignature {
+            param_types: vec![crate::StableHLOType::scalar_f32()],
+            return_type: crate::StableHLOType::scalar_f32(),
+            return_dict_keys: None,
+            arg_type_layouts: Vec::new(),
+            captured_scalars: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn dispatch_name_uses_registered_module_name() {
+        assert_eq!(
+            dispatch_name("aot_model_42", "predict-value?"),
+            "aot_model_42.predict_value_q"
+        );
+    }
+
+    #[test]
+    fn jit_dispatch_name_uses_catalogued_variant_namespace() {
+        let module = CompiledModuleInfo {
+            function_name: "predict-value?".to_string(),
+            module_name: "jit_variant_42".to_string(),
+            sig: signature(),
+        };
+
+        assert_eq!(
+            jit_dispatch_name(&module, "predict-value?"),
+            "jit_variant_42.predict_value_q"
+        );
+    }
 }

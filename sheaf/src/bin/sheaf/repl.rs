@@ -35,12 +35,12 @@ impl Highlighter for MatchingBracketHighlighter {
         if line.len() <= 1 {
             return Cow::Borrowed(line);
         }
-        if let Some((bracket, pos)) = self.bracket.get() {
-            if let Some((matching, idx)) = find_matching_bracket(line, pos, bracket) {
-                let mut copy = line.to_owned();
-                copy.replace_range(idx..=idx, &format!("\x1b[7m{}\x1b[0m", matching as char));
-                return Cow::Owned(copy);
-            }
+        if let Some((bracket, pos)) = self.bracket.get()
+            && let Some((matching, idx)) = find_matching_bracket(line, pos, bracket)
+        {
+            let mut copy = line.to_owned();
+            copy.replace_range(idx..=idx, &format!("\x1b[7m{}\x1b[0m", matching as char));
+            return Cow::Owned(copy);
         }
         Cow::Borrowed(line)
     }
@@ -295,10 +295,12 @@ impl Highlighter for SheafHelper {
 impl Helper for SheafHelper {}
 
 fn print_columns(names: &[String], term_width: usize) {
-    if names.is_empty() { return; }
+    if names.is_empty() {
+        return;
+    }
     let col_width = names.iter().map(|n| n.len()).max().unwrap_or(4) + 2;
     let num_cols = (term_width / col_width).max(1);
-    let num_rows = (names.len() + num_cols - 1) / num_cols;
+    let num_rows = names.len().div_ceil(num_cols);
     println!();
     for row in 0..num_rows {
         for col in 0..num_cols {

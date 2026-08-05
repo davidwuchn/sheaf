@@ -484,7 +484,7 @@ mod tests {
         registry.insert("f".to_string(), fn_def("f", f_body));
         registry.insert("g".to_string(), fn_def("g", g_body));
 
-        let direct = direct_callees(&registry["f"].body_compiled.as_ref().unwrap());
+        let direct = direct_callees(registry["f"].body_compiled.as_ref().unwrap());
         assert!(direct.contains("map"));
         assert!(direct.contains("g"));
 

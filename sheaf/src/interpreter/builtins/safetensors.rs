@@ -394,7 +394,7 @@ mod tests {
         }
     }
 
-    fn at<'a>(v: &'a Value, idx: usize) -> &'a Value {
+    fn at(v: &Value, idx: usize) -> &Value {
         match v {
             Value::List(items) => &items[idx],
             _ => panic!("expected list"),

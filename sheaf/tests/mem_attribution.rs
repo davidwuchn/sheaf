@@ -158,7 +158,7 @@ fn iree_session_drop_memory_attribution() {
     for i in 1..=n {
         let session = IreeSession::new().expect("IreeSession::new()");
         session.load_vmfb(vmfb.clone()).expect("load_vmfb()");
-        let _ = session.call("module.sigmoid", &[input.clone()]);
+        let _ = session.call("module.sigmoid", std::slice::from_ref(&input));
         drop(session);
 
         let rss = rss_mb().expect("RSS measurement became unavailable");

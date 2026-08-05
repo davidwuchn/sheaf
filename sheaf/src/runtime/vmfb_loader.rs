@@ -276,31 +276,6 @@ fn is_safe_module_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{is_safe_module_name, validate_manifest};
-    use crate::core::expr::CompilerContext;
-    use std::path::Path;
-
-    #[test]
-    fn validates_module_names() {
-        for name in ["module", "aot_model_42", "_private"] {
-            assert!(is_safe_module_name(name));
-        }
-        for name in ["", "42model", "module.name", "module-name", "module name"] {
-            assert!(!is_safe_module_name(name));
-        }
-    }
-
-    #[test]
-    fn rejects_manifest_without_module_name_before_loading() {
-        let manifest = r#"{"vmfb":"missing.vmfb","functions":{}}"#;
-        assert!(
-            validate_manifest(manifest, Path::new("."), &CompilerContext::new(), &[]).is_none()
-        );
-    }
-}
-
 /// Parse a FunctionSignature from a manifest entry's params/returns fields.
 fn parse_manifest_signature(
     entry: &serde_json::Value,
@@ -332,4 +307,29 @@ fn parse_manifest_signature(
         arg_type_layouts: vec![],
         captured_scalars: std::collections::HashMap::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_safe_module_name, validate_manifest};
+    use crate::core::expr::CompilerContext;
+    use std::path::Path;
+
+    #[test]
+    fn validates_module_names() {
+        for name in ["module", "aot_model_42", "_private"] {
+            assert!(is_safe_module_name(name));
+        }
+        for name in ["", "42model", "module.name", "module-name", "module name"] {
+            assert!(!is_safe_module_name(name));
+        }
+    }
+
+    #[test]
+    fn rejects_manifest_without_module_name_before_loading() {
+        let manifest = r#"{"vmfb":"missing.vmfb","functions":{}}"#;
+        assert!(
+            validate_manifest(manifest, Path::new("."), &CompilerContext::new(), &[]).is_none()
+        );
+    }
 }
