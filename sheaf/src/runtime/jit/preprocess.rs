@@ -20,7 +20,7 @@ impl JitCompiler {
         registry: &HashMap<String, FunctionDef>,
         constants: &HashMap<(String, Vec<usize>), f64>,
         param_shapes: &HashMap<String, Vec<i64>>,
-        param_index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+        param_index_maps: &[ParamIndexMap],
         known_types: &[(String, StableHLOType)],
         arity_err: &std::cell::Cell<Option<SheafError>>,
     ) -> CompiledExpr {
@@ -41,7 +41,7 @@ fn preprocess_vag_lambda_rec(
     registry: &HashMap<String, FunctionDef>,
     constants: &HashMap<(String, Vec<usize>), f64>,
     param_shapes: &HashMap<String, Vec<i64>>,
-    param_index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+    param_index_maps: &[ParamIndexMap],
     known_types: &[(String, StableHLOType)],
     arity_err: &std::cell::Cell<Option<SheafError>>,
 ) -> CompiledExpr {
@@ -100,7 +100,7 @@ fn preprocess_one_vag_lambda(
     registry: &HashMap<String, FunctionDef>,
     constants: &HashMap<(String, Vec<usize>), f64>,
     param_shapes: &HashMap<String, Vec<i64>>,
-    param_index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+    param_index_maps: &[ParamIndexMap],
     known_types: &[(String, StableHLOType)],
     arity_err: &std::cell::Cell<Option<SheafError>>,
 ) -> CompiledExpr {
@@ -142,7 +142,7 @@ fn preprocess_one_vag_lambda(
 fn preprocess_body(
     body: &CompiledExpr,
     registry: &HashMap<String, FunctionDef>,
-    param_index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+    param_index_maps: &[ParamIndexMap],
     constants: &HashMap<(String, Vec<usize>), f64>,
     param_shapes: &HashMap<String, Vec<i64>>,
     skip_lambda: bool,

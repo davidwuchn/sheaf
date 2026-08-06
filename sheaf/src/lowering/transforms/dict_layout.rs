@@ -2,12 +2,13 @@
 // Licensed under the MIT License.
 
 use crate::core::expr::{BindingPattern, CompiledExpr};
+use crate::lowering::config::ParamIndexMap;
 use std::collections::{BTreeMap, HashMap};
 
 /// Lower dictionary accesses through `Let` aliases.
 pub fn lower_inlined_gets(
     body: &CompiledExpr,
-    index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+    index_maps: &[ParamIndexMap],
 ) -> CompiledExpr {
     let mut reverse: HashMap<(String, Vec<usize>), Vec<String>> = HashMap::new();
     for (param, imap) in index_maps {
@@ -20,7 +21,7 @@ pub fn lower_inlined_gets(
 
 fn lower_inlined_gets_rec(
     expr: &CompiledExpr,
-    index_maps: &[(String, BTreeMap<Vec<String>, Vec<usize>>)],
+    index_maps: &[ParamIndexMap],
     aliases: &mut HashMap<String, (String, Vec<String>)>,
     reverse: &HashMap<(String, Vec<usize>), Vec<String>>,
 ) -> CompiledExpr {

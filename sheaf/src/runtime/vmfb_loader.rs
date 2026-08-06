@@ -5,7 +5,8 @@
 //! function tagging, and signature loading.
 //! Used by both `eval_source_with_path` (sheaf run) and the `(use)` form.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use crate::lowering::effects::has_side_effects;
 use crate::core::expr::CompilerContext;
 use crate::core::inference::FunctionSignature;
@@ -55,8 +56,12 @@ pub fn try_load_vmfb(
     }
 
     let manifest_path = dir.join("module.json");
-    let (vmfb_path, module_name, valid_fns, signatures) =
-        match std::fs::read_to_string(&manifest_path) {
+    let ValidatedManifest {
+        vmfb_path,
+        module_name,
+        functions: valid_fns,
+        signatures,
+    } = match std::fs::read_to_string(&manifest_path) {
             Ok(manifest_str) => match validate_manifest(&manifest_str, dir, compiler, &pure_fns) {
                 Some(validated) => validated,
                 None => return false,
@@ -176,6 +181,13 @@ pub fn try_load_vmfb(
     true
 }
 
+struct ValidatedManifest {
+    vmfb_path: PathBuf,
+    module_name: String,
+    functions: Vec<String>,
+    signatures: HashMap<String, FunctionSignature>,
+}
+
 /// Validate a module.json and return its path, module name, functions, and signatures.
 /// Returns None if stale or invalid.
 fn validate_manifest(
@@ -183,12 +195,7 @@ fn validate_manifest(
     dir: &Path,
     compiler: &CompilerContext,
     candidate_fns: &[String],
-) -> Option<(
-    std::path::PathBuf,
-    String,
-    Vec<String>,
-    std::collections::HashMap<String, FunctionSignature>,
-)> {
+) -> Option<ValidatedManifest> {
     let manifest: serde_json::Value = match serde_json::from_str(manifest_str) {
         Ok(v) => v,
         Err(e) => {
@@ -251,7 +258,7 @@ fn validate_manifest(
     }
 
     // Extract signatures from manifest
-    let mut signatures = std::collections::HashMap::new();
+    let mut signatures = HashMap::new();
     for (name, entry) in functions {
         if let Some(sig) = parse_manifest_signature(entry, compiler, name) {
             signatures.insert(name.clone(), sig);
@@ -267,7 +274,12 @@ fn validate_manifest(
         .cloned()
         .collect();
 
-    Some((vmfb_path, module_name, valid, signatures))
+    Some(ValidatedManifest {
+        vmfb_path,
+        module_name,
+        functions: valid,
+        signatures,
+    })
 }
 
 fn is_safe_module_name(name: &str) -> bool {

@@ -14,6 +14,7 @@ mod tensor_builtins;
 #[cfg(test)]
 mod tests;
 
+use crate::lowering::config::ParamIndexMaps;
 use crate::lowering::stablehlo::{Register, StableHLOEmitter, StableHLOType};
 use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::{SheafError, SheafResult};
@@ -56,7 +57,7 @@ pub struct CodeGenerator {
     /// Runtime scalar constants needed during code generation.
     scalar_constants: HashMap<(String, Vec<usize>), f64>,
     /// Dict-to-tuple indices used while lowering inlined calls.
-    param_index_maps: Vec<(String, std::collections::BTreeMap<Vec<String>, Vec<usize>>)>,
+    param_index_maps: ParamIndexMaps,
 }
 
 impl CodeGenerator {
@@ -141,7 +142,7 @@ impl CodeGenerator {
         }
     }
 
-    pub fn set_param_index_maps(&mut self, maps: Vec<(String, std::collections::BTreeMap<Vec<String>, Vec<usize>>)>) {
+    pub fn set_param_index_maps(&mut self, maps: ParamIndexMaps) {
         self.param_index_maps = maps;
     }
 

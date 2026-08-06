@@ -171,7 +171,7 @@ impl JitCompiler {
 
         // Type inference from runtime args
         let mut known_types: Vec<(String, StableHLOType)> = Vec::new();
-        let mut param_index_maps: Vec<(String, BTreeMap<Vec<String>, Vec<usize>>)> = Vec::new();
+        let mut param_index_maps = ParamIndexMaps::new();
         let mut constants: HashMap<(String, Vec<usize>), f64> = HashMap::new();
 
         for (param_name, arg_val) in func_def.params.iter().zip(args) {

@@ -4,7 +4,7 @@
 //! Lambda inlining and code generation for tree operations, reduce, and scan.
 
 use std::collections::{BTreeMap, HashMap};
-use crate::autodiff::reverse::{to_anf, reverse_grad};
+use crate::autodiff::reverse::{ReverseGradResult, reverse_grad, to_anf};
 use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::lowering::transforms::try_infer_shape;
 use crate::core::expr::{BindingPattern, CompiledExpr};
@@ -672,9 +672,10 @@ impl CodeGenerator {
             })
             .collect();
 
-        let (mut body_bwd, body_grad_map) = reverse_grad(
-            &body_bindings_str, &carry_result, &wrt, &body_shapes,
-        )?;
+        let ReverseGradResult {
+            backward_bindings: mut body_bwd,
+            gradients: body_grad_map,
+        } = reverse_grad(&body_bindings_str, &carry_result, &wrt, &body_shapes)?;
 
         // Each backward step starts from the adjoint produced by the next step.
         if !body_bwd.is_empty() {

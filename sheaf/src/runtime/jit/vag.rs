@@ -152,7 +152,7 @@ impl JitCompiler {
 
         // Type inference from runtime args
         let mut known_types: Vec<(String, StableHLOType)> = Vec::new();
-        let mut param_index_maps: Vec<(String, BTreeMap<Vec<String>, Vec<usize>>)> = Vec::new();
+        let mut param_index_maps = ParamIndexMaps::new();
         let mut constants: HashMap<(String, Vec<usize>), f64> = HashMap::new();
 
         for (param_name, arg_val) in all_param_names.iter().zip(all_arg_values.iter()) {
@@ -481,8 +481,10 @@ impl JitCompiler {
                     })
                     .collect();
                 // Run reverse-mode AD on ANF with shape info
-                let (backward_bindings, grad_sym_map) =
-                    reverse_grad(&anf_bindings_str, &anf_body, &all_wrt_symbols, &shape_map)?;
+                let ReverseGradResult {
+                    backward_bindings,
+                    gradients: grad_sym_map,
+                } = reverse_grad(&anf_bindings_str, &anf_body, &all_wrt_symbols, &shape_map)?;
 
                 // Apply AST-level optimizations to backward bindings
                 let backward_bindings: Vec<(String, CompiledExpr)> = backward_bindings

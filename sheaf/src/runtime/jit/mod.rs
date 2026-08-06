@@ -63,13 +63,15 @@ pub fn detect_cuda_target() -> Option<String> {
 use super::toolchain::{ensure_toolchain, find_iree_compile, IREE_COMPILER_VERSION};
 
 use crate::autodiff::{
-    reverse::{reverse_grad, to_anf},
+    reverse::{ReverseGradResult, reverse_grad, to_anf},
     simplify,
     transforms::cse,
 };
 use crate::core::expr::{CompiledExpr, FunctionDef};
 use crate::lowering::codegen::{collect_tuple_leaves, expand_tuple_to_symbols, CodeGenerator};
-use crate::lowering::config::{layout_to_index_map, lower_get_calls};
+use crate::lowering::config::{
+    DictIndexMap, ParamIndexMap, ParamIndexMaps, layout_to_index_map, lower_get_calls,
+};
 use crate::lowering::effects::{collect_effects, collect_hof_calls};
 use crate::lowering::jit_eligibility;
 use crate::lowering::stablehlo::{Register, StableHLOEmitter};
@@ -307,7 +309,7 @@ fn cache_key_for_with_identity(
             let imap = layout_to_index_map(&layout);
             extract_scalar_constants(arg, &param_name, &imap, &mut constants);
         } else {
-            let fake_imap: BTreeMap<Vec<String>, Vec<usize>> =
+            let fake_imap: DictIndexMap =
                 std::iter::once((Vec::new(), vec![])).collect();
             extract_scalar_constants(arg, &param_name, &fake_imap, &mut constants);
         }
@@ -415,17 +417,17 @@ impl Drop for CompilationReservation {
 }
 
 /// Cached shape-position analyses. Scalar values are projected afterwards.
-static SHAPE_ANALYSIS_CACHE: OnceLock<
-    Mutex<HashMap<(String, Vec<String>, Vec<ArgumentLayout>), Vec<(String, Vec<usize>)>>>,
-> = OnceLock::new();
+type ShapeAnalysisKey = (String, Vec<String>, Vec<ArgumentLayout>);
+type ShapeAnalysis = Vec<(String, Vec<usize>)>;
+type ShapeAnalysisCache = Mutex<HashMap<ShapeAnalysisKey, ShapeAnalysis>>;
+
+static SHAPE_ANALYSIS_CACHE: OnceLock<ShapeAnalysisCache> = OnceLock::new();
 
 fn shared_module_catalog() -> &'static Mutex<SharedModuleCatalog> {
     SHARED_MODULE_CATALOG.get_or_init(|| Mutex::new(SharedModuleCatalog::default()))
 }
 
-fn shape_analysis_cache(
-) -> &'static Mutex<HashMap<(String, Vec<String>, Vec<ArgumentLayout>), Vec<(String, Vec<usize>)>>>
-{
+fn shape_analysis_cache() -> &'static ShapeAnalysisCache {
     SHAPE_ANALYSIS_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 

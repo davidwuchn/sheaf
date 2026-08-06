@@ -17,6 +17,10 @@ use crate::lowering::stablehlo::StableHLOType;
 use crate::core::expr::CompiledExpr;
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 
+pub type DictIndexMap = BTreeMap<Vec<String>, Vec<usize>>;
+pub type ParamIndexMap = (String, DictIndexMap);
+pub type ParamIndexMaps = Vec<ParamIndexMap>;
+
 /// Convert a JSON config dict to a `StableHLOType::Tuple` (recursive).
 ///
 /// Keys are sorted alphabetically at each level (BTreeMap order).
@@ -74,7 +78,7 @@ pub fn json_to_stablehlo_type(val: &JsonValue) -> SheafResult<StableHLOType> {
 ///   `["l2"]`     -> `[1]`
 ///   `["l2","W"]` -> `[1, 0]`
 ///   `["l2","b"]` -> `[1, 1]`
-pub fn build_index_map(val: &JsonValue) -> BTreeMap<Vec<String>, Vec<usize>> {
+pub fn build_index_map(val: &JsonValue) -> DictIndexMap {
     let mut map = BTreeMap::new();
     build_index_map_rec(val, &[], &[], &mut map);
     map
@@ -84,7 +88,7 @@ fn build_index_map_rec(
     val: &JsonValue,
     path: &[String],
     indices: &[usize],
-    map: &mut BTreeMap<Vec<String>, Vec<usize>>,
+    map: &mut DictIndexMap,
 ) {
     if !path.is_empty() {
         map.insert(path.to_vec(), indices.to_vec());
@@ -108,7 +112,7 @@ fn build_index_map_rec(
 ///
 /// Also inserts prefix paths for intermediate levels:
 ///   `["l1"]` -> `[0]` (inferred from children with path starting with "l1")
-pub fn layout_to_index_map(layout: &crate::core::expr::ParamLayout) -> BTreeMap<Vec<String>, Vec<usize>> {
+pub fn layout_to_index_map(layout: &crate::core::expr::ParamLayout) -> DictIndexMap {
     let mut map = BTreeMap::new();
     for field in &layout.fields {
         // Insert the full path
@@ -136,7 +140,7 @@ pub fn layout_to_index_map(layout: &crate::core::expr::ParamLayout) -> BTreeMap<
 pub fn lower_get_calls(
     expr: &CompiledExpr,
     param_name: &str,
-    index_map: &BTreeMap<Vec<String>, Vec<usize>>,
+    index_map: &DictIndexMap,
 ) -> CompiledExpr {
     if let Some(indices) = try_extract_get_chain(expr, param_name, index_map) {
         return CompiledExpr::GetTupleElement {
@@ -154,7 +158,7 @@ pub fn lower_get_calls(
 fn try_extract_get_chain(
     expr: &CompiledExpr,
     param_name: &str,
-    index_map: &BTreeMap<Vec<String>, Vec<usize>>,
+    index_map: &DictIndexMap,
 ) -> Option<Vec<usize>> {
     let path = extract_key_path(expr, param_name)?;
     index_map.get(&path).cloned()

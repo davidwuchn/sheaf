@@ -156,12 +156,16 @@ fn fresh_grad_name() -> String {
     format!("__grad_{}", n)
 }
 
-/// Compute reverse-mode gradients of an ANF expression w.r.t. a set of
-/// parameter names.
-///
-/// Returns `(backward_bindings, grad_map)` where:
-/// - `backward_bindings`: flat Let bindings computing all adjoint intermediates
-/// - `grad_map`: maps each wrt name -> the Symbol name of its gradient
+#[derive(Debug)]
+pub struct ReverseGradResult {
+    /// Flat let bindings computing all adjoint intermediates.
+    pub backward_bindings: Vec<(String, CompiledExpr)>,
+    /// Maps each differentiated parameter to its gradient symbol.
+    pub gradients: HashMap<String, String>,
+}
+
+/// Compute reverse-mode gradients of an ANF expression with respect to a set
+/// of parameter names.
 ///
 /// The backward bindings reference the forward ANF bindings by name.
 /// The caller must emit both forward and backward bindings in a single scope.
@@ -170,7 +174,7 @@ pub fn reverse_grad(
     anf_body: &CompiledExpr,
     wrt: &[String],
     shapes: &HashMap<String, Vec<i64>>,
-) -> SheafResult<(Vec<(String, CompiledExpr)>, HashMap<String, String>)> {
+) -> SheafResult<ReverseGradResult> {
     let dependencies = analyze_anf_dependencies(anf_bindings, wrt);
     let mut adj_names: HashMap<String, String> = HashMap::new();
     let mut backward_bindings: Vec<(String, CompiledExpr)> = Vec::new();
@@ -221,7 +225,10 @@ pub fn reverse_grad(
         })
         .collect();
 
-    Ok((backward_bindings, grad_map))
+    Ok(ReverseGradResult {
+        backward_bindings,
+        gradients: grad_map,
+    })
 }
 
 /// Determine which ANF bindings transitively depend on differentiated inputs.
@@ -1111,7 +1118,7 @@ fn acc_arg(
 
 #[cfg(test)]
 mod tests {
-    use super::{reverse_grad, to_anf};
+    use super::{ReverseGradResult, reverse_grad, to_anf};
     use crate::core::error::{SheafError, SourceLocation};
     use crate::core::expr::{BindingPattern, CompiledExpr};
     use std::collections::HashMap;
@@ -1222,14 +1229,17 @@ mod tests {
     #[test]
     fn permits_unknown_operation_independent_of_parameters() {
         let bindings = vec![("result".to_string(), call("unknown", vec![CompiledExpr::Float(1.0)]))];
-        let (backward, gradients) = reverse_grad(
+        let ReverseGradResult {
+            backward_bindings,
+            gradients,
+        } = reverse_grad(
             &bindings,
             &symbol("result"),
             &["x".to_string()],
             &HashMap::new(),
         ).unwrap();
 
-        assert_eq!(backward.len(), 1);
+        assert_eq!(backward_bindings.len(), 1);
         assert!(gradients.is_empty());
     }
 
@@ -1243,7 +1253,7 @@ mod tests {
                 call("one-hot", vec![CompiledExpr::Integer(0), symbol("classes")]),
             ),
         ];
-        let (_, gradients) = reverse_grad(
+        let ReverseGradResult { gradients, .. } = reverse_grad(
             &bindings,
             &symbol("result"),
             &["x".to_string()],
@@ -1259,7 +1269,7 @@ mod tests {
             ("dead".to_string(), call("unknown", vec![symbol("x")])),
             ("result".to_string(), call("+", vec![symbol("x"), CompiledExpr::Float(1.0)])),
         ];
-        let (_, gradients) = reverse_grad(
+        let ReverseGradResult { gradients, .. } = reverse_grad(
             &bindings,
             &symbol("result"),
             &["x".to_string()],
@@ -1272,7 +1282,7 @@ mod tests {
     #[test]
     fn stop_gradient_is_an_explicit_zero_gradient() {
         let bindings = vec![("result".to_string(), call("stop-gradient", vec![symbol("x")]))];
-        let (_, gradients) = reverse_grad(
+        let ReverseGradResult { gradients, .. } = reverse_grad(
             &bindings,
             &symbol("result"),
             &["x".to_string()],
