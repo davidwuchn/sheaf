@@ -6,6 +6,15 @@
 use super::support::inject_tuple_shapes;
 use super::*;
 
+pub(super) struct VagPreprocessContext<'a> {
+    pub(super) registry: &'a HashMap<String, FunctionDef>,
+    pub(super) constants: &'a HashMap<(String, Vec<usize>), f64>,
+    pub(super) param_shapes: &'a HashMap<String, Vec<i64>>,
+    pub(super) param_index_maps: &'a [ParamIndexMap],
+    pub(super) known_types: &'a [(String, StableHLOType)],
+    pub(super) arity_err: &'a std::cell::Cell<Option<SheafError>>,
+}
+
 impl JitCompiler {
     /// Preprocess VAG lambda bodies found in a function body.
     ///
@@ -17,45 +26,17 @@ impl JitCompiler {
     pub(super) fn preprocess_vag_lambda(
         &self,
         body: &CompiledExpr,
-        registry: &HashMap<String, FunctionDef>,
-        constants: &HashMap<(String, Vec<usize>), f64>,
-        param_shapes: &HashMap<String, Vec<i64>>,
-        param_index_maps: &[ParamIndexMap],
-        known_types: &[(String, StableHLOType)],
-        arity_err: &std::cell::Cell<Option<SheafError>>,
+        context: &VagPreprocessContext<'_>,
     ) -> CompiledExpr {
-        preprocess_vag_lambda_rec(
-            body,
-            registry,
-            constants,
-            param_shapes,
-            param_index_maps,
-            known_types,
-            arity_err,
-        )
+        preprocess_vag_lambda_rec(body, context)
     }
 }
 
 fn preprocess_vag_lambda_rec(
     expr: &CompiledExpr,
-    registry: &HashMap<String, FunctionDef>,
-    constants: &HashMap<(String, Vec<usize>), f64>,
-    param_shapes: &HashMap<String, Vec<i64>>,
-    param_index_maps: &[ParamIndexMap],
-    known_types: &[(String, StableHLOType)],
-    arity_err: &std::cell::Cell<Option<SheafError>>,
+    context: &VagPreprocessContext<'_>,
 ) -> CompiledExpr {
-    let recurse = |e: &CompiledExpr| {
-        preprocess_vag_lambda_rec(
-            e,
-            registry,
-            constants,
-            param_shapes,
-            param_index_maps,
-            known_types,
-            arity_err,
-        )
-    };
+    let recurse = |e: &CompiledExpr| preprocess_vag_lambda_rec(e, context);
 
     match expr {
         CompiledExpr::LambdaCall { callee, args } => {
@@ -68,15 +49,8 @@ fn preprocess_vag_lambda_rec(
                 ..
             } = &new_callee
                 && name == "__value-and-grad-hof__" && inner_args.len() == 1 {
-                    let preprocessed_lambda = preprocess_one_vag_lambda(
-                        &inner_args[0],
-                        registry,
-                        constants,
-                        param_shapes,
-                        param_index_maps,
-                        known_types,
-                        arity_err,
-                    );
+                    let preprocessed_lambda =
+                        preprocess_one_vag_lambda(&inner_args[0], context);
                     return CompiledExpr::LambdaCall {
                         callee: Box::new(CompiledExpr::FunctionCall {
                             name: "__value-and-grad-hof__".to_string(),
@@ -97,13 +71,14 @@ fn preprocess_vag_lambda_rec(
 
 fn preprocess_one_vag_lambda(
     lambda_expr: &CompiledExpr,
-    registry: &HashMap<String, FunctionDef>,
-    constants: &HashMap<(String, Vec<usize>), f64>,
-    param_shapes: &HashMap<String, Vec<i64>>,
-    param_index_maps: &[ParamIndexMap],
-    known_types: &[(String, StableHLOType)],
-    arity_err: &std::cell::Cell<Option<SheafError>>,
+    context: &VagPreprocessContext<'_>,
 ) -> CompiledExpr {
+    let registry = context.registry;
+    let constants = context.constants;
+    let param_shapes = context.param_shapes;
+    let param_index_maps = context.param_index_maps;
+    let known_types = context.known_types;
+    let arity_err = context.arity_err;
     let (params, body) = match lambda_expr {
         CompiledExpr::Lambda { params, body, .. } => (params.clone(), body.as_ref().clone()),
         _ => return lambda_expr.clone(),

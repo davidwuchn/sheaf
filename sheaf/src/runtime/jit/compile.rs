@@ -3,8 +3,19 @@
 
 //! Standard JIT compilation pipeline.
 
+use super::preprocess::VagPreprocessContext;
 use super::support::{manifest_hash_matches, update_manifest};
 use super::*;
+
+struct CompileRequest<'a> {
+    iree_compile: String,
+    func_def: &'a FunctionDef,
+    args: &'a [Value],
+    registry: &'a HashMap<String, FunctionDef>,
+    shared_session: &'a std::sync::Arc<crate::runtime::iree_session::IreeSession>,
+    target_backend: &'a str,
+    cache_key: &'a JitCacheKey,
+}
 
 impl JitCompiler {
     pub fn try_jit_compile(
@@ -90,15 +101,16 @@ impl JitCompiler {
         let mut reservation = CompilationReservation::new(cache_key.clone());
 
         let backend = self.target_backend.clone();
-        let sig = match self.compile_function(
-            iree_compile.clone(),
+        let request = CompileRequest {
+            iree_compile,
             func_def,
             args,
             registry,
             shared_session,
-            &backend,
-            &cache_key,
-        ) {
+            target_backend: &backend,
+            cache_key: &cache_key,
+        };
+        let sig = match self.compile_function(request) {
             Some(x) => x,
             None => {
                 // Compile failed for this variant. The reservation guard removes
@@ -154,14 +166,17 @@ impl JitCompiler {
 
     fn compile_function(
         &mut self,
-        iree_compile: String,
-        func_def: &FunctionDef,
-        args: &[Value],
-        registry: &HashMap<String, FunctionDef>,
-        shared_session: &std::sync::Arc<crate::runtime::iree_session::IreeSession>,
-        target_backend: &str,
-        cache_key: &JitCacheKey,
+        request: CompileRequest<'_>,
     ) -> Option<FunctionSignature> {
+        let CompileRequest {
+            iree_compile,
+            func_def,
+            args,
+            registry,
+            shared_session,
+            target_backend,
+            cache_key,
+        } = request;
         let name = &func_def.name;
         let mut body = func_def.body_compiled.clone()?;
 
@@ -308,15 +323,15 @@ impl JitCompiler {
 
         // Resolve nested VAG lambdas before the enclosing body.
         let arity_err: std::cell::Cell<Option<SheafError>> = std::cell::Cell::new(None);
-        body = self.preprocess_vag_lambda(
-            &body,
+        let preprocess_context = VagPreprocessContext {
             registry,
-            &filtered_constants,
-            &param_shapes,
-            &param_index_maps,
-            &known_types,
-            &arity_err,
-        );
+            constants: &filtered_constants,
+            param_shapes: &param_shapes,
+            param_index_maps: &param_index_maps,
+            known_types: &known_types,
+            arity_err: &arity_err,
+        };
+        body = self.preprocess_vag_lambda(&body, &preprocess_context);
         if let Some(err) = arity_err.into_inner() {
             self.jit_fail(name, &err.short_message());
             return None;

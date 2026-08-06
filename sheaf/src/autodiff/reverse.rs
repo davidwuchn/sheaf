@@ -205,15 +205,18 @@ pub fn reverse_grad(
             None => continue,
         };
 
+        let context = ReverseContext {
+            shapes,
+            fwd_name: name,
+            fwd_lookup: &fwd_lookup,
+            dependencies: &dependencies,
+        };
         distribute_adjoint_named(
             value,
             &adj_sym,
             &mut adj_names,
             &mut backward_bindings,
-            shapes,
-            name,
-            &fwd_lookup,
-            &dependencies,
+            &context,
         )?;
     }
 
@@ -430,6 +433,13 @@ fn anf_form_name(expr: &CompiledExpr) -> &'static str {
     }
 }
 
+struct ReverseContext<'a> {
+    shapes: &'a HashMap<String, Vec<i64>>,
+    fwd_name: &'a str,
+    fwd_lookup: &'a HashMap<String, String>,
+    dependencies: &'a HashMap<String, bool>,
+}
+
 /// Distribute the adjoint `adj_sym` (a Symbol) to the operands of `expr`.
 ///
 /// All emitted expressions reference `adj_sym` by Symbol, never clone the
@@ -439,11 +449,10 @@ fn distribute_adjoint_named(
     adj_sym: &CompiledExpr,
     adj_names: &mut HashMap<String, String>,
     bindings: &mut Vec<(String, CompiledExpr)>,
-    shapes: &HashMap<String, Vec<i64>>,
-    fwd_name: &str,
-    fwd_lookup: &HashMap<String, String>,
-    dependencies: &HashMap<String, bool>,
+    context: &ReverseContext<'_>,
 ) -> SheafResult<()> {
+    let fwd_name = context.fwd_name;
+    let dependencies = context.dependencies;
     match expr {
         CompiledExpr::Symbol(s) => {
             accumulate_named(s, adj_sym.clone(), adj_names, bindings);
@@ -459,10 +468,7 @@ fn distribute_adjoint_named(
             adj_sym,
             adj_names,
             bindings,
-            shapes,
-            fwd_name,
-            fwd_lookup,
-            dependencies,
+            context,
             loc.clone(),
         ),
         _ => reject_missing_rule_if_dependent(
@@ -480,12 +486,13 @@ fn distribute_fn_adjoint_named(
     adj: &CompiledExpr,
     adj_names: &mut HashMap<String, String>,
     bindings: &mut Vec<(String, CompiledExpr)>,
-    shapes: &HashMap<String, Vec<i64>>,
-    fwd_name: &str,
-    fwd_lookup: &HashMap<String, String>,
-    dependencies: &HashMap<String, bool>,
+    context: &ReverseContext<'_>,
     location: Option<crate::core::error::SourceLocation>,
 ) -> SheafResult<()> {
+    let shapes = context.shapes;
+    let fwd_name = context.fwd_name;
+    let fwd_lookup = context.fwd_lookup;
+    let dependencies = context.dependencies;
     match name {
         // stop-gradient: forward is identity, but no gradient flows backward.
         "stop-gradient" => {}
