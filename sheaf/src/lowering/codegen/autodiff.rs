@@ -10,6 +10,7 @@ use crate::core::error::{SheafError, SheafResult};
 use crate::lowering::config::lower_get_calls;
 use super::helpers::TupleLeaf;
 use super::{CodeGenerator, collect_tuple_leaves, expand_tuple_to_symbols};
+use crate::autodiff::reverse::GradientOutput;
 use super::control_flow::build_deep_index_map;
 use std::collections::HashMap;
 
@@ -19,6 +20,35 @@ fn rewrite_gte_param(expr: &CompiledExpr, aliases: &[String], canonical: &str) -
             CompiledExpr::GetTupleElement { param: canonical.to_string(), indices: indices.clone() }
         }
         other => other.map_children(|e| rewrite_gte_param(e, aliases, canonical)),
+    }
+}
+
+fn zero_gradient_expr(param_ty: &StableHLOType, indices: &[usize]) -> SheafResult<CompiledExpr> {
+    let mut leaf_ty = param_ty;
+    for &index in indices {
+        let StableHLOType::Tuple(elems, _) = leaf_ty else {
+            return Err(SheafError::AutodiffMissingGradientOutput {
+                symbol: format!("gradient leaf at {:?}", indices),
+            });
+        };
+        let Some(next) = elems.get(index) else {
+            return Err(SheafError::AutodiffMissingGradientOutput {
+                symbol: format!("gradient leaf at {:?}", indices),
+            });
+        };
+        leaf_ty = next;
+    }
+    let shape = leaf_ty.shape();
+    if shape.is_empty() {
+        Ok(CompiledExpr::Float(0.0))
+    } else {
+        Ok(CompiledExpr::FunctionCall {
+            name: "zeros".to_string(),
+            args: vec![CompiledExpr::Vector(
+                shape.iter().map(|&d| CompiledExpr::Integer(d)).collect(),
+            )],
+            loc: None,
+        })
     }
 }
 
@@ -96,28 +126,19 @@ impl CodeGenerator {
                 }
                 Ok(self.emitter.emit_tuple(&sub_regs, &sub_tys))
             }
-            leaf_ty => {
+            _leaf_ty => {
                 if let Some(leaf) = leaves.iter().find(|l| l.indices == prefix) {
-                    let grad_expr = grad_map
-                        .get(&leaf.symbol)
-                        .cloned()
-                        .unwrap_or(CompiledExpr::Float(0.0));
+                    let grad_expr = grad_map.get(&leaf.symbol).cloned().ok_or_else(|| {
+                        SheafError::AutodiffMissingGradientOutput {
+                            symbol: leaf.symbol.clone(),
+                        }
+                    })?;
                     let (grad_reg, grad_ty) = self.generate(&grad_expr)?;
                     self.reduce_broadcast_grad(grad_reg, &grad_ty, ty)
                 } else {
-                    let shape = leaf_ty.shape();
-                    let zeros_expr = if shape.is_empty() {
-                        CompiledExpr::Float(0.0)
-                    } else {
-                        CompiledExpr::FunctionCall {
-                            name: "zeros".to_string(),
-                            args: vec![CompiledExpr::Vector(
-                                shape.iter().map(|&d| CompiledExpr::Integer(d)).collect()
-                            )],
-                            loc: None,
-                        }
-                    };
-                    self.generate(&zeros_expr)
+                    Err(SheafError::AutodiffMissingGradientOutput {
+                        symbol: format!("gradient leaf at {:?}", prefix),
+                    })
                 }
             }
         }
@@ -138,8 +159,7 @@ impl CodeGenerator {
 
         // Scalar gradient broadcast up to a tensor parameter shape.
         // Arises for fully stop-gradient'd parameters: no adjoint is accumulated
-        // so the gradient defaults to scalar 0.0. Match JAX semantics by shaping
-        // it to the parameter (a scalar gradient w.r.t. a tensor always broadcasts).
+        // so the gradient defaults to scalar 0.0.
         if grad_shape.is_empty() && !param_shape.is_empty() {
             let bcast_reg = self.emitter.emit_broadcast(&grad_reg, grad_ty, param_ty);
             return Ok((bcast_reg, param_ty.clone()));
@@ -313,19 +333,21 @@ impl CodeGenerator {
         }
 
     let (grad_reg, grad_ty) = if !leaves.is_empty() {
-        let leaf_grad_map: HashMap<String, CompiledExpr> = leaves.iter().map(|leaf| {
-            let grad_expr = grad_sym_map
-                .get(&leaf.symbol)
-                .map(|sym_name| CompiledExpr::Symbol(sym_name.clone()))
-                .unwrap_or(CompiledExpr::Float(0.0));
-            (leaf.symbol.clone(), grad_expr)
-        }).collect();
+        let leaf_grad_map: HashMap<String, CompiledExpr> = leaves.iter()
+            .map(|leaf| {
+                let grad_expr = match crate::autodiff::reverse::gradient_output(&grad_sym_map, &leaf.symbol)? {
+                    GradientOutput::Computed(sym_name) => CompiledExpr::Symbol(sym_name.clone()),
+                    GradientOutput::ProvenZero => zero_gradient_expr(&wrt_ty, &leaf.indices)?,
+                };
+                Ok((leaf.symbol.clone(), grad_expr))
+            })
+            .collect::<SheafResult<_>>()?;
         self.build_grad_tuple_from_map(&leaves, &wrt_ty, &leaf_grad_map)?
     } else {
-        let grad_expr = grad_sym_map
-            .get(param_name)
-            .map(|sym_name| CompiledExpr::Symbol(sym_name.clone()))
-            .unwrap_or(CompiledExpr::Float(0.0));
+        let grad_expr = match crate::autodiff::reverse::gradient_output(&grad_sym_map, param_name)? {
+            GradientOutput::Computed(sym_name) => CompiledExpr::Symbol(sym_name.clone()),
+            GradientOutput::ProvenZero => zero_gradient_expr(&wrt_ty, &[])?
+        };
         let (grad_reg, grad_ty) = self.generate(&grad_expr)?;
         self.reduce_broadcast_grad(grad_reg, &grad_ty, &wrt_ty)?
     };

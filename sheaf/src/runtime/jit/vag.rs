@@ -9,15 +9,35 @@ use super::support::{
 };
 use super::*;
 
+fn preserves_structured_vag_error(error: &crate::core::error::SheafError) -> bool {
+    matches!(
+        error,
+        crate::core::error::SheafError::AutodiffMissingGradientOutput { .. }
+            | crate::core::error::SheafError::AutodiffMissingRule { .. }
+    )
+}
+
+fn zero_gradient_expr(ty: &StableHLOType) -> CompiledExpr {
+    let shape = ty.shape();
+    if shape.is_empty() {
+        CompiledExpr::Float(0.0)
+    } else {
+        CompiledExpr::FunctionCall {
+            name: "zeros".to_string(),
+            args: vec![CompiledExpr::Vector(
+                shape.iter().map(|&d| CompiledExpr::Integer(d)).collect(),
+            )],
+            loc: None,
+        }
+    }
+}
+
 impl JitCompiler {
     /// JIT-compile a value-and-grad closure into a single VMFB.
     ///
-    /// The closure `func` is `(fn [p] loss-body)` with captured values in its closure.
-    /// We promote tensor captures to MLIR parameters, resolve scalar captures as constants,
-    /// then generate forward + backward passes in a single MLIR function.
+    /// Tensor captures become MLIR parameters; scalar captures are constants.
     ///
-    /// Returns `(session_idx, signature, param_order)` where `param_order` lists
-    /// the combined parameter names (fn params first, then tensor captures) for dispatch.
+    /// Returns `(module_name, signature, param_order)` for dispatch.
     pub fn try_jit_value_and_grad(
         &mut self,
         func: &Value,
@@ -25,6 +45,7 @@ impl JitCompiler {
         registry: &HashMap<String, FunctionDef>,
         shared_session: &std::sync::Arc<crate::runtime::iree_session::IreeSession>,
     ) -> Option<(String, FunctionSignature, Vec<String>)> {
+        self.last_vag_error = None;
         let iree_compile = self.iree_compile_path.clone()?;
 
         let (fn_params, body, closure) = match func {
@@ -37,10 +58,8 @@ impl JitCompiler {
             _ => return None,
         };
 
-        // Derive a human-readable name from the outermost function call
         let vag_fn_name = outermost_call_name(body).unwrap_or("anonymous".to_string());
 
-        // Build a stable key for the blocklist and cache.
         // Include wrt_arg type so shape changes (e.g. after grow-hydra) cause a cache miss.
         let wrt_type_str = value_to_stablehlo_type(wrt_arg)
             .map(|t| t.to_mlir())
@@ -66,7 +85,6 @@ impl JitCompiler {
             return None;
         }
 
-        // Return cached session if already compiled
         if let Some(cached) = self.vag_cache.get(&vag_key) {
             return Some(cached.clone());
         }
@@ -79,26 +97,19 @@ impl JitCompiler {
             return None;
         }
 
-        // Build combined parameter list: fn params first, then tensor captures.
-        // Scalar captures are substituted directly in the body.
         let mut all_param_names: Vec<String> = Vec::new();
         let mut all_arg_values: Vec<Value> = Vec::new();
         let mut scalar_substitutions: Vec<(String, f64)> = Vec::new();
 
-        // fn params (the wrt parameters)
         for p in fn_params {
             all_param_names.push(p.clone());
             all_arg_values.push(wrt_arg.clone());
         }
         let wrt_indices: Vec<usize> = (0..fn_params.len()).collect();
 
-        // Build an augmented registry with closure-captured functions.
-        // These will be inlined (not passed as IREE parameters).
         let mut aug_registry = registry.clone();
 
-        // Classify and add captures
         for (cap_name, cap_val) in closure {
-            // Skip the __vag_fn__ sentinel
             if cap_name.starts_with("__") {
                 continue;
             }
@@ -114,7 +125,6 @@ impl JitCompiler {
                     body: fb,
                     ..
                 } => {
-                    // Closure-captured function: add to registry for inlining
                     aug_registry.entry(cap_name.clone()).or_insert_with(|| FunctionDef {
                         name: cap_name.clone(),
                         params: fp.clone(),
@@ -144,13 +154,11 @@ impl JitCompiler {
             }
         }
 
-        // Substitute scalar captures in body
         let mut body = body.clone();
         for (name, val) in &scalar_substitutions {
             body = substitute_scalar_param(&body, name, *val);
         }
 
-        // Type inference from runtime args
         let mut known_types: Vec<(String, StableHLOType)> = Vec::new();
         let mut param_index_maps = ParamIndexMaps::new();
         let mut constants: HashMap<(String, Vec<usize>), f64> = HashMap::new();
@@ -177,7 +185,6 @@ impl JitCompiler {
             known_types.push((param_name.clone(), ty));
         }
 
-        // Signature inference
         let dummy_compiler = crate::core::expr::CompilerContext::new();
         let mut sig = match infer_function_signature_with_known(
             &dummy_compiler,
@@ -192,7 +199,6 @@ impl JitCompiler {
             }
         };
 
-        // Override param types from runtime values
         for (param_name, ty) in &known_types {
             if let Some(idx) = all_param_names.iter().position(|p| p == param_name) {
                 sig.param_types[idx] = ty.clone();
@@ -248,7 +254,6 @@ impl JitCompiler {
             }
         }
 
-        // Inline user-defined function calls (including closure-captured lambdas)
         body = crate::autodiff::inline_function_calls(&body, &aug_registry);
 
         // Bail out if inlining produced a graph that is too large
@@ -319,7 +324,6 @@ impl JitCompiler {
         // (see the main JIT path above for rationale).
         let filtered_vag_constants = filter_constants_for_shape_positions(&constants, &body);
 
-        // Resolve static constants
         let mut param_shapes: HashMap<String, Vec<i64>> = all_param_names
             .iter()
             .zip(sig.param_types.iter())
@@ -399,7 +403,6 @@ impl JitCompiler {
 
                 let inlined_body = body_clone;
 
-                // Expand tuple params to synthetic leaf symbols
                 let mut expanded_body = inlined_body.clone();
                 let mut all_leaves: Vec<(usize, Vec<crate::lowering::codegen::TupleLeaf>)> =
                     Vec::new();
@@ -430,7 +433,6 @@ impl JitCompiler {
                     }
                 }
 
-                // Convert to ANF
                 let anf_expr = to_anf(&expanded_body);
                 let (anf_bindings, anf_body) = match &anf_expr {
                     CompiledExpr::Let { bindings, body } => {
@@ -453,7 +455,6 @@ impl JitCompiler {
                     }
                 }
 
-                // Generate forward bindings (flat scope, no Let scoping).
                 // Use generate_binding to handle Lambda, destructuring, layouts.
                 for (name, value_expr) in &anf_bindings {
                     let name_str = name
@@ -462,13 +463,10 @@ impl JitCompiler {
                     codegen.generate_binding(name_str, value_expr)?;
                 }
 
-                // Generate the ANF body (loss value)
                 let (loss_reg, loss_ty) = codegen.generate(&anf_body)?;
 
-                // Build shape map from forward codegen for reverse-mode AD
                 let shape_map: HashMap<String, Vec<i64>> = codegen.binding_shapes();
 
-                // Convert anf_bindings to use String names for reverse_grad
                 let anf_bindings_str: Vec<(String, CompiledExpr)> = anf_bindings
                     .iter()
                     .map(|(name, expr)| {
@@ -480,7 +478,6 @@ impl JitCompiler {
                         )
                     })
                     .collect();
-                // Run reverse-mode AD on ANF with shape info
                 let ReverseGradResult {
                     backward_bindings,
                     gradients: grad_sym_map,
@@ -513,7 +510,7 @@ impl JitCompiler {
                     }
                     eprintln!("--- Grad map ---");
                     for (sym, grad_name) in &grad_sym_map {
-                        eprintln!("  {} -> {}", sym, grad_name);
+                        eprintln!("  {} -> {:?}", sym, grad_name);
                     }
                     eprintln!("--- wrt symbols ---");
                     for s in &all_wrt_symbols {
@@ -521,13 +518,11 @@ impl JitCompiler {
                     }
                 }
 
-                // Generate backward bindings.
                 for (name, value_expr) in &backward_bindings {
                     let (reg, ty) = codegen.generate(value_expr)?;
                     codegen.bind_symbol(name, reg, ty);
                 }
 
-                // Collect gradient registers for each wrt param.
                 let mut grad_regs: Vec<Register> = Vec::new();
                 let mut grad_tys: Vec<StableHLOType> = Vec::new();
 
@@ -540,39 +535,26 @@ impl JitCompiler {
                                 .iter()
                                 .find(|(i, _)| *i == idx)
                                 .map(|(_, l)| l)
-                                .unwrap();
+                                .ok_or_else(|| crate::core::error::SheafError::AutodiffMissingGradientOutput {
+                                    symbol: param_name.clone(),
+                                })?;
 
-                            // Each leaf gradient is a Symbol name from grad_sym_map
                             let leaf_grad_map: std::collections::HashMap<String, CompiledExpr> =
                                 leaves
                                     .iter()
                                     .map(|leaf| {
-                                        let grad_expr = grad_sym_map
-                                            .get(&leaf.symbol)
-                                            .map(|sym_name| CompiledExpr::Symbol(sym_name.clone()))
-                                            .unwrap_or_else(|| {
-                                                // Generate zeros of the correct shape for missing grads
-                                                let leaf_ty =
-                                                    resolve_leaf_type(param_ty, &leaf.indices);
-                                                let shape = leaf_ty.shape();
-                                                if shape.is_empty() {
-                                                    CompiledExpr::Float(0.0)
-                                                } else {
-                                                    CompiledExpr::FunctionCall {
-                                                        name: "zeros".to_string(),
-                                                        args: vec![CompiledExpr::Vector(
-                                                            shape
-                                                                .iter()
-                                                                .map(|&d| CompiledExpr::Integer(d))
-                                                                .collect(),
-                                                        )],
-                                                        loc: None,
-                                                    }
-                                                }
-                                            });
-                                        (leaf.symbol.clone(), grad_expr)
+                                        let grad_expr = match crate::autodiff::reverse::gradient_output(&grad_sym_map, &leaf.symbol)? {
+                                            GradientOutput::Computed(sym_name) => {
+                                                CompiledExpr::Symbol(sym_name.clone())
+                                            }
+                                            GradientOutput::ProvenZero => {
+                                                let leaf_ty = resolve_leaf_type(param_ty, &leaf.indices);
+                                                zero_gradient_expr(&leaf_ty)
+                                            }
+                                        };
+                                        Ok((leaf.symbol.clone(), grad_expr))
                                     })
-                                    .collect();
+                                    .collect::<crate::core::error::SheafResult<_>>()?;
 
                             let (grad_reg, grad_ty) = codegen.build_grad_tuple_from_map(
                                 leaves,
@@ -583,10 +565,12 @@ impl JitCompiler {
                             grad_tys.push(grad_ty);
                         }
                         _ => {
-                            let grad_expr = grad_sym_map
-                                .get(param_name)
-                                .map(|sym_name| CompiledExpr::Symbol(sym_name.clone()))
-                                .unwrap_or(CompiledExpr::Float(0.0));
+                            let grad_expr = match crate::autodiff::reverse::gradient_output(&grad_sym_map, param_name)? {
+                                GradientOutput::Computed(sym_name) => {
+                                    CompiledExpr::Symbol(sym_name.clone())
+                                }
+                                GradientOutput::ProvenZero => zero_gradient_expr(param_ty),
+                            };
                             let (grad_reg, grad_ty) = codegen.generate(&grad_expr)?;
                             let (grad_reg, grad_ty) =
                                 codegen.reduce_broadcast_grad(grad_reg, &grad_ty, param_ty)?;
@@ -611,6 +595,10 @@ impl JitCompiler {
 
         let (mlir_decl, return_type) = match codegen_result {
             Ok(Ok(result)) => result,
+            Ok(Err(e)) if preserves_structured_vag_error(&e) => {
+                self.last_vag_error = Some(e);
+                return None;
+            }
             Ok(Err(e)) => {
                 self.jit_fail(&vag_key, &format!("codegen: {}", e));
                 return None;
@@ -635,7 +623,6 @@ impl JitCompiler {
             sheaf_msg!("jit: value-and-grad | MLIR {} lines", mlir.lines().count());
         }
 
-        // Content hash for staleness check
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         mlir.hash(&mut hasher);
         backend.hash(&mut hasher);
@@ -797,6 +784,9 @@ impl JitCompiler {
     /// Classify the last VAG skip reason as legitimate (unsupported pattern)
     /// or a bug (JIT should handle but failed).
     pub fn classify_vag_skip(&self) -> JitVagOutcome {
+        if let Some(error) = &self.last_vag_error {
+            return JitVagOutcome::Success(Err(error.clone()));
+        }
         match &self.last_vag_fail_reason {
             None => JitVagOutcome::Unsupported,
             Some(reason) => {

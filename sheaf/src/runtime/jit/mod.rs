@@ -3,12 +3,12 @@
 
 //! JIT auto-compilation: transparently compile pure functions on first call.
 //!
-//! When the interpreter calls a function that has no pre-compiled VMFB,
-//! the JIT attempts to compile it on the fly via the following pipeline:
-//! type inference -> dict lowering -> inlining -> codegen -> MLIR
-//! -> iree-compile -> load VMFB. On success, subsequent calls dispatch via IREE.
-//! On failure, the function is added to a blocklist and the interpreter
-//! handles it normally.
+//! Eligible functions compile to VMFB on first use:
+//! type inference -> dict lowering -> inlining -> StableHLO generation
+//! -> iree-compile -> shared-session module loading.
+//! Subsequent calls dispatch through the loaded module. Unsupported patterns
+//! fall back to the interpreter; structured value-and-grad errors propagate to
+//! the caller.
 
 use crate::SheafError;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -63,7 +63,7 @@ pub fn detect_cuda_target() -> Option<String> {
 use super::toolchain::{ensure_toolchain, find_iree_compile, IREE_COMPILER_VERSION};
 
 use crate::autodiff::{
-    reverse::{ReverseGradResult, reverse_grad, to_anf},
+    reverse::{GradientOutput, ReverseGradResult, reverse_grad, to_anf},
     simplify,
     transforms::cse,
 };
@@ -440,6 +440,7 @@ pub struct JitCompiler {
     /// Variants that failed compilation.
     failed_keys: HashSet<JitCacheKey>,
     last_vag_fail_reason: Option<String>,
+    last_vag_error: Option<SheafError>,
     /// Cache compiled VAG sessions: vag_key -> (session_idx, signature, param_names)
     vag_cache: HashMap<String, (String, FunctionSignature, Vec<String>)>,
 }
@@ -506,6 +507,7 @@ impl JitCompiler {
             failed_vag: HashSet::new(),
             failed_keys: HashSet::new(),
             last_vag_fail_reason: None,
+            last_vag_error: None,
             vag_cache: HashMap::new(),
         }
     }
@@ -591,14 +593,15 @@ mod vag;
 mod cache_key_tests {
     use super::{
         cache_key_for, cache_key_for_function, function_definition_identity,
-        module_growth_warning, JitCompiler,
+        module_growth_warning, JitCompiler, JitVagOutcome,
     };
     use crate::core::ast::SheafValue;
-    use crate::core::error::SourceLocation;
+    use crate::core::error::{SheafError, SourceLocation};
     use crate::core::expr::{CompiledExpr, FunctionDef};
     use crate::interpreter::value::{Dtype, Value};
     use ndarray::ArrayD;
     use std::collections::{HashMap, HashSet};
+    use std::rc::Rc;
     use std::sync::Arc;
 
     fn tensor_f32(shape: Vec<usize>, fill: f32) -> Value {
@@ -809,6 +812,54 @@ mod cache_key_tests {
     }
 
     #[test]
+    fn preserves_structured_autodiff_output_errors_in_vag_outcome() {
+        let compiler = JitCompiler {
+            iree_compile_path: None,
+            target_backend: "llvm-cpu".to_string(),
+            failed_definitions: HashSet::new(),
+            failed_vag: HashSet::new(),
+            failed_keys: HashSet::new(),
+            last_vag_fail_reason: Some("codegen failed".to_string()),
+            last_vag_error: Some(SheafError::AutodiffMissingGradientOutput {
+                symbol: "p_0".to_string(),
+            }),
+            vag_cache: HashMap::new(),
+        };
+
+        assert!(matches!(
+            compiler.classify_vag_skip(),
+            JitVagOutcome::Success(Err(SheafError::AutodiffMissingGradientOutput { symbol }))
+                if symbol == "p_0"
+        ));
+    }
+
+    #[test]
+    fn preserves_autodiff_missing_rule_in_vag_outcome() {
+        let location = SourceLocation::new(4, 2, Rc::from("loss.shf"));
+        let compiler = JitCompiler {
+            iree_compile_path: None,
+            target_backend: "llvm-cpu".to_string(),
+            failed_definitions: HashSet::new(),
+            failed_vag: HashSet::new(),
+            failed_keys: HashSet::new(),
+            last_vag_fail_reason: Some("codegen failed".to_string()),
+            last_vag_error: Some(SheafError::AutodiffMissingRule {
+                operation: "unknown".to_string(),
+                location: Some(location.clone()),
+            }),
+            vag_cache: HashMap::new(),
+        };
+
+        assert!(matches!(
+            compiler.classify_vag_skip(),
+            JitVagOutcome::Success(Err(SheafError::AutodiffMissingRule {
+                operation,
+                location: Some(actual),
+            })) if operation == "unknown" && actual == location
+        ));
+    }
+
+    #[test]
     fn recursive_definition_is_memoized_before_cache_key_analysis() {
         let recursive = function(
             "recursive",
@@ -826,6 +877,7 @@ mod cache_key_tests {
             failed_vag: HashSet::new(),
             failed_keys: HashSet::new(),
             last_vag_fail_reason: None,
+            last_vag_error: None,
             vag_cache: HashMap::new(),
         };
         let identity = function_definition_identity(&recursive, &registry);

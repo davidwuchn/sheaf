@@ -4,7 +4,7 @@
 //! Lambda inlining and code generation for tree operations, reduce, and scan.
 
 use std::collections::{BTreeMap, HashMap};
-use crate::autodiff::reverse::{ReverseGradResult, reverse_grad, to_anf};
+use crate::autodiff::reverse::{GradientOutput, ReverseGradResult, reverse_grad, to_anf};
 use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::lowering::transforms::try_infer_shape;
 use crate::core::expr::{BindingPattern, CompiledExpr};
@@ -710,11 +710,21 @@ impl CodeGenerator {
                 self.generate_binding(name, val)?;
             }
 
-            if let Some(grad_sym) = body_grad_map.get(&carry_param)
-                && let Some(&(reg, ref ty)) = self.bindings.get(grad_sym)
-            {
-                adj_carry_reg = reg;
-                adj_carry_ty = ty.clone();
+            match crate::autodiff::reverse::gradient_output(&body_grad_map, &carry_param)? {
+                GradientOutput::Computed(grad_sym) => {
+                    let &(reg, ref ty) = self.bindings.get(grad_sym).ok_or_else(|| {
+                        SheafError::AutodiffMissingGradientOutput {
+                            symbol: grad_sym.clone(),
+                        }
+                    })?;
+                    adj_carry_reg = reg;
+                    adj_carry_ty = ty.clone();
+                }
+                GradientOutput::ProvenZero => {
+                    let (reg, ty) = self.emitter.emit_zeros(fwd_carry_ty.shape());
+                    adj_carry_reg = reg;
+                    adj_carry_ty = ty;
+                }
             }
 
             if matches!(&sample_elem_ty, StableHLOType::Tuple(..)) {
@@ -724,9 +734,13 @@ impl CodeGenerator {
                 };
                 let mut parts = vec![None; n_fields];
                 for (gte_name, field_idx) in &elem_gte_names {
-                    if let Some(grad_sym) = body_grad_map.get(gte_name)
-                        && let Some(&(reg, ref ty)) = self.bindings.get(grad_sym)
-                    {
+                    let output = crate::autodiff::reverse::gradient_output(&body_grad_map, gte_name)?;
+                    if let GradientOutput::Computed(grad_sym) = output {
+                        let &(reg, ref ty) = self.bindings.get(grad_sym).ok_or_else(|| {
+                            SheafError::AutodiffMissingGradientOutput {
+                                symbol: grad_sym.clone(),
+                            }
+                        })?;
                         parts[*field_idx] = Some((reg, ty.clone()));
                     }
                 }
@@ -744,10 +758,21 @@ impl CodeGenerator {
                     })
                     .collect();
                 adj_elem_parts.push(resolved_parts);
-            } else if let Some(grad_sym) = body_grad_map.get(&elem_param)
-                && let Some(&(reg, ref ty)) = self.bindings.get(grad_sym)
-            {
-                adj_elem_parts.push(vec![(reg, ty.clone())]);
+            } else {
+                let part = match crate::autodiff::reverse::gradient_output(&body_grad_map, &elem_param)? {
+                    GradientOutput::Computed(grad_sym) => {
+                        let &(reg, ref ty) = self.bindings.get(grad_sym).ok_or_else(|| {
+                            SheafError::AutodiffMissingGradientOutput {
+                                symbol: grad_sym.clone(),
+                            }
+                        })?;
+                        (reg, ty.clone())
+                    }
+                    GradientOutput::ProvenZero => {
+                        self.emitter.emit_zeros(sample_elem_ty.shape())
+                    }
+                };
+                adj_elem_parts.push(vec![part]);
             }
 
             self.bindings = saved_bindings;

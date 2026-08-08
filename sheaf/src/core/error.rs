@@ -56,6 +56,10 @@ pub enum SheafError {
         operation: String,
         location: Option<SourceLocation>,
     },
+    /// Reverse-mode AD did not provide the required output for a differentiated symbol.
+    AutodiffMissingGradientOutput {
+        symbol: String,
+    },
     /// IO error
     Io(String),
 }
@@ -111,6 +115,11 @@ impl fmt::Display for SheafError {
                 "autodiff error: no differentiation rule for operation '{}'",
                 operation
             ),
+            SheafError::AutodiffMissingGradientOutput { symbol } => write!(
+                f,
+                "autodiff error: missing gradient output for symbol '{}'",
+                symbol
+            ),
             SheafError::Io(msg) => write!(f, "io error: {}", msg),
         }
     }
@@ -144,6 +153,10 @@ impl SheafError {
             SheafError::AutodiffMissingRule { operation, .. } => Cow::Owned(format!(
                 "no differentiation rule for operation '{}'",
                 operation
+            )),
+            SheafError::AutodiffMissingGradientOutput { symbol } => Cow::Owned(format!(
+                "missing gradient output for symbol '{}'",
+                symbol
             )),
             SheafError::Io(msg) => Cow::Borrowed(msg),
         }

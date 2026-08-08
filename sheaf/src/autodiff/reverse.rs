@@ -15,7 +15,7 @@
 use crate::autodiff::replace_symbol;
 use crate::core::error::{SheafError, SheafResult};
 use crate::core::expr::{BindingPattern, CompiledExpr};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static ANF_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -63,7 +63,6 @@ pub fn to_anf(expr: &CompiledExpr) -> CompiledExpr {
 /// Returns a trivial expression (Symbol or literal) that represents the value.
 fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(BindingPattern, CompiledExpr)>) -> CompiledExpr {
     match expr {
-        // Trivial: return as-is
         _ if is_trivial(expr) => expr.clone(),
 
         // FunctionCall: ANF-ify all args, then bind the call
@@ -156,12 +155,44 @@ fn fresh_grad_name() -> String {
     format!("__grad_{}", n)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GradientOutput {
+    /// Name of the materialized adjoint binding.
+    Computed(String),
+    /// No VJP path reaches the symbol with a nonzero contribution.
+    ProvenZero,
+}
+
 #[derive(Debug)]
 pub struct ReverseGradResult {
     /// Flat let bindings computing all adjoint intermediates.
     pub backward_bindings: Vec<(String, CompiledExpr)>,
-    /// Maps each differentiated parameter to its gradient symbol.
-    pub gradients: HashMap<String, String>,
+    /// Contains exactly one explicit outcome for every requested `wrt` symbol.
+    pub gradients: HashMap<String, GradientOutput>,
+}
+
+impl ReverseGradResult {
+    /// Return the output for a requested symbol.
+    pub fn gradient_output(&self, symbol: &str) -> SheafResult<&GradientOutput> {
+        gradient_output(&self.gradients, symbol)
+    }
+}
+
+/// Return a gradient output, rejecting an incomplete result map.
+pub fn gradient_output<'a>(
+    gradients: &'a HashMap<String, GradientOutput>,
+    symbol: &str,
+) -> SheafResult<&'a GradientOutput> {
+    gradients.get(symbol).ok_or_else(|| SheafError::AutodiffMissingGradientOutput {
+        symbol: symbol.to_string(),
+    })
+}
+
+#[derive(Default)]
+struct AdjointState {
+    names: HashMap<String, String>,
+    reached_by_vjp: HashSet<String>,
+    zero_contributions: HashSet<String>,
 }
 
 /// Compute reverse-mode gradients of an ANF expression with respect to a set
@@ -176,7 +207,7 @@ pub fn reverse_grad(
     shapes: &HashMap<String, Vec<i64>>,
 ) -> SheafResult<ReverseGradResult> {
     let dependencies = analyze_anf_dependencies(anf_bindings, wrt);
-    let mut adj_names: HashMap<String, String> = HashMap::new();
+    let mut adj_names = AdjointState::default();
     let mut backward_bindings: Vec<(String, CompiledExpr)> = Vec::new();
 
     let fwd_lookup: HashMap<String, String> = anf_bindings.iter()
@@ -195,12 +226,12 @@ pub fn reverse_grad(
     if let CompiledExpr::Symbol(s) = anf_body {
         let seed_name = fresh_grad_name();
         backward_bindings.push((seed_name.clone(), CompiledExpr::Float(1.0)));
-        adj_names.insert(s.clone(), seed_name);
+        adj_names.names.insert(s.clone(), seed_name);
     }
 
     // Walk bindings in reverse
     for (name, value) in anf_bindings.iter().rev() {
-        let adj_sym = match adj_names.get(name) {
+        let adj_sym = match adj_names.names.get(name) {
             Some(s) => CompiledExpr::Symbol(s.clone()),
             None => continue,
         };
@@ -220,13 +251,21 @@ pub fn reverse_grad(
         )?;
     }
 
-    // Build grad_map: wrt name -> adjoint symbol name
-    let grad_map: HashMap<String, String> = wrt
+    // VJP reachability is recorded before zero contributions are discarded.
+    let grad_map: HashMap<String, GradientOutput> = wrt
         .iter()
-        .filter_map(|param| {
-            adj_names.get(param).map(|adj_name| (param.clone(), adj_name.clone()))
+        .map(|param| {
+            let output = match adj_names.names.get(param) {
+                Some(adj_name) => GradientOutput::Computed(adj_name.clone()),
+                None if !adj_names.reached_by_vjp.contains(param) => GradientOutput::ProvenZero,
+                None if adj_names.zero_contributions.contains(param) => GradientOutput::ProvenZero,
+                None => return Err(SheafError::AutodiffMissingGradientOutput {
+                    symbol: param.clone(),
+                }),
+            };
+            Ok((param.clone(), output))
         })
-        .collect();
+        .collect::<SheafResult<_>>()?;
 
     Ok(ReverseGradResult {
         backward_bindings,
@@ -300,22 +339,22 @@ fn anf_expr_depends_on_wrt(expr: &CompiledExpr, dependencies: &HashMap<String, b
 fn accumulate_named(
     var_name: &str,
     contribution: CompiledExpr,
-    adj_names: &mut HashMap<String, String>,
+    adj_names: &mut AdjointState,
     bindings: &mut Vec<(String, CompiledExpr)>,
 ) {
+    adj_names.reached_by_vjp.insert(var_name.to_string());
     if is_zero(&contribution) {
+        adj_names.zero_contributions.insert(var_name.to_string());
         return;
     }
 
-    match adj_names.get(var_name) {
+    match adj_names.names.get(var_name) {
         None => {
-            // First contribution: just name it
             let grad_name = fresh_grad_name();
             bindings.push((grad_name.clone(), contribution));
-            adj_names.insert(var_name.to_string(), grad_name);
+            adj_names.names.insert(var_name.to_string(), grad_name);
         }
         Some(existing) => {
-            // Add to existing: emit new_name = existing + contribution
             let contrib_name = fresh_grad_name();
             bindings.push((contrib_name.clone(), contribution));
             let sum_name = fresh_grad_name();
@@ -330,7 +369,7 @@ fn accumulate_named(
                     loc: None,
                 },
             ));
-            adj_names.insert(var_name.to_string(), sum_name);
+            adj_names.names.insert(var_name.to_string(), sum_name);
         }
     }
 }
@@ -447,7 +486,7 @@ struct ReverseContext<'a> {
 fn distribute_adjoint_named(
     expr: &CompiledExpr,
     adj_sym: &CompiledExpr,
-    adj_names: &mut HashMap<String, String>,
+    adj_names: &mut AdjointState,
     bindings: &mut Vec<(String, CompiledExpr)>,
     context: &ReverseContext<'_>,
 ) -> SheafResult<()> {
@@ -484,7 +523,7 @@ fn distribute_fn_adjoint_named(
     name: &str,
     args: &[CompiledExpr],
     adj: &CompiledExpr,
-    adj_names: &mut HashMap<String, String>,
+    adj_names: &mut AdjointState,
     bindings: &mut Vec<(String, CompiledExpr)>,
     context: &ReverseContext<'_>,
     location: Option<crate::core::error::SourceLocation>,
@@ -683,11 +722,10 @@ fn distribute_fn_adjoint_named(
         }
 
         "gelu" => {
-            // tanh-approximation GELU: gelu(x) = 0.5 * x * (1 + tanh(k))
-            // where k = sqrt(2/pi) * (x + 0.044715 * x^3)
+            // VJP for the tanh approximation used by the forward GELU.
+            // gelu(x) = 0.5 * x * (1 + tanh(k)),  k = sqrt(2/pi) * (x + 0.044715 * x^3)
             // gelu'(x) = 0.5 * (1 + tanh(k)) + 0.5 * x * sech²(k) * k'
-            // k' = sqrt(2/pi) * (1 + 3 * 0.044715 * x^2)
-            // sech²(k) = 1 - tanh²(k)
+            // k' = sqrt(2/pi) * (1 + 3 * 0.044715 * x^2),  sech²(k) = 1 - tanh²(k)
             let x = &args[0];
             let x2 = emit_binding(bindings, call("*", vec![x.clone(), x.clone()]));
             let x3 = emit_binding(bindings, call("*", vec![sym(&x2), x.clone()]));
@@ -1014,14 +1052,10 @@ fn distribute_fn_adjoint_named(
                 shapes.get(s.as_str()).is_some_and(|sh| sh.is_empty() || sh == &[1])
             });
 
-            // V = shape(table)[0]
             let v = emit_binding(bindings, call("shape", vec![args[0].clone(), CompiledExpr::Integer(0)]));
-            // oh = one-hot(idx, V)  -> [V] for scalar, [N, V] for tensor
             let oh = emit_binding(bindings, call("one-hot", vec![args[1].clone(), sym(&v)]));
 
             if is_scalar_index {
-                // Scalar index: oh is [V], adj is [D]
-                // grad = reshape(oh, [V, 1]) @ reshape(adj, [1, D])
                 let oh_col = emit_binding(bindings, call("reshape", vec![
                     sym(&oh),
                     CompiledExpr::Vector(vec![sym(&v), CompiledExpr::Integer(1)]),
@@ -1033,8 +1067,6 @@ fn distribute_fn_adjoint_named(
                 let grad = emit_binding(bindings, call("@", vec![sym(&oh_col), sym(&adj_row)]));
                 acc_arg(&args[0], sym(&grad), adj_names, bindings);
             } else {
-                // Tensor indices: oh is [N, V], adj is [N, D]
-                // grad = transpose(oh) @ adj  -> [V, D]
                 let oh_t = emit_binding(bindings, call("tr", vec![sym(&oh)]));
                 let grad = emit_binding(bindings, call("@", vec![sym(&oh_t), adj.clone()]));
                 acc_arg(&args[0], sym(&grad), adj_names, bindings);
@@ -1109,7 +1141,7 @@ fn emit_binding(
 fn acc_arg(
     arg: &CompiledExpr,
     contribution: CompiledExpr,
-    adj_names: &mut HashMap<String, String>,
+    adj_names: &mut AdjointState,
     bindings: &mut Vec<(String, CompiledExpr)>,
 ) {
     match arg {
@@ -1125,7 +1157,7 @@ fn acc_arg(
 
 #[cfg(test)]
 mod tests {
-    use super::{ReverseGradResult, reverse_grad, to_anf};
+    use super::{GradientOutput, ReverseGradResult, reverse_grad, to_anf};
     use crate::core::error::{SheafError, SourceLocation};
     use crate::core::expr::{BindingPattern, CompiledExpr};
     use std::collections::HashMap;
@@ -1247,7 +1279,10 @@ mod tests {
         ).unwrap();
 
         assert_eq!(backward_bindings.len(), 1);
-        assert!(gradients.is_empty());
+        assert!(matches!(
+            gradients.get("x"),
+            Some(GradientOutput::ProvenZero)
+        ));
     }
 
     #[test]
@@ -1267,7 +1302,10 @@ mod tests {
             &HashMap::new(),
         ).unwrap();
 
-        assert!(gradients.is_empty());
+        assert!(matches!(
+            gradients.get("x"),
+            Some(GradientOutput::ProvenZero)
+        ));
     }
 
     #[test]
@@ -1283,7 +1321,10 @@ mod tests {
             &HashMap::new(),
         ).unwrap();
 
-        assert!(gradients.contains_key("x"));
+        assert!(matches!(
+            gradients.get("x"),
+            Some(GradientOutput::Computed(_))
+        ));
     }
 
     #[test]
@@ -1296,7 +1337,46 @@ mod tests {
             &HashMap::new(),
         ).unwrap();
 
-        assert!(gradients.is_empty());
+        assert!(matches!(
+            gradients.get("x"),
+            Some(GradientOutput::ProvenZero)
+        ));
+    }
+
+    #[test]
+    fn reports_computed_and_proven_zero_outputs_for_multiple_parameters() {
+        let bindings = vec![(
+            "result".to_string(),
+            call("*", vec![symbol("active"), CompiledExpr::Float(2.0)]),
+        )];
+        let ReverseGradResult { gradients, .. } = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["active".to_string(), "unused".to_string()],
+            &HashMap::new(),
+        ).unwrap();
+
+        assert!(matches!(
+            gradients.get("active"),
+            Some(GradientOutput::Computed(_))
+        ));
+        assert!(matches!(
+            gradients.get("unused"),
+            Some(GradientOutput::ProvenZero)
+        ));
+    }
+
+    #[test]
+    fn rejects_a_missing_gradient_output() {
+        let result = ReverseGradResult {
+            backward_bindings: vec![],
+            gradients: HashMap::new(),
+        };
+        let error = result.gradient_output("x").unwrap_err();
+        assert!(matches!(
+            error,
+            SheafError::AutodiffMissingGradientOutput { symbol } if symbol == "x"
+        ));
     }
 
     #[test]

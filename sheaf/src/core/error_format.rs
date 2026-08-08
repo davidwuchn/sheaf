@@ -105,6 +105,12 @@ pub fn format_error(error: &SheafError) -> String {
                 operation
             ));
         }
+        SheafError::AutodiffMissingGradientOutput { symbol } => {
+            parts.push(format!(
+                "error: missing gradient output for symbol '{}'",
+                symbol
+            ));
+        }
         SheafError::Io(msg) => {
             parts.push(format!("io error: {}", msg));
         }
