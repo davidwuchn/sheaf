@@ -5,23 +5,6 @@
 
 use super::*;
 
-/// Navigate a tuple type tree using indices to find the leaf type.
-pub(super) fn resolve_leaf_type(ty: &StableHLOType, indices: &[usize]) -> StableHLOType {
-    let mut current = ty.clone();
-    for &idx in indices {
-        if let StableHLOType::Tuple(elems, _) = &current {
-            if idx < elems.len() {
-                current = elems[idx].clone();
-            } else {
-                return StableHLOType::scalar_f32();
-            }
-        } else {
-            return current;
-        }
-    }
-    current
-}
-
 #[cfg(iree_runtime)]
 pub(super) fn inject_tuple_shapes(
     param_name: &str,

@@ -68,7 +68,9 @@ use crate::autodiff::{
     transforms::cse,
 };
 use crate::core::expr::{CompiledExpr, FunctionDef};
-use crate::lowering::codegen::{collect_tuple_leaves, expand_tuple_to_symbols, CodeGenerator};
+use crate::lowering::codegen::{
+    collect_tuple_references, collect_tuple_type_leaves, expand_tuple_to_symbols, CodeGenerator,
+};
 use crate::lowering::config::{
     DictIndexMap, ParamIndexMap, ParamIndexMaps, layout_to_index_map, lower_get_calls,
 };

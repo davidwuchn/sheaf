@@ -4,6 +4,7 @@
 //! Helper types and free functions for codegen.
 
 use crate::core::expr::CompiledExpr;
+use crate::lowering::stablehlo::StableHLOType;
 use std::collections::HashSet;
 
 /// A leaf of a tuple parameter: maps indices to a synthetic symbol name.
@@ -16,62 +17,54 @@ pub(crate) struct TupleLeaf {
 }
 
 /// Collect all unique `GetTupleElement` leaves referencing `param_name` in an expression.
-pub(crate) fn collect_tuple_leaves(expr: &CompiledExpr, param_name: &str) -> Vec<TupleLeaf> {
+pub(crate) fn collect_tuple_type_leaves(param_name: &str, ty: &StableHLOType) -> Vec<TupleLeaf> {
+    fn collect(param_name: &str, ty: &StableHLOType, indices: &mut Vec<usize>, out: &mut Vec<TupleLeaf>) {
+        match ty {
+            StableHLOType::Tuple(elems, _) => {
+                for (idx, elem) in elems.iter().enumerate() {
+                    indices.push(idx);
+                    collect(param_name, elem, indices, out);
+                    indices.pop();
+                }
+            }
+            _ => out.push(TupleLeaf {
+                indices: indices.clone(),
+                symbol: format!(
+                    "{}_{}",
+                    param_name,
+                    indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("_")
+                ),
+            }),
+        }
+    }
+
     let mut leaves = Vec::new();
-    let mut seen = HashSet::new();
-    collect_tuple_leaves_rec(expr, param_name, &mut leaves, &mut seen);
+    collect(param_name, ty, &mut Vec::new(), &mut leaves);
     leaves
 }
 
-fn collect_tuple_leaves_rec(
-    expr: &CompiledExpr,
-    param_name: &str,
-    out: &mut Vec<TupleLeaf>,
-    seen: &mut HashSet<Vec<usize>>,
-) {
-    match expr {
-        CompiledExpr::GetTupleElement { param, indices } if param == param_name
-            && seen.insert(indices.clone()) => {
-                let symbol = format!("{}_{}", param_name, indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("_"));
+/// Collect tuple accesses needed to evaluate the forward body.
+pub(crate) fn collect_tuple_references(expr: &CompiledExpr, param_name: &str) -> Vec<TupleLeaf> {
+    let mut leaves = Vec::new();
+    let mut seen = HashSet::new();
+    fn walk(expr: &CompiledExpr, param_name: &str, out: &mut Vec<TupleLeaf>, seen: &mut HashSet<Vec<usize>>) {
+        match expr {
+            CompiledExpr::GetTupleElement { param, indices } if param == param_name && seen.insert(indices.clone()) => {
                 out.push(TupleLeaf {
                     indices: indices.clone(),
-                    symbol,
+                    symbol: format!("{}_{}", param_name, indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join("_")),
                 });
             }
-        CompiledExpr::FunctionCall { args, .. } => {
-            for a in args {
-                collect_tuple_leaves_rec(a, param_name, out, seen);
+            other => {
+                other.map_children(|child| {
+                    walk(child, param_name, out, seen);
+                    child.clone()
+                });
             }
         }
-        CompiledExpr::Let { bindings, body } => {
-            for (_, v) in bindings {
-                collect_tuple_leaves_rec(v, param_name, out, seen);
-            }
-            collect_tuple_leaves_rec(body, param_name, out, seen);
-        }
-        CompiledExpr::Do(exprs) => {
-            for e in exprs {
-                collect_tuple_leaves_rec(e, param_name, out, seen);
-            }
-        }
-        CompiledExpr::If { condition, then_branch, else_branch } => {
-            collect_tuple_leaves_rec(condition, param_name, out, seen);
-            collect_tuple_leaves_rec(then_branch, param_name, out, seen);
-            if let Some(e) = else_branch {
-                collect_tuple_leaves_rec(e, param_name, out, seen);
-            }
-        }
-        CompiledExpr::Lambda { body, .. } => {
-            collect_tuple_leaves_rec(body, param_name, out, seen);
-        }
-        CompiledExpr::LambdaCall { callee, args } => {
-            collect_tuple_leaves_rec(callee, param_name, out, seen);
-            for a in args {
-                collect_tuple_leaves_rec(a, param_name, out, seen);
-            }
-        }
-        _ => {}
     }
+    walk(expr, param_name, &mut leaves, &mut seen);
+    leaves
 }
 
 /// Replace all `GetTupleElement { param, indices }` referencing `param_name`
@@ -115,12 +108,11 @@ pub(crate) fn expand_tuple_to_symbols(expr: &CompiledExpr, param_name: &str) -> 
 ///
 /// Returns `Some((flat_data, shape))` if every leaf is a numeric literal
 /// (Float or Integer) and all sub-vectors have consistent dimensions.
-/// Returns `None` if any element is a non-literal expression (Symbol,
-/// FunctionCall, etc.) -- the caller should then emit a tuple or report
-/// an error.
+/// Returns `None` if any element is a non-literal expression, or if
+/// dimensions are inconsistent across sub-vectors.
 ///
 /// Works recursively for arbitrary nesting depth:
-///   `[1.0 2.0]`                  -> `([1.0, 2.0], [2])`
+///   `[1.0 2.0]`                 -> `([1.0, 2.0], [2])`
 ///   `[[1.0 2.0] [3.0 4.0]]`     -> `([1.0, 2.0, 3.0, 4.0], [2, 2])`
 ///   `[[[1] [2]] [[3] [4]]]`     -> `([1.0, 2.0, 3.0, 4.0], [2, 2, 1])`
 pub fn try_flatten_to_constant(elements: &[CompiledExpr]) -> Option<(Vec<f64>, Vec<i64>)> {
@@ -130,7 +122,6 @@ pub fn try_flatten_to_constant(elements: &[CompiledExpr]) -> Option<(Vec<f64>, V
 
     match &elements[0] {
         CompiledExpr::Float(_) | CompiledExpr::Integer(_) => {
-            // Leaf level: all elements must be numeric
             let mut data = Vec::with_capacity(elements.len());
             for e in elements {
                 match e {
@@ -142,7 +133,6 @@ pub fn try_flatten_to_constant(elements: &[CompiledExpr]) -> Option<(Vec<f64>, V
             Some((data, vec![elements.len() as i64]))
         }
         CompiledExpr::Vector(_) => {
-            // Nested: recurse into each sub-vector, check shapes are uniform
             let mut all_data = Vec::new();
             let mut inner_shape: Option<Vec<i64>> = None;
 

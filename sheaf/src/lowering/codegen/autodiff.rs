@@ -9,7 +9,7 @@ use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::{SheafError, SheafResult};
 use crate::lowering::config::lower_get_calls;
 use super::helpers::TupleLeaf;
-use super::{CodeGenerator, collect_tuple_leaves, expand_tuple_to_symbols};
+use super::{CodeGenerator, collect_tuple_references, collect_tuple_type_leaves, expand_tuple_to_symbols};
 use crate::autodiff::reverse::GradientOutput;
 use super::control_flow::build_deep_index_map;
 use std::collections::HashMap;
@@ -258,13 +258,14 @@ impl CodeGenerator {
         fn_body
     };
 
-    let (leaves, expanded_body) = match &wrt_ty {
+    let (leaves, structural_references, expanded_body) = match &wrt_ty {
             StableHLOType::Tuple(..) => {
-                let leaves = collect_tuple_leaves(&fn_body, param_name);
+                let leaves = collect_tuple_type_leaves(param_name, &wrt_ty);
+                let references = collect_tuple_references(&fn_body, param_name);
                 let expanded = expand_tuple_to_symbols(&fn_body, param_name);
-                (leaves, expanded)
+                (leaves, references, expanded)
             }
-            _ => (Vec::<TupleLeaf>::new(), fn_body.clone()),
+            _ => (Vec::<TupleLeaf>::new(), Vec::<TupleLeaf>::new(), fn_body.clone()),
         };
 
         let mut all_wrt_symbols: Vec<String> = Vec::new();
@@ -277,6 +278,17 @@ impl CodeGenerator {
                 let (reg, ty) = self.generate(&gte)?;
                 self.bindings.insert(leaf.symbol.clone(), (reg, ty));
                 all_wrt_symbols.push(leaf.symbol.clone());
+            }
+            for reference in &structural_references {
+                if leaves.iter().any(|leaf| leaf.indices == reference.indices) {
+                    continue;
+                }
+                let gte = CompiledExpr::GetTupleElement {
+                    param: param_name.clone(),
+                    indices: reference.indices.clone(),
+                };
+                let (reg, ty) = self.generate(&gte)?;
+                self.bindings.insert(reference.symbol.clone(), (reg, ty));
             }
         } else {
             all_wrt_symbols.push(param_name.clone());

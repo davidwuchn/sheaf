@@ -3,8 +3,8 @@
 
 //! Lambda inlining and code generation for tree operations, reduce, and scan.
 
-use std::collections::{BTreeMap, HashMap};
-use crate::autodiff::reverse::{GradientOutput, ReverseGradResult, reverse_grad, to_anf};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use crate::autodiff::reverse::{ReverseGradResult, reverse_grad, to_anf};
 use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::lowering::transforms::try_infer_shape;
 use crate::core::expr::{BindingPattern, CompiledExpr};
@@ -47,6 +47,37 @@ enum ElemKind {
     VecTuple(Vec<StableHLOType>),
     StackedDict(Vec<StableHLOType>),
     PlainTensor,
+}
+
+fn fresh_scan_field_symbol(
+    bindings: &[(BindingPattern, CompiledExpr)],
+    carry_param: &str,
+    elem_param: &str,
+    field_idx: usize,
+) -> String {
+    let mut used: HashSet<&str> = bindings
+        .iter()
+        .filter_map(|(pattern, _)| match pattern {
+            BindingPattern::Simple(name) => Some(name.as_str()),
+            BindingPattern::Destructure(_) => None,
+        })
+        .collect();
+    used.insert(carry_param);
+    used.insert(elem_param);
+
+    let base = format!("__scan_elem_field_{}", field_idx);
+    let mut suffix = 0;
+    loop {
+        let candidate = if suffix == 0 {
+            base.clone()
+        } else {
+            format!("{}_{}", base, suffix)
+        };
+        if !used.contains(candidate.as_str()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 impl CodeGenerator {
@@ -600,7 +631,7 @@ impl CodeGenerator {
         };
 
         let body_anf = to_anf(&lowered_body);
-        let (body_bindings, body_result) = match &body_anf {
+        let (mut body_bindings, body_result) = match &body_anf {
             CompiledExpr::Let { bindings, body } => (bindings.clone(), body.as_ref().clone()),
             other => (vec![], other.clone()),
         };
@@ -640,19 +671,48 @@ impl CodeGenerator {
         }
 
         let mut wrt = vec![carry_param.clone()];
-        let elem_gte_names: Vec<(String, usize)> = if matches!(&sample_elem_ty, StableHLOType::Tuple(..)) {
-            body_bindings.iter()
-                .filter_map(|(name, val)| {
-                    if let CompiledExpr::GetTupleElement { param, indices } = val
-                        && param == &elem_param
-                        && indices.len() == 1
-                        && let BindingPattern::Simple(name_str) = name
-                    {
-                        return Some((name_str.clone(), indices[0]));
-                    }
-                    None
+        let elem_gte_names: Vec<(String, usize)> = if let StableHLOType::Tuple(elem_tys, _) = &sample_elem_ty {
+            let mut names_by_field: Vec<Option<String>> = vec![None; elem_tys.len()];
+            for (name, val) in &body_bindings {
+                if let CompiledExpr::GetTupleElement { param, indices } = val
+                    && param == &elem_param
+                    && indices.len() == 1
+                    && let BindingPattern::Simple(name_str) = name
+                    && let Some(field_name) = names_by_field.get_mut(indices[0])
+                {
+                    *field_name = Some(name_str.clone());
+                }
+            }
+            for (field_idx, field_name) in names_by_field.iter_mut().enumerate() {
+                if field_name.is_none() {
+                    let name = fresh_scan_field_symbol(
+                        &body_bindings,
+                        &carry_param,
+                        &elem_param,
+                        field_idx,
+                    );
+                    body_bindings.push((
+                        BindingPattern::Simple(name.clone()),
+                        CompiledExpr::GetTupleElement {
+                            param: elem_param.clone(),
+                            indices: vec![field_idx],
+                        },
+                    ));
+                    body_shapes.insert(name.clone(), elem_tys[field_idx].shape().to_vec());
+                    *field_name = Some(name);
+                }
+            }
+            names_by_field
+                .into_iter()
+                .enumerate()
+                .map(|(field_idx, name)| {
+                    name.map(|name| (name, field_idx)).ok_or_else(|| {
+                        SheafError::AutodiffMissingGradientOutput {
+                            symbol: format!("scan gradient field {}", field_idx),
+                        }
+                    })
                 })
-                .collect()
+                .collect::<SheafResult<_>>()?
         } else {
             wrt.push(elem_param.clone());
             vec![]
@@ -711,7 +771,7 @@ impl CodeGenerator {
             }
 
             match crate::autodiff::reverse::gradient_output(&body_grad_map, &carry_param)? {
-                GradientOutput::Computed(grad_sym) => {
+                crate::autodiff::reverse::GradientOutput::Computed(grad_sym) => {
                     let &(reg, ref ty) = self.bindings.get(grad_sym).ok_or_else(|| {
                         SheafError::AutodiffMissingGradientOutput {
                             symbol: grad_sym.clone(),
@@ -720,7 +780,7 @@ impl CodeGenerator {
                     adj_carry_reg = reg;
                     adj_carry_ty = ty.clone();
                 }
-                GradientOutput::ProvenZero => {
+                crate::autodiff::reverse::GradientOutput::ProvenZero => {
                     let (reg, ty) = self.emitter.emit_zeros(fwd_carry_ty.shape());
                     adj_carry_reg = reg;
                     adj_carry_ty = ty;
@@ -735,32 +795,44 @@ impl CodeGenerator {
                 let mut parts = vec![None; n_fields];
                 for (gte_name, field_idx) in &elem_gte_names {
                     let output = crate::autodiff::reverse::gradient_output(&body_grad_map, gte_name)?;
-                    if let GradientOutput::Computed(grad_sym) = output {
-                        let &(reg, ref ty) = self.bindings.get(grad_sym).ok_or_else(|| {
+                    let field_ty = match &sample_elem_ty {
+                        StableHLOType::Tuple(tys, _) => tys.get(*field_idx).ok_or_else(|| {
                             SheafError::AutodiffMissingGradientOutput {
-                                symbol: grad_sym.clone(),
+                                symbol: gte_name.clone(),
                             }
-                        })?;
-                        parts[*field_idx] = Some((reg, ty.clone()));
-                    }
+                        })?,
+                        _ => return Err(SheafError::AutodiffMissingGradientOutput {
+                            symbol: gte_name.clone(),
+                        }),
+                    };
+                    let part = match output {
+                        crate::autodiff::reverse::GradientOutput::Computed(grad_sym) => {
+                            let &(reg, ref ty) = self.bindings.get(grad_sym).ok_or_else(|| {
+                                SheafError::AutodiffMissingGradientOutput {
+                                    symbol: grad_sym.clone(),
+                                }
+                            })?;
+                            (reg, ty.clone())
+                        }
+                        crate::autodiff::reverse::GradientOutput::ProvenZero => {
+                            self.emitter.emit_zeros(field_ty.shape())
+                        }
+                    };
+                    parts[*field_idx] = Some(part);
                 }
                 // Unused fields receive a zero adjoint.
                 let resolved_parts: Vec<(Register, StableHLOType)> = parts.into_iter()
                     .enumerate()
-                    .map(|(idx, opt)| {
-                        opt.unwrap_or_else(|| {
-                            let field_ty = match &sample_elem_ty {
-                                StableHLOType::Tuple(tys, _) => &tys[idx],
-                                _ => unreachable!(),
-                            };
-                            self.emitter.emit_zeros(field_ty.shape())
-                        })
-                    })
-                    .collect();
+                    .map(|(idx, opt)| opt.ok_or_else(|| {
+                        SheafError::AutodiffMissingGradientOutput {
+                            symbol: format!("scan gradient field {}", idx),
+                        }
+                    }))
+                    .collect::<SheafResult<_>>()?;
                 adj_elem_parts.push(resolved_parts);
             } else {
                 let part = match crate::autodiff::reverse::gradient_output(&body_grad_map, &elem_param)? {
-                    GradientOutput::Computed(grad_sym) => {
+                    crate::autodiff::reverse::GradientOutput::Computed(grad_sym) => {
                         let &(reg, ref ty) = self.bindings.get(grad_sym).ok_or_else(|| {
                             SheafError::AutodiffMissingGradientOutput {
                                 symbol: grad_sym.clone(),
@@ -768,7 +840,7 @@ impl CodeGenerator {
                         })?;
                         (reg, ty.clone())
                     }
-                    GradientOutput::ProvenZero => {
+                    crate::autodiff::reverse::GradientOutput::ProvenZero => {
                         self.emitter.emit_zeros(sample_elem_ty.shape())
                     }
                 };
@@ -852,5 +924,73 @@ impl CodeGenerator {
             &[adj_init_reg, adj_coll_reg],
             &[adj_init_ty, adj_coll_ty],
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::autodiff::reverse::{GradientOutput, reverse_grad};
+
+    #[test]
+    fn scan_field_symbol_avoids_existing_bindings_and_parameters() {
+        let bindings = vec![(
+            BindingPattern::Simple("__scan_elem_field_1".to_string()),
+            CompiledExpr::Float(0.0),
+        )];
+        let symbol = fresh_scan_field_symbol(&bindings, "carry", "elem", 1);
+        assert_eq!(symbol, "__scan_elem_field_1_1");
+
+        let parameter_collision = fresh_scan_field_symbol(
+            &[],
+            "__scan_elem_field_1",
+            "elem",
+            1,
+        );
+        assert_eq!(parameter_collision, "__scan_elem_field_1_1");
+    }
+
+    #[test]
+    fn scan_tuple_unused_field_is_a_proven_zero_output() {
+        let bindings = vec![
+            (
+                "active".to_string(),
+                CompiledExpr::GetTupleElement {
+                    param: "elem".to_string(),
+                    indices: vec![0],
+                },
+            ),
+            (
+                "result".to_string(),
+                CompiledExpr::FunctionCall {
+                    name: "+".to_string(),
+                    args: vec![
+                        CompiledExpr::Symbol("carry".to_string()),
+                        CompiledExpr::Symbol("active".to_string()),
+                    ],
+                    loc: None,
+                },
+            ),
+        ];
+        let wrt = vec![
+            "carry".to_string(),
+            "active".to_string(),
+            "__scan_elem_field_1".to_string(),
+        ];
+        let result = reverse_grad(
+            &bindings,
+            &CompiledExpr::Symbol("result".to_string()),
+            &wrt,
+            &HashMap::new(),
+        ).unwrap();
+
+        assert!(matches!(
+            result.gradient_output("active"),
+            Ok(GradientOutput::Computed(_))
+        ));
+        assert!(matches!(
+            result.gradient_output("__scan_elem_field_1"),
+            Ok(GradientOutput::ProvenZero)
+        ));
     }
 }

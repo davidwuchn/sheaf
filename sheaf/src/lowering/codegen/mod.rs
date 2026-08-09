@@ -18,7 +18,10 @@ use crate::lowering::config::ParamIndexMaps;
 use crate::lowering::stablehlo::{Register, StableHLOEmitter, StableHLOType};
 use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::{SheafError, SheafResult};
-pub(crate) use helpers::{try_flatten_to_constant, TupleLeaf, collect_tuple_leaves, expand_tuple_to_symbols};
+pub(crate) use helpers::{
+    try_flatten_to_constant, TupleLeaf, collect_tuple_references, collect_tuple_type_leaves,
+    expand_tuple_to_symbols,
+};
 use std::collections::HashMap;
 
 /// Recursively flatten tuple types into leaf tensor types.

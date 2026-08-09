@@ -5,9 +5,29 @@
 
 use super::support::{
     inject_tuple_shapes, log_remaining_reduces, log_unresolved_shapes, manifest_hash_matches,
-    outermost_call_name, resolve_leaf_type, update_manifest,
+    outermost_call_name, update_manifest,
 };
 use super::*;
+
+fn leaf_type_at(
+    param_ty: &StableHLOType,
+    indices: &[usize],
+) -> crate::core::error::SheafResult<StableHLOType> {
+    let mut current = param_ty;
+    for &index in indices {
+        let StableHLOType::Tuple(elems, _) = current else {
+            return Err(crate::core::error::SheafError::AutodiffMissingGradientOutput {
+                symbol: format!("gradient leaf at {:?}", indices),
+            });
+        };
+        current = elems.get(index).ok_or_else(|| {
+            crate::core::error::SheafError::AutodiffMissingGradientOutput {
+                symbol: format!("gradient leaf at {:?}", indices),
+            }
+        })?;
+    }
+    Ok(current.clone())
+}
 
 fn preserves_structured_vag_error(error: &crate::core::error::SheafError) -> bool {
     matches!(
@@ -413,7 +433,7 @@ impl JitCompiler {
                     let param_ty = &param_types[idx];
                     match param_ty {
                         StableHLOType::Tuple(..) => {
-                            let leaves = collect_tuple_leaves(&expanded_body, param_name);
+                            let leaves = collect_tuple_type_leaves(param_name, param_ty);
                             if crate::core::config::verbosity() >= 2 {
                                 sheaf_msg!(
                                     "jit: [vag] param '{}': {} tuple leaves",
@@ -452,6 +472,17 @@ impl JitCompiler {
                         };
                         let (reg, ty) = codegen.generate(&gte)?;
                         codegen.bind_symbol(&leaf.symbol, reg, ty);
+                    }
+                    for reference in collect_tuple_references(&inlined_body, param_name) {
+                        if leaves.iter().any(|leaf| leaf.indices == reference.indices) {
+                            continue;
+                        }
+                        let gte = CompiledExpr::GetTupleElement {
+                            param: param_name.clone(),
+                            indices: reference.indices,
+                        };
+                        let (reg, ty) = codegen.generate(&gte)?;
+                        codegen.bind_symbol(&reference.symbol, reg, ty);
                     }
                 }
 
@@ -548,7 +579,7 @@ impl JitCompiler {
                                                 CompiledExpr::Symbol(sym_name.clone())
                                             }
                                             GradientOutput::ProvenZero => {
-                                                let leaf_ty = resolve_leaf_type(param_ty, &leaf.indices);
+                                                let leaf_ty = leaf_type_at(param_ty, &leaf.indices)?;
                                                 zero_gradient_expr(&leaf_ty)
                                             }
                                         };
