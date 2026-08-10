@@ -199,7 +199,7 @@ run_example () {
     if [[ -n "${GROUP_WD[$group]:-}" ]]; then
         workdir="${GROUP_WD[$group]}"
     else
-        workdir="$(mktemp -d -t sheaf-examples-XXXXXX)/$group"
+        workdir="$ROOT_WORK/$group"
         mkdir -p "$workdir"
         GROUP_WD[$group]="$workdir"
 
@@ -226,8 +226,8 @@ run_example () {
                     return
                 fi
                 # Ensure the parent directory in the workdir exists so we
-                # can cp -R with the leaf name
-		local parent_rel
+                # can cp -R with the leaf name.
+                local parent_rel
                 parent_rel="$(dirname "$item")"
                 if [[ "$parent_rel" != "." ]]; then
                     mkdir -p "$workdir/$parent_rel"
@@ -242,10 +242,9 @@ run_example () {
         record_fail "entry not copied into workdir: $entry"
         return
     fi
-    local entry_abs="$workdir/$entry"
-
     # Run with timeout. Redirect to per-example log files.
-    local base_log="$ROOT_LOG/${group}_$(basename "$entry" .shf)"
+    local base_log
+    base_log="$ROOT_LOG/${group}_$(basename "$entry" .shf)"
     local stdout_log="$base_log.stdout"
     local stderr_log="$base_log.stderr"
     : >"$stdout_log"; : >"$stderr_log"
@@ -343,15 +342,42 @@ run_example () {
 }
 
 # main
+ROOT_LOG=""
+ROOT_WORK=""
+TMP_ROOT="${TMPDIR:-/tmp}"
+TMP_ROOT="${TMP_ROOT%/}"
+
+# Invoked by the EXIT trap.
+# shellcheck disable=SC2329
+cleanup () {
+    local status=$?
+    if [[ -n "$ROOT_WORK" ]]; then
+        rm -rf -- "$ROOT_WORK"
+    fi
+    if [[ -n "$ROOT_LOG" && $status -eq 0 ]]; then
+        rm -rf -- "$ROOT_LOG"
+    elif [[ -n "$ROOT_LOG" && -d "$ROOT_LOG" ]]; then
+        printf "\n  logs retained: %s\n" "$ROOT_LOG" >&2
+    fi
+}
+trap cleanup EXIT
+
+if ! ROOT_LOG="$(mktemp -d "$TMP_ROOT/sheaf-examples-logs.XXXXXX")"; then
+    printf "examples-run: failed to create log directory\n" >&2
+    exit 1
+fi
+if ! ROOT_WORK="$(mktemp -d "$TMP_ROOT/sheaf-examples-work.XXXXXX")"; then
+    printf "examples-run: failed to create work directory\n" >&2
+    exit 1
+fi
+
 declare -A GROUP_WD
-ROOT_LOG="$(mktemp -d -t sheaf-examples-logs-XXXXXX)"
-trap 'rm -rf "$ROOT_LOG"' EXIT
 
 printf "%sRun Sheaf examples%s\n" "$C_BOLD" "$C_NC"
 printf "  binary:  %s\n" "$SHEAF_BIN"
 printf "  device:  %s\n" "$DEVICE"
 printf "  manifest:%s%s%s\n" "$C_GREY" "$MANIFEST" "$C_NC"
-printf "  logs:    %s\n" "$ROOT_LOG"
+printf "  logs:    %s (retained on failure)\n" "$ROOT_LOG"
 printf "\n"
 
 pass_count=0
