@@ -16,6 +16,7 @@ use sheaf_compiler::interpreter::value::Value;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::cell::Cell;
+use unicode_width::UnicodeWidthStr;
 
 use crate::doc;
 use crate::pretty;
@@ -344,6 +345,15 @@ fn is_silent_result(val: &Value) -> bool {
     }
 }
 
+fn format_repl_result(val: &Value) -> String {
+    let prefix = match val.repl_type_prefix() {
+        Some(value_type) => format!("=> {} = ", value_type),
+        None => "=> ".to_string(),
+    };
+    let continuation = format!("\n{}", " ".repeat(UnicodeWidthStr::width(prefix.as_str())));
+    format!("{}{}", prefix, val.to_string().replace('\n', &continuation))
+}
+
 pub fn run() {
     eprintln!("Sheaf {} (:h for help)", sheaf_compiler::SHEAF_VERSION);
 
@@ -422,11 +432,7 @@ pub fn run() {
                 match interp.eval(trimmed) {
                     Ok(val) => {
                         if !is_silent_result(&val) {
-                            if let Some(prefix) = val.repl_type_prefix() {
-                                println!("=> {} = {}", prefix, val);
-                            } else {
-                                println!("=> {}", val);
-                            }
+                            println!("{}", format_repl_result(&val));
                         }
                     }
                     Err(e) => eprint!("{}", sheaf_compiler::core::error_format::format_error(&e)),
@@ -577,4 +583,27 @@ fn print_general_help() {
   :show <name>           Show a variable's value or a function's source
   :clear                 Clear screen
   :quit, :q              Exit");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::{ArrayD, IxDyn};
+    use std::sync::Arc;
+
+    #[test]
+    fn repl_prefix_is_applied_to_every_output_line() {
+        let tensor = Value::Tensor {
+            data: Arc::new(ArrayD::from_shape_vec(
+                IxDyn(&[2, 2]),
+                vec![1.0, 2.0, 3.0, 4.0],
+            ).unwrap()),
+            dtype: sheaf_compiler::interpreter::value::Dtype::F32,
+        };
+
+        assert_eq!(
+            format_repl_result(&tensor),
+            "=> tensor f32[2x2] = [[1. 2.]\n                      [3. 4.]]",
+        );
+    }
 }

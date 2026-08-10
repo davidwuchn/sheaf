@@ -11,6 +11,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Dtype {
@@ -414,51 +415,93 @@ fn format_tensor_2d(arr: &ArrayD<f32>, dtype: Dtype) -> String {
     format!("[{}]", rows.join("\n "))
 }
 
+fn indent_continuation_lines(text: &str, columns: usize) -> String {
+    if !text.contains('\n') || columns == 0 {
+        return text.to_string();
+    }
+    let indentation = " ".repeat(columns);
+    text.replace('\n', &format!("\n{}", indentation))
+}
+
+fn format_sequence(items: &[Value], open: char, close: char, quote_strings: bool) -> String {
+    let formatted: Vec<String> = items.iter().map(|value| {
+        if quote_strings && let Value::String(text) = value {
+            format!("'{}'", text)
+        } else {
+            format_value(value)
+        }
+    }).collect();
+
+    if !formatted.iter().any(|item| item.contains('\n')) {
+        return format!("{}{}{}", open, formatted.join(", "), close);
+    }
+
+    let mut result = String::new();
+    result.push(open);
+    for (index, item) in formatted.iter().enumerate() {
+        if index > 0 {
+            result.push_str(",\n ");
+        }
+        result.push_str(&indent_continuation_lines(item, 1));
+    }
+    result.push(close);
+    result
+}
+
+fn format_dict(map: &BTreeMap<String, Value>) -> String {
+    let entries: Vec<(&str, String)> = map.iter()
+        .map(|(key, value)| (key.as_str(), format_value(value)))
+        .collect();
+
+    if !entries.iter().any(|(_, value)| value.contains('\n')) {
+        let pairs: Vec<String> = entries.iter()
+            .map(|(key, value)| format!(":{} {}", key, value))
+            .collect();
+        return format!("{{{}}}", pairs.join(", "));
+    }
+
+    let mut result = String::from("{");
+    for (index, (key, value)) in entries.iter().enumerate() {
+        if index > 0 {
+            result.push_str(",\n ");
+        }
+        let prefix = format!(":{} ", key);
+        result.push_str(&prefix);
+        result.push_str(&indent_continuation_lines(value, 1 + UnicodeWidthStr::width(prefix.as_str())));
+    }
+    result.push('}');
+    result
+}
+
+fn format_value(value: &Value) -> String {
+    match value {
+        Value::Int(n) => format!("{}", n),
+        Value::Float(x) => format_scalar_f32(*x),
+        Value::Bool(true) => "true".to_string(),
+        Value::Bool(false) => "false".to_string(),
+        Value::Nil => "nil".to_string(),
+        Value::String(s) => s.clone(),
+        Value::Keyword(k) => format!(":{}", k),
+        Value::Tensor { data, dtype } => format_tensor_nd(data, *dtype),
+        Value::List(items) => format_sequence(items, '[', ']', true),
+        Value::Tuple(items) => format_sequence(items, '(', ')', false),
+        Value::Dict(map) => format_dict(map),
+        Value::Function { name: Some(n), .. } => format!("<fn:{}>", n),
+        Value::Function { name: None, .. } => "<function>".to_string(),
+        Value::BuiltinFn { name, .. } => format!("<builtin:{}>", name),
+        Value::DeviceBuffer(db) => match db.to_host() {
+            Ok(data) => format_tensor_nd(&data, db.dtype),
+            Err(_) => {
+                let dims: Vec<String> = db.shape.iter().map(|d| d.to_string()).collect();
+                format!("<tensor {:?} [{}] on device>", db.dtype, dims.join("x"))
+            }
+        },
+    }
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Value::Int(n) => write!(f, "{}", n),
-            Value::Float(x) => write!(f, "{}", format_scalar_f32(*x)),
-            Value::Bool(true) => write!(f, "true"),
-            Value::Bool(false) => write!(f, "false"),
-            Value::Nil => write!(f, "nil"),
-            Value::String(s) => write!(f, "{}", s),
-            Value::Keyword(k) => write!(f, ":{}", k),
-            Value::Tensor { data, dtype } => write!(f, "{}", format_tensor_nd(data, *dtype)),
-            Value::List(items) => {
-                let formatted: Vec<String> = items.iter().map(|v| {
-                    match v {
-                        Value::String(s) => format!("'{}'", s),
-                        _ => format!("{}", v),
-                    }
-                }).collect();
-                write!(f, "[{}]", formatted.join(", "))
-            }
-            Value::Tuple(items) => {
-                let formatted: Vec<String> = items.iter().map(|v| format!("{}", v)).collect();
-                write!(f, "({})", formatted.join(", "))
-            }
-            Value::Dict(map) => {
-                let pairs: Vec<String> = map.iter().map(|(k, v)| {
-                    format!(":{} {}", k, v)
-                }).collect();
-                write!(f, "{{{}}}", pairs.join(", "))
-            }
-            Value::Function { name: Some(n), .. } => write!(f, "<fn:{}>", n),
-            Value::Function { name: None, .. } => write!(f, "<function>"),
-            Value::BuiltinFn { name, .. } => write!(f, "<builtin:{}>", name),
-            Value::DeviceBuffer(db) => {
-                match db.to_host() {
-                    Ok(data) => {
-                        write!(f, "{}", format_tensor_nd(&data, db.dtype))
-                    }
-                    Err(_) => {
-                        let dims: Vec<String> = db.shape.iter().map(|d| d.to_string()).collect();
-                        write!(f, "<tensor {:?} [{}] on device>", db.dtype, dims.join("x"))
-                    }
-                }
-            }
-        }
+        f.write_str(&format_value(self))
     }
 }
 
@@ -509,5 +552,44 @@ mod tests {
         assert!(!first.contains("..."), "no col ellipsis expected: {first}");
         // But rows are truncated.
         assert!(s.lines().count() <= 8, "too many lines: {s}");
+    }
+
+    #[test]
+    fn list_aligns_multiline_elements() {
+        let value = Value::List(vec![
+            tensor_f32(vec![2, 2], 1.0),
+            tensor_f32(vec![2, 2], 2.0),
+        ]);
+
+        assert_eq!(
+            value.to_string(),
+            "[[[1. 1.]\n  [1. 1.]],\n [[2. 2.]\n  [2. 2.]]]",
+        );
+    }
+
+    #[test]
+    fn tuple_aligns_multiline_elements() {
+        let value = Value::Tuple(vec![
+            tensor_f32(vec![2, 2], 1.0),
+            tensor_f32(vec![2, 2], 2.0),
+        ]);
+
+        assert_eq!(
+            value.to_string(),
+            "([[1. 1.]\n  [1. 1.]],\n [[2. 2.]\n  [2. 2.]])",
+        );
+    }
+
+    #[test]
+    fn dict_aligns_values_beneath_their_keys() {
+        let mut map = BTreeMap::new();
+        map.insert("a".to_string(), tensor_f32(vec![2, 2], 1.0));
+        map.insert("b".to_string(), tensor_f32(vec![2, 2], 2.0));
+        let value = Value::Dict(map);
+
+        assert_eq!(
+            value.to_string(),
+            "{:a [[1. 1.]\n     [1. 1.]],\n :b [[2. 2.]\n     [2. 2.]]}",
+        );
     }
 }

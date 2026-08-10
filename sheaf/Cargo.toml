@@ -20,6 +20,7 @@ crate-type = ["cdylib", "rlib"]
 serde_json = "1.0"
 getrandom = "0.2"
 rustyline = "14"
+unicode-width = "0.1"
 nvml-wrapper = "0.10"
 libc = "0.2"
 
