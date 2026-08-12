@@ -4,9 +4,8 @@
 //! Reverse-mode autodiff on Administrative Normal Form (ANF).
 //!
 //! Two passes:
-//! 1. `to_anf`: flatten a CompiledExpr tree into a flat Let chain where every
-//!    sub-expression is named.  Symbols, literals and GetTupleElement are "trivial"
-//!    and stay inline; everything else gets a `__anf_N` binding.
+//! 1. `to_anf`: flatten function calls and `let` bindings. Vectors stay inline
+//!    because codegen needs to inspect them.
 //!
 //! 2. `reverse_grad`: walk the ANF bindings in reverse, emitting backward
 //!    bindings that compute adjoint contributions.  Each adjoint is itself a
@@ -16,13 +15,18 @@ use crate::autodiff::replace_symbol;
 use crate::core::error::{SheafError, SheafResult};
 use crate::core::expr::{BindingPattern, CompiledExpr};
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-static ANF_COUNTER: AtomicUsize = AtomicUsize::new(0);
+#[derive(Default)]
+struct AnfNameGenerator {
+    next: usize,
+}
 
-fn fresh_anf_name() -> String {
-    let n = ANF_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("__anf_{}", n)
+impl AnfNameGenerator {
+    fn fresh(&mut self) -> String {
+        let name = format!("__anf_{}", self.next);
+        self.next += 1;
+        name
+    }
 }
 
 fn is_trivial(expr: &CompiledExpr) -> bool {
@@ -40,15 +44,15 @@ fn is_trivial(expr: &CompiledExpr) -> bool {
     )
 }
 
-/// Flatten a `CompiledExpr` tree into ANF: a single `Let` with a flat list of
-/// bindings where every RHS contains only trivial sub-expressions (Symbols,
-/// literals, GetTupleElement).
+/// Flatten function calls and `let` bindings.
 ///
-/// The result body is always a trivial expression (a Symbol referencing the
-/// last binding, or the original expression if it was already trivial).
+/// Vectors stay inline because codegen needs to inspect them. Other unsupported
+/// expressions are assigned a name but are not flattened recursively. Reverse
+/// mode reports an error if a gradient depends on one of them.
 pub fn to_anf(expr: &CompiledExpr) -> CompiledExpr {
     let mut bindings = Vec::new();
-    let body = anf_rec(expr, &mut bindings);
+    let mut names = AnfNameGenerator::default();
+    let body = anf_rec(expr, &mut bindings, &mut names);
     if bindings.is_empty() {
         body
     } else {
@@ -59,21 +63,25 @@ pub fn to_anf(expr: &CompiledExpr) -> CompiledExpr {
     }
 }
 
-/// Recursively convert `expr` to ANF, appending bindings to `out`.
-/// Returns a trivial expression (Symbol or literal) that represents the value.
-fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(BindingPattern, CompiledExpr)>) -> CompiledExpr {
+/// Flatten `expr`, add its bindings to `out`, and return its value.
+fn anf_rec(
+    expr: &CompiledExpr,
+    out: &mut Vec<(BindingPattern, CompiledExpr)>,
+    names: &mut AnfNameGenerator,
+) -> CompiledExpr {
     match expr {
         _ if is_trivial(expr) => expr.clone(),
 
         // FunctionCall: ANF-ify all args, then bind the call
         CompiledExpr::FunctionCall { name, args, loc } => {
-            let anf_args: Vec<CompiledExpr> = args.iter().map(|a| anf_rec(a, out)).collect();
+            let anf_args: Vec<CompiledExpr> =
+                args.iter().map(|arg| anf_rec(arg, out, names)).collect();
             let result = CompiledExpr::FunctionCall {
                 name: name.clone(),
                 args: anf_args,
                 loc: loc.clone(),
             };
-            let sym = fresh_anf_name();
+            let sym = names.fresh();
             out.push((BindingPattern::Simple(sym.clone()), result));
             CompiledExpr::Symbol(sym)
         }
@@ -91,8 +99,8 @@ fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(BindingPattern, CompiledExpr)>) -
                     val = replace_symbol(&val, old, &CompiledExpr::Symbol(new_name.clone()));
                 }
 
-                let anf_val = anf_rec(&val, out);
-                let fresh = fresh_anf_name();
+                let anf_val = anf_rec(&val, out, names);
+                let fresh = names.fresh();
                 out.push((BindingPattern::Simple(fresh.clone()), anf_val));
                 // HashMap::insert overwrites previous entry for same name,
                 // so body/subsequent values always see the LATEST binding.
@@ -115,14 +123,14 @@ fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(BindingPattern, CompiledExpr)>) -
             for (old, new_name) in &rename_map {
                 renamed_body = replace_symbol(&renamed_body, old, &CompiledExpr::Symbol(new_name.clone()));
             }
-            anf_rec(&renamed_body, out)
+            anf_rec(&renamed_body, out, names)
         }
 
         // Do: process all expressions, return the last
         CompiledExpr::Do(exprs) => {
             let mut last = CompiledExpr::Nil;
             for e in exprs {
-                last = anf_rec(e, out);
+                last = anf_rec(e, out, names);
             }
             last
         }
@@ -131,13 +139,14 @@ fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(BindingPattern, CompiledExpr)>) -
         // Vectors are structural (shape specs, etc.), not computational.
         // Binding them to symbols breaks pattern matching in codegen (e.g. reshape).
         CompiledExpr::Vector(elems) => {
-            let anf_elems: Vec<CompiledExpr> = elems.iter().map(|e| anf_rec(e, out)).collect();
+            let anf_elems: Vec<CompiledExpr> =
+                elems.iter().map(|elem| anf_rec(elem, out, names)).collect();
             CompiledExpr::Vector(anf_elems)
         }
 
         // Anything else: bind directly
         other => {
-            let sym = fresh_anf_name();
+            let sym = names.fresh();
             out.push((BindingPattern::Simple(sym.clone()), other.clone()));
             CompiledExpr::Symbol(sym)
         }
@@ -148,11 +157,8 @@ fn anf_rec(expr: &CompiledExpr, out: &mut Vec<(BindingPattern, CompiledExpr)>) -
 // Reverse-mode AD on ANF bindings
 // ---------------------------------------------------------------------------
 
-static GRAD_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-fn fresh_grad_name() -> String {
-    let n = GRAD_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("__grad_{}", n)
+fn fresh_grad_name(bindings: &[(String, CompiledExpr)]) -> String {
+    format!("__grad_{}", bindings.len())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,7 +230,7 @@ pub fn reverse_grad(
         .collect();
 
     if let CompiledExpr::Symbol(s) = anf_body {
-        let seed_name = fresh_grad_name();
+        let seed_name = fresh_grad_name(&backward_bindings);
         backward_bindings.push((seed_name.clone(), CompiledExpr::Float(1.0)));
         adj_names.names.insert(s.clone(), seed_name);
     }
@@ -350,14 +356,14 @@ fn accumulate_named(
 
     match adj_names.names.get(var_name) {
         None => {
-            let grad_name = fresh_grad_name();
+            let grad_name = fresh_grad_name(bindings);
             bindings.push((grad_name.clone(), contribution));
             adj_names.names.insert(var_name.to_string(), grad_name);
         }
         Some(existing) => {
-            let contrib_name = fresh_grad_name();
+            let contrib_name = fresh_grad_name(bindings);
             bindings.push((contrib_name.clone(), contribution));
-            let sum_name = fresh_grad_name();
+            let sum_name = fresh_grad_name(bindings);
             bindings.push((
                 sum_name.clone(),
                 CompiledExpr::FunctionCall {
@@ -1132,7 +1138,7 @@ fn emit_binding(
     bindings: &mut Vec<(String, CompiledExpr)>,
     value: CompiledExpr,
 ) -> String {
-    let name = fresh_grad_name();
+    let name = fresh_grad_name(bindings);
     bindings.push((name.clone(), value));
     name
 }
@@ -1377,6 +1383,48 @@ mod tests {
             error,
             SheafError::AutodiffMissingGradientOutput { symbol } if symbol == "x"
         ));
+    }
+
+    #[test]
+    fn generates_deterministic_anf_names() {
+        let expr = call("exp", vec![symbol("x")]);
+
+        for anf in [to_anf(&expr), to_anf(&expr)] {
+            let CompiledExpr::Let { bindings, body } = anf else {
+                panic!("expected ANF binding");
+            };
+            assert_eq!(bindings.len(), 1);
+            assert_eq!(bindings[0].0.as_simple(), Some("__anf_0"));
+            assert!(matches!(*body, CompiledExpr::Symbol(ref name) if name == "__anf_0"));
+        }
+    }
+
+    #[test]
+    fn generates_deterministic_gradient_names() {
+        let expr = call("exp", vec![symbol("x")]);
+        let bindings = vec![("result".to_string(), expr)];
+        let first = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap();
+        let second = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap();
+
+        assert_eq!(first.backward_bindings.len(), second.backward_bindings.len());
+        for ((first_name, _), (second_name, _)) in first
+            .backward_bindings
+            .iter()
+            .zip(&second.backward_bindings)
+        {
+            assert_eq!(first_name, second_name);
+        }
+        assert_eq!(first.gradients, second.gradients);
     }
 
     #[test]
