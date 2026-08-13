@@ -398,8 +398,6 @@ impl JitCompiler {
             let return_type = sig.return_type.clone();
             let body_clone = body.clone();
             let name_clone = name.clone();
-            let constants_clone = constants.clone();
-            let param_index_maps_clone = param_index_maps.clone();
             let scalar_values_clone = scalar_param_values.clone();
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 let mut codegen = CodeGenerator::with_function_params(
@@ -409,8 +407,6 @@ impl JitCompiler {
                 );
                 codegen.set_tuple_key_layouts(tuple_key_layouts);
                 codegen.set_idx_to_key(idx_to_key);
-                codegen.set_scalar_constants(constants_clone);
-                codegen.set_param_index_maps(param_index_maps_clone);
                 codegen.set_scalar_param_values(&scalar_values_clone);
                 codegen.emit_func_declaration(&name_clone, &body_clone, &param_types, &return_type)
             }))

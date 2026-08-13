@@ -14,7 +14,6 @@ mod tensor_builtins;
 #[cfg(test)]
 mod tests;
 
-use crate::lowering::config::ParamIndexMaps;
 use crate::lowering::stablehlo::{Register, StableHLOEmitter, StableHLOType};
 use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::{SheafError, SheafResult};
@@ -57,10 +56,6 @@ pub struct CodeGenerator {
     idx_to_key: HashMap<(String, usize), String>,
     /// Layout keys associated with registers selected from a tuple.
     layout_key_map: HashMap<Register, String>,
-    /// Runtime scalar constants needed during code generation.
-    scalar_constants: HashMap<(String, Vec<usize>), f64>,
-    /// Dict-to-tuple indices used while lowering inlined calls.
-    param_index_maps: ParamIndexMaps,
 }
 
 impl CodeGenerator {
@@ -73,8 +68,6 @@ impl CodeGenerator {
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
-            scalar_constants: HashMap::new(),
-            param_index_maps: Vec::new(),
         }
     }
 
@@ -87,8 +80,6 @@ impl CodeGenerator {
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
-            scalar_constants: HashMap::new(),
-            param_index_maps: Vec::new(),
         }
     }
 
@@ -115,8 +106,6 @@ impl CodeGenerator {
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
-            scalar_constants: HashMap::new(),
-            param_index_maps: Vec::new(),
         }
     }
 
@@ -132,10 +121,6 @@ impl CodeGenerator {
         self.idx_to_key = map;
     }
 
-    pub fn set_scalar_constants(&mut self, constants: HashMap<(String, Vec<usize>), f64>) {
-        self.scalar_constants = constants;
-    }
-
     /// Records scalar parameters needed for shape-dependent operations.
     pub fn set_scalar_param_values(&mut self, values: &[(String, f64)]) {
         for (name, value) in values {
@@ -143,10 +128,6 @@ impl CodeGenerator {
                 self.emitter.set_known_scalar(reg, *value);
             }
         }
-    }
-
-    pub fn set_param_index_maps(&mut self, maps: ParamIndexMaps) {
-        self.param_index_maps = maps;
     }
 
     /// Binds a symbol to an existing SSA register.
