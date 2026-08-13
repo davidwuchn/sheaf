@@ -65,7 +65,6 @@ use super::toolchain::{ensure_toolchain, find_iree_compile, IREE_COMPILER_VERSIO
 use crate::autodiff::{
     reverse::{GradientOutput, ReverseGradResult, reverse_grad, to_anf},
     simplify,
-    transforms::cse,
 };
 use crate::core::expr::{CompiledExpr, FunctionDef};
 use crate::lowering::codegen::{

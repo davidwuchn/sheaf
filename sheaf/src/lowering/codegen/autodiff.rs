@@ -334,8 +334,8 @@ impl CodeGenerator {
     let backward_bindings: Vec<(String, CompiledExpr)> = backward_bindings
             .into_iter()
             .map(|(name, expr)| {
-                use crate::autodiff::{simplify, transforms::cse};
-                (name, cse(simplify(expr)))
+                use crate::autodiff::simplify;
+                (name, simplify(expr))
             })
             .collect();
 

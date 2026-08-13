@@ -514,10 +514,9 @@ impl JitCompiler {
                     gradients: grad_sym_map,
                 } = reverse_grad(&anf_bindings_str, &anf_body, &all_wrt_symbols, &shape_map)?;
 
-                // Apply AST-level optimizations to backward bindings
                 let backward_bindings: Vec<(String, CompiledExpr)> = backward_bindings
                     .into_iter()
-                    .map(|(name, expr)| (name, cse(simplify(expr))))
+                    .map(|(name, expr)| (name, simplify(expr)))
                     .collect();
 
                 if crate::core::config::verbosity() >= 2 {
