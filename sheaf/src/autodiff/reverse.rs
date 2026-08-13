@@ -216,19 +216,6 @@ pub fn reverse_grad(
     let mut adj_names = AdjointState::default();
     let mut backward_bindings: Vec<(String, CompiledExpr)> = Vec::new();
 
-    let fwd_lookup: HashMap<String, String> = anf_bindings.iter()
-        .filter_map(|(name, expr)| {
-            match expr {
-                CompiledExpr::FunctionCall { name: fn_name, .. }
-                    if matches!(fn_name.as_str(), "mean" | "softmax" | "tanh" | "sigmoid" | "exp" | "log" | "sqrt" | "sin" | "cos" | "tan") =>
-                {
-                    Some((format!("{:?}", expr), name.clone()))
-                }
-                _ => None,
-            }
-        })
-        .collect();
-
     if let CompiledExpr::Symbol(s) = anf_body {
         let seed_name = fresh_grad_name(&backward_bindings);
         backward_bindings.push((seed_name.clone(), CompiledExpr::Float(1.0)));
@@ -245,7 +232,6 @@ pub fn reverse_grad(
         let context = ReverseContext {
             shapes,
             fwd_name: name,
-            fwd_lookup: &fwd_lookup,
             dependencies: &dependencies,
         };
         distribute_adjoint_named(
@@ -481,7 +467,6 @@ fn anf_form_name(expr: &CompiledExpr) -> &'static str {
 struct ReverseContext<'a> {
     shapes: &'a HashMap<String, Vec<i64>>,
     fwd_name: &'a str,
-    fwd_lookup: &'a HashMap<String, String>,
     dependencies: &'a HashMap<String, bool>,
 }
 
@@ -536,7 +521,6 @@ fn distribute_fn_adjoint_named(
 ) -> SheafResult<()> {
     let shapes = context.shapes;
     let fwd_name = context.fwd_name;
-    let fwd_lookup = context.fwd_lookup;
     let dependencies = context.dependencies;
     match name {
         // stop-gradient: forward is identity, but no gradient flows backward.
@@ -836,14 +820,8 @@ fn distribute_fn_adjoint_named(
                     mean_args.push(CompiledExpr::Integer(ax));
                 }
                 mean_args.push(CompiledExpr::Keyword("keepdims".to_string()));
-        let lookup_key = format!("{:?}", call("mean", mean_args.clone()));
-        let m = match fwd_lookup.get(&lookup_key) {
-                    Some(sym_name) => sym_name.clone(),
-                    None => {
-                        mean_args.push(CompiledExpr::Boolean(true));
-                        emit_binding(bindings, call("mean", mean_args))
-                    }
-                };
+                mean_args.push(CompiledExpr::Boolean(true));
+                let m = emit_binding(bindings, call("mean", mean_args));
                 let diff = emit_binding(bindings, call("-", vec![args[0].clone(), sym(&m)]));
                 let ndim = input_shape.len();
                 let n: i64 = if let Some(ax) = axis {
@@ -886,11 +864,7 @@ fn distribute_fn_adjoint_named(
         }
 
         "sigmoid" => {
-            let fwd_key = format!("{:?}", call("sigmoid", vec![args[0].clone()]));
-            let sig = match fwd_lookup.get(&fwd_key) {
-                Some(fwd_sym) => fwd_sym.clone(),
-                None => emit_binding(bindings, call("sigmoid", vec![args[0].clone()])),
-            };
+            let sig = fwd_name.to_string();
             let one_minus_sig = emit_binding(bindings, call("-", vec![float(1.0), sym(&sig)]));
             let local = emit_binding(bindings, call("*", vec![sym(&sig), sym(&one_minus_sig)]));
             let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&local)]));
@@ -898,11 +872,7 @@ fn distribute_fn_adjoint_named(
         }
 
         "exp" => {
-            let fwd_key = format!("{:?}", call("exp", vec![args[0].clone()]));
-            let ex = match fwd_lookup.get(&fwd_key) {
-                Some(fwd_sym) => fwd_sym.clone(),
-                None => emit_binding(bindings, call("exp", vec![args[0].clone()])),
-            };
+            let ex = fwd_name.to_string();
             let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&ex)]));
             acc_arg(&args[0], sym(&contrib), adj_names, bindings);
         }
@@ -922,11 +892,7 @@ fn distribute_fn_adjoint_named(
         }
 
         "tanh" => {
-            let fwd_key = format!("{:?}", call("tanh", vec![args[0].clone()]));
-            let t = match fwd_lookup.get(&fwd_key) {
-                Some(fwd_sym) => fwd_sym.clone(),
-                None => emit_binding(bindings, call("tanh", vec![args[0].clone()])),
-            };
+            let t = fwd_name.to_string();
             let t2 = emit_binding(bindings, call("*", vec![sym(&t), sym(&t)]));
             let local = emit_binding(bindings, call("-", vec![float(1.0), sym(&t2)]));
             let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&local)]));
@@ -950,11 +916,7 @@ fn distribute_fn_adjoint_named(
 
         "tan" => {
             // d/dx tan(x) = 1 + tan(x)^2
-            let fwd_key = format!("{:?}", call("tan", vec![args[0].clone()]));
-            let t = match fwd_lookup.get(&fwd_key) {
-                Some(fwd_sym) => fwd_sym.clone(),
-                None => emit_binding(bindings, call("tan", vec![args[0].clone()])),
-            };
+            let t = fwd_name.to_string();
             let t2 = emit_binding(bindings, call("*", vec![sym(&t), sym(&t)]));
             let local = emit_binding(bindings, call("+", vec![float(1.0), sym(&t2)]));
             let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&local)]));
@@ -1425,6 +1387,27 @@ mod tests {
             assert_eq!(first_name, second_name);
         }
         assert_eq!(first.gradients, second.gradients);
+    }
+
+    #[test]
+    fn reuses_the_current_forward_result() {
+        let bindings = vec![("result".to_string(), call("exp", vec![symbol("x")]))];
+        let result = reverse_grad(
+            &bindings,
+            &symbol("result"),
+            &["x".to_string()],
+            &HashMap::new(),
+        ).unwrap();
+
+        assert!(result.backward_bindings.iter().any(|(_, expr)| {
+            let CompiledExpr::FunctionCall { name, args, .. } = expr else {
+                return false;
+            };
+            name == "*"
+                && args.iter().any(|arg| {
+                    matches!(arg, CompiledExpr::Symbol(symbol) if symbol == "result")
+                })
+        }));
     }
 
     #[test]
