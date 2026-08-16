@@ -205,9 +205,7 @@ impl JitCompiler {
             known_types.push((param_name.clone(), ty));
         }
 
-        let dummy_compiler = crate::core::expr::CompilerContext::new();
         let mut sig = match infer_function_signature_with_known(
-            &dummy_compiler,
             &all_param_names,
             &body,
             &known_types,

@@ -202,7 +202,6 @@ impl SpecialForm for DefnForm {
                 // Infer function signature with known types for typed params
                 let mut signature =
                     crate::core::inference::infer_function_signature_with_known(
-                        compiler,
                         &params,
                         &body_compiled,
                         &known_param_types,

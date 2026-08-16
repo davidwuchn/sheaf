@@ -4,7 +4,7 @@
 //! Type inference for function signatures
 
 use crate::lowering::stablehlo::StableHLOType;
-use crate::core::expr::{BindingPattern, CompiledExpr, CompilerContext};
+use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::SheafResult;
 
 /// Recursive value structure layout for reconstructing dicts/lists from flat tuples.
@@ -137,16 +137,14 @@ pub fn reconstruct_jit_result(
 /// `known_param_types`: pre-known types for specific params (e.g. from tracing),
 /// overrides inference. Maps param name -> StableHLOType.
 pub fn infer_function_signature(
-    compiler: &CompilerContext,
     params: &[String],
     body_expr: &CompiledExpr,
 ) -> SheafResult<FunctionSignature> {
-    infer_function_signature_with_known(compiler, params, body_expr, &[])
+    infer_function_signature_with_known(params, body_expr, &[])
 }
 
 /// Like `infer_function_signature` but accepts pre-known param types.
 pub fn infer_function_signature_with_known(
-    _compiler: &CompilerContext,
     params: &[String],
     body_expr: &CompiledExpr,
     known: &[(String, StableHLOType)],
@@ -771,7 +769,6 @@ mod tests {
 
     #[test]
     fn test_infer_signature() {
-        let compiler = CompilerContext::new();
         let params = vec!["x".to_string(), "y".to_string()];
 
         // Body: (+ x y) - returns scalar
@@ -783,7 +780,7 @@ mod tests {
             ],
         );
 
-        let sig = infer_function_signature(&compiler, &params, &body).unwrap();
+        let sig = infer_function_signature(&params, &body).unwrap();
 
         assert_eq!(sig.param_types.len(), 2);
         assert_eq!(sig.param_types[0], StableHLOType::scalar_f32());
@@ -793,7 +790,6 @@ mod tests {
 
     #[test]
     fn test_infer_matmul_signature() {
-        let compiler = CompilerContext::new();
         let params = vec!["A".to_string(), "B".to_string()];
 
         // Body: (@ A B) where A is 2x3, B is 3x4 -> should return 2x4
@@ -832,7 +828,7 @@ mod tests {
         ]);
 
         let body = make_compiled_call("@", vec![a_matrix, b_matrix]);
-        let sig = infer_function_signature(&compiler, &params, &body).unwrap();
+        let sig = infer_function_signature(&params, &body).unwrap();
 
         // Return should be 2x4
         assert_eq!(sig.return_type, StableHLOType::f32_tensor(vec![2, 4]));
