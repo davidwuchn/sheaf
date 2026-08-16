@@ -178,13 +178,39 @@ impl JitCompiler {
             cache_key,
         } = request;
         let name = &func_def.name;
-        let mut body = func_def.body_compiled.clone()?;
-
-        // The caller computed this key before lookup. Reuse that exact value
-        // so lookup, compilation and insertion cannot diverge.
         let module_name = module_name_for(name, cache_key);
 
-        // Type inference from runtime args
+        let prepared = self.prepare(func_def, args)?;
+        let lowered = self.lower(func_def, registry, prepared)?;
+        let emitted = self.emit_stablehlo(
+            func_def,
+            args,
+            registry,
+            &module_name,
+            lowered,
+        )?;
+
+        if !self.compile_and_load_module(
+            &iree_compile,
+            name,
+            &emitted.mlir,
+            target_backend,
+            shared_session,
+        ) {
+            return None;
+        }
+
+        Some(emitted.signature)
+    }
+
+    /// Infers the signature and lowers runtime argument layouts.
+    fn prepare(
+        &mut self,
+        func_def: &FunctionDef,
+        args: &[Value],
+    ) -> Option<PreparedFunction> {
+        let name = &func_def.name;
+        let mut body = func_def.body_compiled.clone()?;
         let mut known_types: Vec<(String, StableHLOType)> = Vec::new();
         let mut param_index_maps = ParamIndexMaps::new();
         let mut constants: HashMap<(String, Vec<usize>), f64> = HashMap::new();
@@ -206,122 +232,77 @@ impl JitCompiler {
                 body = lower_get_calls(&body, param_name, &imap);
                 param_index_maps.push((param_name.clone(), imap));
             }
-
             known_types.push((param_name.clone(), ty));
         }
 
-        // Signature inference
         let dummy_compiler = crate::core::expr::CompilerContext::new();
-        let mut sig = match infer_function_signature_with_known(
+        let mut signature = match infer_function_signature_with_known(
             &dummy_compiler,
             &func_def.params,
             &body,
             &known_types,
         ) {
-            Ok(s) => s,
+            Ok(signature) => signature,
             Err(e) => {
                 self.jit_fail(name, &format!("signature inference: {}", e));
                 return None;
             }
         };
 
-        // Override param types for dict/tuple params
         for (param_name, ty) in &known_types {
-            if let Some(idx) = func_def.params.iter().position(|p| p == param_name) {
-                sig.param_types[idx] = ty.clone();
+            if let Some(index) = func_def.params.iter().position(|param| param == param_name) {
+                signature.param_types[index] = ty.clone();
             }
         }
 
-        // -vv: log signature and lowered params
-        if crate::core::config::verbosity() >= 2 {
-            for (pname, pty) in func_def.params.iter().zip(sig.param_types.iter()) {
-                if let Some((_, imap)) = param_index_maps.iter().find(|(n, _)| n == pname) {
-                    // Collect top-level fields with their types from the tuple
-                    let mut top_fields: BTreeMap<usize, (String, String)> = BTreeMap::new();
-                    for (path, indices) in imap.iter() {
-                        if path.len() == 1 {
-                            // Leaf field: resolve type from tuple
-                            let ty_str = if let StableHLOType::Tuple(elems, _) = pty {
-                                if let Some(t) = elems.get(indices[0]) {
-                                    t.to_mlir()
-                                } else {
-                                    "?".to_string()
-                                }
-                            } else {
-                                "?".to_string()
-                            };
-                            top_fields
-                                .entry(indices[0])
-                                .or_insert((path[0].clone(), ty_str));
-                        } else {
-                            top_fields.entry(indices[0]).or_insert_with(|| {
-                                // Nested field: show as tuple<...>
-                                let ty_str = if let StableHLOType::Tuple(elems, _) = pty {
-                                    if let Some(StableHLOType::Tuple(sub, _)) = elems.get(indices[0]) {
-                                        format!("tuple<...> ({} fields)", sub.len())
-                                    } else {
-                                        "tuple<...>".to_string()
-                                    }
-                                } else {
-                                    "tuple<...>".to_string()
-                                };
-                                (path[0].clone(), ty_str)
-                            });
-                        }
-                    }
-                    for (key, ty_str) in top_fields.values() {
-                        sheaf_msg!("jit: {} | {}.{}: {}", name, pname, key, ty_str);
-                    }
-                } else {
-                    sheaf_msg!("jit: {} | {}: {}", name, pname, pty.to_mlir());
-                }
-            }
-            sheaf_msg!("jit: {} | return: {}", name, sig.return_type.to_mlir());
-        }
+        log_inferred_signature(name, &func_def.params, &signature, &param_index_maps);
+        capture_argument_layouts(args, &mut signature);
 
-        // Capture value layouts for dict/tuple args (for return value reconstruction)
-        {
-            use crate::core::inference::ValueLayout;
-            let mut seen_types = std::collections::HashSet::new();
-            for (arg_val, ty) in args.iter().zip(sig.param_types.iter()) {
-                let layout = ValueLayout::from_value(arg_val);
-                if !matches!(layout, ValueLayout::Leaf) {
-                    let type_key = format!("{:?}", ty);
-                    if seen_types.insert(type_key) {
-                        sig.arg_type_layouts.push((ty.clone(), layout));
-                    }
-                }
-            }
-        }
+        Some(PreparedFunction {
+            body,
+            signature,
+            known_types,
+            param_index_maps,
+            constants,
+        })
+    }
 
-        // Inline user-defined function calls
+    /// Applies call inlining and all shape / tuple-dependent lowerings.
+    fn lower(
+        &mut self,
+        func_def: &FunctionDef,
+        registry: &HashMap<String, FunctionDef>,
+        prepared: PreparedFunction,
+    ) -> Option<LoweredFunction> {
+        let PreparedFunction {
+            mut body,
+            signature,
+            known_types,
+            param_index_maps,
+            constants,
+        } = prepared;
+
         body = crate::autodiff::inline_function_calls(&body, registry);
-
-        // Post-inline: re-lower dict access from inlined bodies
         for (param_name, index_map) in &param_index_maps {
             body = lower_get_calls(&body, param_name, index_map);
         }
         body = lower_inlined_gets(&body, &param_index_maps);
 
-        // Compute param_shapes (needed by both preprocess_vag_lambda and resolve_static_constants)
         let param_shapes: HashMap<String, Vec<i64>> = func_def
             .params
             .iter()
-            .zip(sig.param_types.iter())
-            .filter_map(|(p, ty)| {
+            .zip(signature.param_types.iter())
+            .filter_map(|(param, ty)| {
                 let shape = ty.shape();
                 if shape.is_empty() {
                     None
                 } else {
-                    Some((p.clone(), shape.to_vec()))
+                    Some((param.clone(), shape.to_vec()))
                 }
             })
             .collect();
-
-        // Only shape-dependent scalars become compile-time constants.
         let filtered_constants = filter_constants_for_shape_positions(&constants, &body);
 
-        // Resolve nested VAG lambdas before the enclosing body.
         let arity_err: std::cell::Cell<Option<SheafError>> = std::cell::Cell::new(None);
         let preprocess_context = VagPreprocessContext {
             registry,
@@ -333,145 +314,113 @@ impl JitCompiler {
         };
         body = self.preprocess_vag_lambda(&body, &preprocess_context);
         if let Some(err) = arity_err.into_inner() {
-            self.jit_fail(name, &err.short_message());
+            self.jit_fail(&func_def.name, &err.short_message());
             return None;
         }
 
         body = resolve_static_constants(&body, &filtered_constants, &param_shapes, false);
-
         body = match crate::lowering::transforms::lower_tuples_and_destructuring(
             body,
             &param_shapes,
         ) {
-            Ok(b) => b,
+            Ok(body) => body,
             Err(e) => {
-                self.jit_fail(name, &e.short_message());
+                self.jit_fail(&func_def.name, &e.short_message());
                 return None;
             }
         };
 
-        // Build key layouts for codegen
-        let mut tuple_key_layouts: HashMap<String, BTreeMap<String, usize>> = HashMap::new();
-        let mut idx_to_key: HashMap<(String, usize), String> = HashMap::new();
-        for (param_name, index_map) in &param_index_maps {
-            for (key_path, indices) in index_map {
-                for depth in 0..key_path.len() {
-                    let parent = if depth == 0 {
-                        param_name.clone()
-                    } else {
-                        key_path[depth - 1].clone()
-                    };
-                    let child = &key_path[depth];
-                    let idx = indices[depth];
-                    tuple_key_layouts
-                        .entry(parent.clone())
-                        .or_default()
-                        .entry(child.clone())
-                        .or_insert(idx);
-                    idx_to_key
-                        .entry((parent, idx))
-                        .or_insert_with(|| child.clone());
-                }
-            }
-        }
-        propagate_let_layouts(&body, &idx_to_key, &mut tuple_key_layouts);
+        Some(LoweredFunction {
+            body,
+            signature,
+            param_index_maps,
+            filtered_constants,
+        })
+    }
 
-        // Collect scalar param values for constant propagation in codegen.
-        // Scalar f32 params (e.g. top-k=40, temp=0.8) get their values recorded
-        // so shape-critical ops (top_k slice sizes) can resolve K at compile time.
-        let scalar_param_values: Vec<(String, f64)> = func_def
-            .params
-            .iter()
-            .zip(args.iter())
-            .filter_map(|(name, val)| match val {
-                Value::Float(f) => Some((name.clone(), *f as f64)),
-                Value::Int(n) => Some((name.clone(), *n as f64)),
-                _ => None,
-            })
-            .collect();
+    /// Emits one StableHLO declaration and wraps it in its namespaced module.
+    fn emit_stablehlo(
+        &mut self,
+        func_def: &FunctionDef,
+        args: &[Value],
+        registry: &HashMap<String, FunctionDef>,
+        module_name: &str,
+        lowered: LoweredFunction,
+    ) -> Option<EmittedFunction> {
+        let LoweredFunction {
+            body,
+            mut signature,
+            param_index_maps,
+            filtered_constants,
+        } = lowered;
+        let metadata = prepare_codegen_metadata(func_def, args, &body, &param_index_maps);
 
-        // Convert codegen panics into JIT compilation failures.
-        let codegen_result = {
-            let params_clone = func_def.params.clone();
-            let param_types = sig.param_types.clone();
-            let return_type = sig.return_type.clone();
-            let body_clone = body.clone();
-            let name_clone = name.clone();
-            let scalar_values_clone = scalar_param_values.clone();
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                let mut codegen = CodeGenerator::with_function_params(
-                    registry,
-                    &params_clone,
-                    &param_types,
-                );
-                codegen.set_tuple_key_layouts(tuple_key_layouts);
-                codegen.set_idx_to_key(idx_to_key);
-                codegen.set_scalar_param_values(&scalar_values_clone);
-                codegen.emit_func_declaration(&name_clone, &body_clone, &param_types, &return_type)
-            }))
-        };
+        let codegen_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut codegen = CodeGenerator::with_function_params(
+                registry,
+                &func_def.params,
+                &signature.param_types,
+            );
+            codegen.set_tuple_key_layouts(metadata.tuple_key_layouts);
+            codegen.set_idx_to_key(metadata.idx_to_key);
+            codegen.set_scalar_param_values(&metadata.scalar_param_values);
+            codegen.emit_func_declaration(
+                &func_def.name,
+                &body,
+                &signature.param_types,
+                &signature.return_type,
+            )
+        }));
 
-        let (mlir_decl, actual_return_ty) = match codegen_result {
+        let (declaration, actual_return_ty) = match codegen_result {
             Ok(Ok(result)) => result,
             Ok(Err(e)) => {
-                self.jit_fail(name, &format!("codegen: {}", e));
+                self.jit_fail(&func_def.name, &format!("codegen: {}", e));
                 return None;
             }
             Err(_) => {
-                self.jit_fail(name, "codegen: internal panic");
+                self.jit_fail(&func_def.name, "codegen: internal panic");
                 return None;
             }
         };
-
-        sig.return_type = actual_return_ty;
+        signature.return_type = actual_return_ty;
 
         if crate::core::config::verbosity() >= 2 {
             sheaf_msg!(
                 "jit: {} | codegen return: {}",
-                name,
-                sig.return_type.to_mlir()
+                func_def.name,
+                signature.return_type.to_mlir()
             );
             sheaf_msg!(
                 "jit: {} | return_dict_keys: {:?}",
-                name,
-                sig.return_dict_keys
+                func_def.name,
+                signature.return_dict_keys
             );
         }
 
-        // Register layout for return type (may differ from param type due to
-        // scalar promotion, e.g. ScalarI64->scalar_f32 after adam-step)
-        if let StableHLOType::Tuple(ret_elems, ret_keys) = &sig.return_type {
-            // Only match return layout to a param layout if the return type already
-            // has dict keys AND those keys match a param layout's keys.
-            // A plain tuple (ret_keys == None) or mismatched keys must NOT inherit
-            // dict structure from an unrelated param.
-            if ret_keys.is_some()
-                && !sig
-                    .arg_type_layouts
-                    .iter()
-                    .any(|(t, _)| t == &sig.return_type)
-            {
-                for (t, layout) in sig.arg_type_layouts.clone() {
-                    if let StableHLOType::Tuple(param_elems, param_keys) = &t
-                        && param_elems.len() == ret_elems.len() && param_keys == ret_keys {
-                            sig.arg_type_layouts.push((sig.return_type.clone(), layout));
-                            break;
-                        }
-                }
-            }
-        }
-
-        // Emit MLIR module. The module is namespaced (`module @<module_name> { ... }`)
-        // so multiple compilations of the same logical function for distinct
-        // shapes can coexist in the single shared `IreeSession` (each loaded
-        // under a distinct name).
-        let mlir = StableHLOEmitter::emit_module_named(Some(&module_name), &[mlir_decl]);
-
+        register_return_layout(&mut signature);
+        let mlir = assemble_stablehlo_module(module_name, declaration);
         if crate::core::config::verbosity() >= 2 {
-            sheaf_msg!("jit: {} | MLIR {} lines", name, mlir.lines().count());
+            sheaf_msg!(
+                "jit: {} | MLIR {} lines",
+                func_def.name,
+                mlir.lines().count()
+            );
         }
 
-        // Content hash for staleness check
+        signature.captured_scalars = filtered_constants;
+        Some(EmittedFunction { signature, mlir })
+    }
+
+    /// Reuses or compiles a VMFB and appends it to the shared runtime session.
+    fn compile_and_load_module(
+        &mut self,
+        iree_compile: &str,
+        name: &str,
+        mlir: &str,
+        target_backend: &str,
+        shared_session: &std::sync::Arc<crate::runtime::iree_session::IreeSession>,
+    ) -> bool {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         mlir.hash(&mut hasher);
@@ -483,60 +432,217 @@ impl JitCompiler {
         let safe_name = name.replace('?', "_q").replace('!', "_b");
         let backend_suffix = target_backend.replace('-', "_");
         let cached_vmfb = cache_dir.join(format!("{}.{}.vmfb", safe_name, backend_suffix));
-        // Check manifest for staleness (-vv forces recompile for full debug output)
         let force_recompile = crate::core::config::verbosity() >= 2;
         let vmfb_data = if !force_recompile
             && cached_vmfb.exists()
             && manifest_hash_matches(&cache_dir, name, &content_hash)
         {
             match std::fs::read(&cached_vmfb) {
-                Ok(d) => {
+                Ok(data) => {
                     if crate::core::config::verbosity() >= 2 {
                         sheaf_msg!(
                             "jit: {} (cached, {}KB, {})",
                             name,
-                            d.len() / 1024,
+                            data.len() / 1024,
                             target_backend
                         );
                     } else if crate::core::config::verbosity() >= 1 {
                         sheaf_msg!("jit: {} (cached)", name);
                     }
-                    d
+                    data
                 }
                 Err(_) => {
                     self.jit_fail(name, "failed to read cached compilation");
-                    return None;
+                    return false;
                 }
             }
         } else {
             JIT_EXTERNAL_COMPILATIONS.fetch_add(1, Ordering::Relaxed);
-            let data = match self.run_iree_compile(&iree_compile, name, &mlir, target_backend) {
-                Some(d) => d,
+            let data = match self.run_iree_compile(iree_compile, name, mlir, target_backend) {
+                Some(data) => data,
                 None => {
                     self.jit_fail(name, "iree-compile failed on all backends");
-                    return None;
+                    return false;
                 }
             };
-
-            // Cache: named VMFB + manifest entry
             let _ = std::fs::create_dir_all(&cache_dir);
             let _ = std::fs::write(&cached_vmfb, &data);
             update_manifest(&cache_dir, name, &content_hash);
-
             data
         };
 
-        // Modules are appended to the process-wide session.
         JIT_MODULE_LOADS.fetch_add(1, Ordering::Relaxed);
         if let Err(e) = shared_session.load_vmfb(vmfb_data) {
             let _ = std::fs::remove_file(&cached_vmfb);
             self.jit_fail(name, &format!("JIT load: {}", e));
-            return None;
+            return false;
         }
-
-        // Populate captured_scalars so the dispatcher knows which scalars were baked.
-        sig.captured_scalars = filtered_constants.clone();
-
-        Some(sig)
+        true
     }
+}
+
+struct PreparedFunction {
+    body: CompiledExpr,
+    signature: FunctionSignature,
+    known_types: Vec<(String, StableHLOType)>,
+    param_index_maps: ParamIndexMaps,
+    constants: HashMap<(String, Vec<usize>), f64>,
+}
+
+struct LoweredFunction {
+    body: CompiledExpr,
+    signature: FunctionSignature,
+    param_index_maps: ParamIndexMaps,
+    filtered_constants: HashMap<(String, Vec<usize>), f64>,
+}
+
+struct CodegenMetadata {
+    tuple_key_layouts: HashMap<String, BTreeMap<String, usize>>,
+    idx_to_key: HashMap<(String, usize), String>,
+    scalar_param_values: Vec<(String, f64)>,
+}
+
+struct EmittedFunction {
+    signature: FunctionSignature,
+    mlir: String,
+}
+
+fn log_inferred_signature(
+    name: &str,
+    params: &[String],
+    signature: &FunctionSignature,
+    param_index_maps: &ParamIndexMaps,
+) {
+    if crate::core::config::verbosity() < 2 {
+        return;
+    }
+    for (param_name, param_ty) in params.iter().zip(signature.param_types.iter()) {
+        if let Some((_, index_map)) = param_index_maps.iter().find(|(name, _)| name == param_name) {
+            let mut top_fields: BTreeMap<usize, (String, String)> = BTreeMap::new();
+            for (path, indices) in index_map {
+                if path.len() == 1 {
+                    let ty = if let StableHLOType::Tuple(elements, _) = param_ty {
+                        elements
+                            .get(indices[0])
+                            .map(StableHLOType::to_mlir)
+                            .unwrap_or_else(|| "?".to_string())
+                    } else {
+                        "?".to_string()
+                    };
+                    top_fields.entry(indices[0]).or_insert((path[0].clone(), ty));
+                } else {
+                    top_fields.entry(indices[0]).or_insert_with(|| {
+                        let ty = if let StableHLOType::Tuple(elements, _) = param_ty {
+                            if let Some(StableHLOType::Tuple(sub, _)) = elements.get(indices[0]) {
+                                format!("tuple<...> ({} fields)", sub.len())
+                            } else {
+                                "tuple<...>".to_string()
+                            }
+                        } else {
+                            "tuple<...>".to_string()
+                        };
+                        (path[0].clone(), ty)
+                    });
+                }
+            }
+            for (key, ty) in top_fields.values() {
+                sheaf_msg!("jit: {} | {}.{}: {}", name, param_name, key, ty);
+            }
+        } else {
+            sheaf_msg!("jit: {} | {}: {}", name, param_name, param_ty.to_mlir());
+        }
+    }
+    sheaf_msg!("jit: {} | return: {}", name, signature.return_type.to_mlir());
+}
+
+fn capture_argument_layouts(args: &[Value], signature: &mut FunctionSignature) {
+    use crate::core::inference::ValueLayout;
+    let mut seen_types = std::collections::HashSet::new();
+    for (arg, ty) in args.iter().zip(signature.param_types.iter()) {
+        let layout = ValueLayout::from_value(arg);
+        if !matches!(layout, ValueLayout::Leaf) {
+            let type_key = format!("{:?}", ty);
+            if seen_types.insert(type_key) {
+                signature.arg_type_layouts.push((ty.clone(), layout));
+            }
+        }
+    }
+}
+
+fn prepare_codegen_metadata(
+    func_def: &FunctionDef,
+    args: &[Value],
+    body: &CompiledExpr,
+    param_index_maps: &ParamIndexMaps,
+) -> CodegenMetadata {
+    let mut tuple_key_layouts: HashMap<String, BTreeMap<String, usize>> = HashMap::new();
+    let mut idx_to_key: HashMap<(String, usize), String> = HashMap::new();
+    for (param_name, index_map) in param_index_maps {
+        for (key_path, indices) in index_map {
+            for depth in 0..key_path.len() {
+                let parent = if depth == 0 {
+                    param_name.clone()
+                } else {
+                    key_path[depth - 1].clone()
+                };
+                let child = &key_path[depth];
+                let index = indices[depth];
+                tuple_key_layouts
+                    .entry(parent.clone())
+                    .or_default()
+                    .entry(child.clone())
+                    .or_insert(index);
+                idx_to_key
+                    .entry((parent, index))
+                    .or_insert_with(|| child.clone());
+            }
+        }
+    }
+    propagate_let_layouts(body, &idx_to_key, &mut tuple_key_layouts);
+
+    let scalar_param_values = func_def
+        .params
+        .iter()
+        .zip(args)
+        .filter_map(|(name, value)| match value {
+            Value::Float(value) => Some((name.clone(), *value as f64)),
+            Value::Int(value) => Some((name.clone(), *value as f64)),
+            _ => None,
+        })
+        .collect();
+
+    CodegenMetadata {
+        tuple_key_layouts,
+        idx_to_key,
+        scalar_param_values,
+    }
+}
+
+fn register_return_layout(signature: &mut FunctionSignature) {
+    let StableHLOType::Tuple(return_elements, return_keys) = &signature.return_type else {
+        return;
+    };
+    if return_keys.is_none()
+        || signature
+            .arg_type_layouts
+            .iter()
+            .any(|(ty, _)| ty == &signature.return_type)
+    {
+        return;
+    }
+    for (param_ty, layout) in signature.arg_type_layouts.clone() {
+        if let StableHLOType::Tuple(param_elements, param_keys) = &param_ty
+            && param_elements.len() == return_elements.len()
+            && param_keys == return_keys
+        {
+            signature
+                .arg_type_layouts
+                .push((signature.return_type.clone(), layout));
+            break;
+        }
+    }
+}
+
+fn assemble_stablehlo_module(module_name: &str, declaration: String) -> String {
+    StableHLOEmitter::emit_module_named(Some(module_name), &[declaration])
 }
