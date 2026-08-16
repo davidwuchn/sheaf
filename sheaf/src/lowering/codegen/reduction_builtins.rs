@@ -8,7 +8,7 @@ use crate::core::expr::CompiledExpr;
 use crate::core::error::SheafResult;
 use super::CodeGenerator;
 
-impl CodeGenerator {
+impl<'a> CodeGenerator<'a> {
     pub(super) fn generate_reduction_builtin(
         &mut self,
         name: &str,

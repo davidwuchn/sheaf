@@ -44,12 +44,12 @@ fn flatten_type(ty: &StableHLOType, out: &mut Vec<StableHLOType>) {
 }
 
 /// Converts CompiledExpr to StableHLO
-pub struct CodeGenerator {
+pub struct CodeGenerator<'a> {
     emitter: StableHLOEmitter,
     bindings: HashMap<String, (Register, StableHLOType)>,
     /// Let-bound lambdas are inlined rather than emitted as SSA values.
     lambda_bindings: HashMap<String, CompiledExpr>,
-    function_registry: HashMap<String, crate::core::expr::FunctionDef>,
+    function_registry: Option<&'a HashMap<String, crate::core::expr::FunctionDef>>,
     /// Dict key layouts for tuple-valued bindings.
     tuple_key_layouts: HashMap<String, std::collections::BTreeMap<String, usize>>,
     /// Reverse tuple layout lookup used while unrolling collections.
@@ -58,25 +58,27 @@ pub struct CodeGenerator {
     layout_key_map: HashMap<Register, String>,
 }
 
-impl CodeGenerator {
+impl<'a> CodeGenerator<'a> {
     pub fn new() -> Self {
         Self {
             emitter: StableHLOEmitter::new(),
             bindings: HashMap::new(),
             lambda_bindings: HashMap::new(),
-            function_registry: HashMap::new(),
+            function_registry: None,
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
         }
     }
 
-    pub fn with_registry(registry: HashMap<String, crate::core::expr::FunctionDef>) -> Self {
+    pub fn with_registry(
+        registry: &'a HashMap<String, crate::core::expr::FunctionDef>,
+    ) -> Self {
         Self {
             emitter: StableHLOEmitter::new(),
             bindings: HashMap::new(),
             lambda_bindings: HashMap::new(),
-            function_registry: registry,
+            function_registry: Some(registry),
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
@@ -85,7 +87,7 @@ impl CodeGenerator {
 
     /// Binds function parameters to MLIR arguments and virtual tuples.
     pub fn with_function_params(
-        registry: HashMap<String, crate::core::expr::FunctionDef>,
+        registry: &'a HashMap<String, crate::core::expr::FunctionDef>,
         param_names: &[String],
         param_types: &[StableHLOType],
     ) -> Self {
@@ -102,7 +104,7 @@ impl CodeGenerator {
             emitter,
             bindings,
             lambda_bindings: HashMap::new(),
-            function_registry: registry,
+            function_registry: Some(registry),
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
@@ -698,7 +700,7 @@ impl CodeGenerator {
     }
 }
 
-impl Default for CodeGenerator {
+impl<'a> Default for CodeGenerator<'a> {
     fn default() -> Self {
         Self::new()
     }

@@ -9,7 +9,7 @@ use crate::core::expr::CompiledExpr;
 use crate::core::error::{SheafError, SheafResult};
 use super::CodeGenerator;
 
-impl CodeGenerator {
+impl<'a> CodeGenerator<'a> {
     pub(super) fn generate_collection_builtin(
         &mut self,
         name: &str,

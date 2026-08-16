@@ -80,7 +80,7 @@ fn fresh_scan_field_symbol(
     }
 }
 
-impl CodeGenerator {
+impl<'a> CodeGenerator<'a> {
     /// Emits a lambda body after binding its parameters.
     pub(super) fn inline_lambda_call(
         &mut self,

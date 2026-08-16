@@ -392,7 +392,6 @@ impl JitCompiler {
 
         // Convert codegen panics into JIT compilation failures.
         let codegen_result = {
-            let registry_clone = registry.clone();
             let params_clone = func_def.params.clone();
             let param_types = sig.param_types.clone();
             let return_type = sig.return_type.clone();
@@ -401,7 +400,7 @@ impl JitCompiler {
             let scalar_values_clone = scalar_param_values.clone();
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 let mut codegen = CodeGenerator::with_function_params(
-                    registry_clone,
+                    registry,
                     &params_clone,
                     &param_types,
                 );

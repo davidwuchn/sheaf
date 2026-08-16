@@ -410,14 +410,13 @@ impl JitCompiler {
         }
         let backend = self.target_backend.clone();
         let codegen_result = {
-            let registry_clone = registry.clone();
             let param_names = all_param_names.clone();
             let param_types = sig.param_types.clone();
             let body_clone = body.clone();
             let wrt_idx = wrt_indices.clone();
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 let mut codegen =
-                    CodeGenerator::with_function_params(registry_clone, &param_names, &param_types);
+                    CodeGenerator::with_function_params(registry, &param_names, &param_types);
                 codegen.set_tuple_key_layouts(tuple_key_layouts);
                 codegen.set_idx_to_key(idx_to_key);
 

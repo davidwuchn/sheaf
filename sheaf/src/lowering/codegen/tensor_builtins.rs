@@ -9,7 +9,7 @@ use crate::core::error::{SheafError, SheafResult};
 use crate::core::ast::SheafValue;
 use super::CodeGenerator;
 
-impl CodeGenerator {
+impl<'a> CodeGenerator<'a> {
     pub(super) fn generate_tensor_builtin(
         &mut self,
         name: &str,

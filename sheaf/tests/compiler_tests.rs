@@ -158,7 +158,7 @@ fn compile_to_mlir(source: &str, fn_name: &str) -> String {
     let body = func_def.body_compiled.clone().unwrap();
     let sig = func_def.signature.clone().unwrap();
     let codegen = CodeGenerator::with_function_params(
-        ctx.registry.clone(),
+        &ctx.registry,
         &func_def.params,
         &sig.param_types,
     );
@@ -239,7 +239,7 @@ fn compile_with_destructure(source: &str, fn_name: &str) -> String {
     )
     .expect("destructuring let should lower");
     let codegen = CodeGenerator::with_function_params(
-        ctx.registry.clone(),
+        &ctx.registry,
         &func_def.params,
         &sig.param_types,
     );
@@ -293,7 +293,7 @@ fn compile_typed_param_destructure(source: &str, fn_name: &str) -> String {
     let param_types = vec![sheaf_compiler::StableHLOType::f32_tensor(vec![2_i64])];
     let return_type = sheaf_compiler::StableHLOType::scalar_f32();
     let codegen = CodeGenerator::with_function_params(
-        ctx.registry.clone(),
+        &ctx.registry,
         &func_def.params,
         &param_types,
     );

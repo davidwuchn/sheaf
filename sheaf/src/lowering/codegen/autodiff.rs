@@ -94,7 +94,7 @@ fn collect_param_aliases(expr: &CompiledExpr, param_name: &str, aliases: &mut Ve
     }
 }
 
-impl CodeGenerator {
+impl<'a> CodeGenerator<'a> {
     pub(crate) fn build_grad_tuple_from_map(
         &mut self,
         leaves: &[TupleLeaf],

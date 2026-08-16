@@ -10,7 +10,7 @@ use crate::core::expr::CompiledExpr;
 use crate::core::error::{SheafError, SheafResult};
 use super::CodeGenerator;
 
-impl CodeGenerator {
+impl<'a> CodeGenerator<'a> {
     /// Generate code for a function call
     pub(super) fn generate_function_call(
         &mut self,
@@ -19,9 +19,9 @@ impl CodeGenerator {
     ) -> SheafResult<(Register, StableHLOType)> {
         // Check if this is a user-defined function in the registry
         // Clone the signature to avoid borrow checker issues
-        let signature = self
-            .function_registry
-            .get(name)
+        let registry = self.function_registry;
+        let signature = registry
+            .and_then(|registry| registry.get(name))
             .and_then(|func_def| func_def.signature.clone());
 
         if let Some(_signature) = signature {
@@ -39,7 +39,7 @@ impl CodeGenerator {
             // the call is monomorphic (arg types are known). This avoids the
             // problem of emitting a func.call to a function compiled with the
             // wrong (scalar) type from inference.
-            let func_def = self.function_registry.get(name).cloned();
+            let func_def = registry.and_then(|registry| registry.get(name));
             if let Some(func_def) = func_def
                 && let Some(body) = &func_def.body_compiled {
                     // Bind arg registers to param names in our bindings map
@@ -81,9 +81,8 @@ impl CodeGenerator {
                 }
 
             // Fallback: emit func.call (may have type issues if not monomorphic)
-            let sig = self
-                .function_registry
-                .get(name)
+            let sig = registry
+                .and_then(|registry| registry.get(name))
                 .and_then(|f| f.signature.clone())
                 .unwrap();
             let result_reg =
