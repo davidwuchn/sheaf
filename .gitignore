@@ -6,7 +6,11 @@ __sheaf__/
 .[a-zA-Z0-9]*
 !.gitignore
 !.gitattributes
+!.bazelrc
+!.bazelversion
 .DS_Store
+
+/bazel-*
 
 *.jsonl
 *.log

@@ -1,0 +1,4 @@
+build:debug --compilation_mode=dbg
+build:debug --output_groups=+dsym_folder
+
+build:release --compilation_mode=opt

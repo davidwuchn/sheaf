@@ -1,0 +1,5 @@
+exports_files([
+    "iree_compiler_repository.bzl",
+    "iree_runtime_repository.bzl",
+    "version_file.bzl",
+])

@@ -1,0 +1,46 @@
+load(":test_rules.bzl", "sheaf_integration_test")
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_test(
+    name = "unit",
+    crate = "//sheaf:compiler_lib",
+    data = ["@iree_compiler//:iree-compile"],
+    env = {
+        "IREE_COMPILE": "$(rootpath @iree_compiler//:iree-compile)",
+        "RUST_TEST_THREADS": "1",
+    },
+    rustc_flags = [
+        "--cfg=iree_runtime",
+        "--check-cfg=cfg(iree_runtime)",
+        "--check-cfg=cfg(test)",
+    ],
+)
+
+sheaf_integration_test(name = "compiler_tests")
+sheaf_integration_test(
+    name = "interpreter_tests",
+    data = [
+        "interpreter_tests.yaml",
+        "macro_tests.yaml",
+        "vag_tests.yaml",
+    ],
+)
+sheaf_integration_test(name = "mem_attribution")
+sheaf_integration_test(name = "parser_tests")
+sheaf_integration_test(name = "polymorphic_jit_reuse")
+sheaf_integration_test(name = "shared_session")
+
+test_suite(
+    name = "all",
+    tests = [
+        ":compiler_tests",
+        ":interpreter_tests",
+        ":mem_attribution",
+        ":parser_tests",
+        ":polymorphic_jit_reuse",
+        ":shared_session",
+        ":unit",
+    ],
+)

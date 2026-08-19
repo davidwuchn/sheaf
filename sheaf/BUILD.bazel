@@ -1,0 +1,60 @@
+load("//bazel:version_file.bzl", "cargo_rustc_env", "version_file")
+load("@crates//:defs.bzl", "aliases", "all_crate_deps", "crate_edition")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "Cargo.lock",
+    "Cargo.toml",
+])
+
+version_file(
+    name = "generated_version",
+    cargo_toml = "Cargo.toml",
+)
+
+cargo_rustc_env(
+    name = "cargo_rustc_env",
+    cargo_toml = "Cargo.toml",
+)
+
+rust_library(
+    name = "compiler_lib",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    compile_data = [
+        ":generated_version",
+        "lib/macros.shf",
+        "lib/misc.shf",
+        "lib/nn.shf",
+        "lib/optim.shf",
+    ],
+    crate_name = "sheaf_compiler",
+    edition = crate_edition(),
+    link_deps = ["@iree_runtime//:iree_runtime"],
+    rustc_env = {
+        "OUT_DIR": "$(execpath :generated_version)",
+    },
+    rustc_env_files = [":cargo_rustc_env"],
+    rustc_flags = [
+        "--cfg=iree_runtime",
+        "--check-cfg=cfg(iree_runtime)",
+        "--check-cfg=cfg(test)",
+    ],
+    deps = all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "bin",
+    srcs = glob(["src/bin/sheaf/*.rs"]),
+    aliases = aliases(),
+    binary_name = "sheaf",
+    compile_data = [
+        "assets/reference.md",
+        "assets/sheaf-context.md",
+    ],
+    crate_name = "sheaf",
+    edition = crate_edition(),
+    deps = [":compiler_lib"] + all_crate_deps(normal = True),
+)
