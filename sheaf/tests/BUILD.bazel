@@ -1,4 +1,4 @@
-load(":test_rules.bzl", "sheaf_integration_test")
+load(":test_rules.bzl", "sheaf_integration_test", "sheaf_program_test")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -34,10 +34,80 @@ sheaf_integration_test(name = "parser_tests")
 sheaf_integration_test(name = "polymorphic_jit_reuse")
 sheaf_integration_test(name = "shared_session")
 
+sheaf_program_test(
+    name = "regression_mlp",
+    expression = """
+(use \"./examples/mlp/training.shf\")
+(use \"./sheaf/tests/regressions.shf\")
+(check-mlp)
+""",
+    data = [
+        "//:examples/mlp/mlp.shf",
+        "//:examples/mlp/training.shf",
+    ],
+    size = "small",
+)
+
+sheaf_program_test(
+    name = "regression_hydra",
+    expression = """
+(use \"./examples/hydra/hydra.shf\")
+(use \"./sheaf/tests/regressions.shf\")
+(check-hydra)
+""",
+    data = ["//:examples/hydra/hydra.shf"],
+    size = "small",
+)
+
+sheaf_program_test(
+    name = "regression_clevr",
+    expression = """
+(use \"./examples/clevr/data.shf\")
+(use \"./examples/clevr/model.shf\")
+(use \"./sheaf/tests/regressions.shf\")
+(check-clevr)
+""",
+    data = [
+        "//:examples/clevr/data.shf",
+        "//:examples/clevr/model.shf",
+        "//:examples/clevr/utils.shf",
+    ],
+    size = "small",
+)
+
+sheaf_program_test(
+    name = "regression_nanogpt",
+    expression = """
+(use \"./examples/nanoGPT/train.shf\")
+(use \"./sheaf/tests/regressions.shf\")
+(check-nanogpt)
+""",
+    data = [
+        "//:examples/nanoGPT/model.shf",
+        "//:examples/nanoGPT/train.shf",
+    ],
+    size = "large",
+    timeout = "long",
+)
+
+sheaf_program_test(
+    name = "regression_macros",
+    expression = """
+(use \"./sheaf/tests/regressions.shf\")
+(check-macros)
+""",
+    size = "small",
+)
+
 test_suite(
     name = "all",
     tests = [
         ":compiler_tests",
+        ":regression_clevr",
+        ":regression_hydra",
+        ":regression_macros",
+        ":regression_mlp",
+        ":regression_nanogpt",
         ":interpreter_tests",
         ":mem_attribution",
         ":parser_tests",

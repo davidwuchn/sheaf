@@ -6,6 +6,53 @@ load("@rules_rust//rust:defs.bzl", "rust_test")
 _CARGO_PACKAGE = "sheaf"
 
 
+def _sheaf_program_test_impl(ctx):
+    executable = ctx.actions.declare_file(ctx.label.name)
+    ctx.actions.symlink(
+        output = executable,
+        target_file = ctx.executable._sheaf,
+        is_executable = True,
+    )
+
+    runfiles = ctx.runfiles(
+        files = [ctx.file._iree_compile] + ctx.files.data,
+    ).merge(ctx.attr._sheaf[DefaultInfo].default_runfiles)
+    for target in ctx.attr.data:
+        runfiles = runfiles.merge(target[DefaultInfo].default_runfiles)
+
+    return [
+        DefaultInfo(executable = executable, runfiles = runfiles),
+        RunEnvironmentInfo(
+            environment = {"IREE_COMPILE": ctx.file._iree_compile.short_path},
+        ),
+    ]
+
+_sheaf_program_test = rule(
+    implementation = _sheaf_program_test_impl,
+    test = True,
+    attrs = {
+        "data": attr.label_list(allow_files = True),
+        "_iree_compile": attr.label(
+            allow_single_file = True,
+            default = "@iree_compiler//:iree-compile",
+        ),
+        "_sheaf": attr.label(
+            cfg = "target",
+            default = "//sheaf:bin",
+            executable = True,
+        ),
+    },
+)
+
+def sheaf_program_test(name, expression, data = [], device = "cpu", **kwargs):
+    _sheaf_program_test(
+        name = name,
+        args = ["--device", device, "-c", expression],
+        data = ["regressions.shf"] + data,
+        tags = [device],
+        **kwargs
+    )
+
 def sheaf_integration_test(name, data = []):
     rust_test(
         name = name,
