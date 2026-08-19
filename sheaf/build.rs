@@ -47,6 +47,7 @@ fn main() {
 
     // Tell Rust code that IREE is available
     println!("cargo:rustc-check-cfg=cfg(iree_runtime)");
+    println!("cargo:rustc-check-cfg=cfg(sheaf_frontend)");
     println!("cargo:rustc-cfg=iree_runtime");
 
     println!("cargo:rerun-if-env-changed=IREE_BUILD_DIR");

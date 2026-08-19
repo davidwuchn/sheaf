@@ -9,6 +9,17 @@ exports_files([
     "Cargo.toml",
 ])
 
+filegroup(
+    name = "frontend_srcs",
+    srcs = glob([
+        "src/core/**/*.rs",
+        "src/forms/**/*.rs",
+    ]) + [
+        "src/frontend.rs",
+        "src/lowering/stablehlo/types.rs",
+    ],
+)
+
 version_file(
     name = "generated_version",
     cargo_toml = "Cargo.toml",
@@ -40,6 +51,7 @@ rust_library(
     rustc_flags = [
         "--cfg=iree_runtime",
         "--check-cfg=cfg(iree_runtime)",
+        "--check-cfg=cfg(sheaf_frontend)",
         "--check-cfg=cfg(test)",
     ],
     deps = all_crate_deps(normal = True),

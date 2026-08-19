@@ -256,9 +256,26 @@ fn is_builtin_name(name: &str) -> bool {
     )
 }
 
+const STDLIB: &[(&str, &str)] = &[
+    ("macros.shf", include_str!("../../lib/macros.shf")),
+    ("misc.shf", include_str!("../../lib/misc.shf")),
+    ("nn.shf", include_str!("../../lib/nn.shf")),
+    ("optim.shf", include_str!("../../lib/optim.shf")),
+];
+
 impl CompilerContext {
     pub fn new() -> Self {
-        let mut ctx = Self {
+        let mut context = Self::new_without_prelude();
+        context.load_prelude_from_source()
+            .expect("embedded Sheaf prelude must compile");
+        context
+    }
+
+    /// Construct a compiler context without installing the embedded prelude.
+    ///
+    /// This is the bootstrap entry point used by the prelude compiler.
+    pub fn new_without_prelude() -> Self {
+        Self {
             env: Self::init_env(),
             registry: HashMap::new(),
             local_vars: HashMap::new(),
@@ -271,33 +288,28 @@ impl CompilerContext {
             disable_vmfb: false,
             checked_vmfb_dirs: HashSet::new(),
             macro_engine: MacroEngine::new(),
-        };
-        ctx.load_prelude();
-        ctx
+        }
     }
 
-    /// Load the standard library embedded in the binary.
-    /// Macros first (other modules depend on them), then nn, optim.
-    fn load_prelude(&mut self) {
-        const STDLIB: &[(&str, &str)] = &[
-            ("macros.shf", include_str!("../../lib/macros.shf")),
-            ("misc.shf", include_str!("../../lib/misc.shf")),
-            ("nn.shf", include_str!("../../lib/nn.shf")),
-            ("optim.shf", include_str!("../../lib/optim.shf")),
-        ];
-        for (name, source) in STDLIB {
-            crate::core::error_format::register_source(name, source);
-            if let Ok(exprs) = crate::core::parse(source, *name) {
-                for expr in &exprs {
-                    let _ = self.compile(expr);
-                }
-            }
-            // Mark stdlib modules as loaded so `(use nn)` is a no-op
-            // even if a local nn.shf exists.
-            self.prelude_modules.insert(
-                name.strip_suffix(".shf").unwrap_or(name).to_string()
-            );
+    /// Parse and compile one prelude module into this context.
+    pub fn compile_prelude_module(&mut self, name: &str, source: &str) -> SheafResult<()> {
+        crate::core::error_format::register_source(name, source);
+        let exprs = crate::core::parse(source, name)?;
+        for expr in &exprs {
+            self.compile(expr)?;
         }
+        self.prelude_modules.insert(
+            name.strip_suffix(".shf").unwrap_or(name).to_string()
+        );
+        Ok(())
+    }
+
+    /// Compile the embedded standard library from source.
+    pub fn load_prelude_from_source(&mut self) -> SheafResult<()> {
+        for (name, source) in STDLIB {
+            self.compile_prelude_module(name, source)?;
+        }
+        Ok(())
     }
 
 

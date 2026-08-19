@@ -36,6 +36,7 @@ pub struct FunctionSignature {
 
 impl ValueLayout {
     /// Build a ValueLayout from an interpreter Value (captures dict/list structure).
+    #[cfg(not(sheaf_frontend))]
     pub fn from_value(val: &crate::interpreter::value::Value) -> Self {
         use crate::interpreter::value::Value;
         match val {
@@ -57,6 +58,7 @@ impl ValueLayout {
     /// Reconstruct a Value from a flat tuple using this layout.
     /// Converts Value::Tuple -> Value::Dict/List based on the stored structure.
     /// Also recurses into Value::Dict sub-values that may still contain Tuples.
+    #[cfg(not(sheaf_frontend))]
     pub fn reconstruct(&self, val: crate::interpreter::value::Value) -> crate::interpreter::value::Value {
         use crate::interpreter::value::Value;
         match (self, val) {
@@ -93,6 +95,7 @@ impl ValueLayout {
 /// Reconstruct a JIT return value by matching sub-tuple types against known layouts.
 /// Walks the return type tree; at each Tuple level, checks if its type matches
 /// a known layout from the argument types.
+#[cfg(not(sheaf_frontend))]
 pub fn reconstruct_jit_result(
     val: crate::interpreter::value::Value,
     ty: &StableHLOType,

@@ -226,6 +226,7 @@ impl SpecialForm for UseForm {
             })?;
 
         // Track which functions exist before compiling the module
+        #[cfg(iree_runtime)]
         let pre_fns: std::collections::HashSet<String> =
             compiler.registry.keys().cloned().collect();
 

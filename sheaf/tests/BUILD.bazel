@@ -14,6 +14,7 @@ rust_test(
     rustc_flags = [
         "--cfg=iree_runtime",
         "--check-cfg=cfg(iree_runtime)",
+        "--check-cfg=cfg(sheaf_frontend)",
         "--check-cfg=cfg(test)",
     ],
 )
