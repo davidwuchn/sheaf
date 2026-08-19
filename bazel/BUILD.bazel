@@ -1,5 +1,6 @@
 exports_files([
     "iree_compiler_repository.bzl",
     "iree_runtime_repository.bzl",
+    "prelude_image.bzl",
     "version_file.bzl",
 ])

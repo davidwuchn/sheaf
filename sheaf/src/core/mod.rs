@@ -12,6 +12,7 @@ pub mod expr;
 pub mod inference;
 pub mod macro_engine;
 pub mod parser;
+pub mod prelude;
 #[cfg(not(sheaf_frontend))]
 pub mod trace;
 

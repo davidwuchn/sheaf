@@ -7,7 +7,7 @@ pub use crate::core::error::SourceLocation;
 use std::fmt;
 
 /// Sheaf value - the primary AST node type
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SheafValue {
     /// Symbol: foo, defn, +, etc.
     Symbol(String, SourceLocation),

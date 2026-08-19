@@ -1,0 +1,12 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_binary(
+    name = "prelude_compiler",
+    srcs = ["prelude_compiler.rs"],
+    crate_name = "prelude_compiler",
+    edition = "2024",
+    rustc_env_files = ["//sheaf:cargo_rustc_env"],
+    deps = ["//sheaf/frontend:frontend"],
+)

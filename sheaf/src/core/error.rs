@@ -8,7 +8,7 @@ use std::fmt;
 use std::rc::Rc;
 
 /// Source location for error reporting
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SourceLocation {
     pub line: usize,
     pub column: usize,
@@ -34,7 +34,7 @@ impl SourceLocation {
 }
 
 /// Sheaf error types
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum SheafError {
     /// Parse error
     Parse {

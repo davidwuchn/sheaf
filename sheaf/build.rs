@@ -15,6 +15,7 @@ fn main() {
         .and_then(|l| l.split('"').nth(1))
         .expect("missing iree-version in [package.metadata]");
     println!("cargo:rustc-env=IREE_VERSION={}", iree_version);
+    println!("cargo:rustc-env=SHEAF_COMPILER_VERSION={}", env!("CARGO_PKG_VERSION"));
     println!("cargo:rerun-if-changed=Cargo.toml");
 
     let found = try_cmake_layout()
@@ -46,8 +47,10 @@ fn main() {
     }
 
     // Tell Rust code that IREE is available
+    println!("cargo:rustc-check-cfg=cfg(cargo_source_prelude)");
     println!("cargo:rustc-check-cfg=cfg(iree_runtime)");
     println!("cargo:rustc-check-cfg=cfg(sheaf_frontend)");
+    println!("cargo:rustc-cfg=cargo_source_prelude");
     println!("cargo:rustc-cfg=iree_runtime");
 
     println!("cargo:rerun-if-env-changed=IREE_BUILD_DIR");

@@ -8,7 +8,7 @@ use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::SheafResult;
 
 /// Recursive value structure layout for reconstructing dicts/lists from flat tuples.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ValueLayout {
     /// Dict with ordered (key, sub-layout) pairs
     Dict(Vec<(String, ValueLayout)>),
@@ -19,7 +19,7 @@ pub enum ValueLayout {
 }
 
 /// Function signature (parameter types + return type)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FunctionSignature {
     pub param_types: Vec<StableHLOType>,
     pub return_type: StableHLOType,
@@ -31,7 +31,32 @@ pub struct FunctionSignature {
     /// Scalar leaves that were baked into this compiled VMFB as literal
     /// constants, captured from the dict argument(s) at first-compile time.
     /// Used only for staleness warnings (Rec 1) — does not affect dispatch.
+    #[serde(with = "captured_scalar_map")]
     pub captured_scalars: std::collections::HashMap<(String, Vec<usize>), f64>,
+}
+
+mod captured_scalar_map {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::HashMap;
+
+    type CapturedScalars = HashMap<(String, Vec<usize>), f64>;
+
+    pub fn serialize<S>(value: &CapturedScalars, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut entries: Vec<(&(String, Vec<usize>), &f64)> = value.iter().collect();
+        entries.sort_by_key(|(key, _)| *key);
+        entries.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<CapturedScalars, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let entries = Vec::<((String, Vec<usize>), f64)>::deserialize(deserializer)?;
+        Ok(entries.into_iter().collect())
+    }
 }
 
 impl ValueLayout {
