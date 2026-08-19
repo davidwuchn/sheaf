@@ -1,0 +1,98 @@
+;; -*- mode: clojure -*-
+
+(defmacro regression-twice [x]
+  `(+ ~x ~x))
+
+(defn check-macros []
+  (do
+    (guard :range [42 42] (tensor [(regression-twice 21)]))
+    (guard :range [7 7] (tensor [(when true 7)]))
+    true))
+
+(defn check-mlp []
+  (let [[X Y] (xor-data)
+        params (init-params (random-key 42))
+        final
+          (repeat [_epoch 500]
+            [p params]
+            (get (train-step p X Y 0.7) :p))
+        predictions
+          (map (fn [x] (first (forward x final))) X)]
+    (do
+      (guard :range [0.0 0.1] (tensor [(float (nth predictions 0))]))
+      (guard :range [0.9 1.01] (tensor [(float (nth predictions 1))]))
+      (guard :range [0.9 1.01] (tensor [(float (nth predictions 2))]))
+      (guard :range [0.0 0.1] (tensor [(float (nth predictions 3))]))
+      true)))
+
+(defn check-hydra []
+  (let [x [[0 0] [0 1] [1 0] [1 1]]
+        y [[0.0] [1.0] [1.0] [0.0]]
+        key (random-key 42)
+        params {"head" {"W" (random-normal key '[2 1])
+                        "b" (zeros '[1])}
+                "layers" '[]}
+        result (train-step params x y 0.01)
+        trained (get result "p")
+        max-abs (tree-reduce (fn [a t] (max a (max (abs t)))) trained 0.0)
+        grown (grow-hydra trained key {"d_model" 32})]
+    (do
+      (guard :range [0.0 100.0] (tensor [(float (get result "loss"))]))
+      (guard :range [0.0 100.0] (tensor [(float max-abs)]))
+      (guard :range [1 1] (tensor [(len (get grown "layers"))]))
+      (guard :shape [2 32] (get-in grown ["layers" 0 "W"]))
+      (guard :shape [32 1] (get-in grown ["head" "W"]))
+      true)))
+
+(defn check-clevr []
+  (let [params (init-clevr-params (random-key 0))
+        scene {:objects [{:color "red" :shape "square" :x 0.2 :y 0.7}
+                         {:color "blue" :shape "circle" :x 0.5 :y 0.3}
+                         {:color "green" :shape "triangle" :x 0.8 :y 0.5}]
+               :n_objects 3}
+        batch (reshape (scene-to-tensor scene) '[1 5 13])
+        red-exists (execute-query batch ["exists?" ["filter-color" ":red"]] params)
+        orange-exists (execute-query batch ["exists?" ["filter-color" ":orange"]] params)
+        square-color (execute-query batch ["query-color" ["unique" ["filter-shape" ":square"]]] params)
+        circle-shape (execute-query batch ["query-shape" ["unique" ["filter-color" ":blue"]]] params)]
+    (do
+      (guard :range [0.5 1.0] red-exists)
+      (guard :range [0.0 0.5] orange-exists)
+      (guard :range [0 0] (tensor [(argmax (get square-color 0))]))
+      (guard :range [0 0] (tensor [(argmax (get circle-shape 0))]))
+      true)))
+
+(defn check-nanogpt []
+  (let [config {:n_layer 1
+                :n_head 2
+                :n_embd 16
+                :block_size 8
+                :vocab_size 16
+                :bias false
+                :dropout 0.0}
+        params (init-gpt-params (random-key 42) config)
+        state {:params params
+               :m (tree-map-zeros params)
+               :v (tree-map-zeros params)
+               :t 0}
+        x [[0 1 2 3 4 5 6 7]]
+        y [[1 2 3 4 5 6 7 8]]
+        trained (train-step state x y 1e-3 config)
+        checkpoint "test-output/nanogpt/ckpt.safetensors"
+        _ (io "save" checkpoint {:params (get trained :params)
+                                  :m (get trained :m)
+                                  :v (get trained :v)
+                                  :t (get trained :t)})
+        restored (io "load" checkpoint)
+        trained-max (tree-reduce (fn [a t] (max a (max (abs t))))
+                                 (get trained :params) 0.0)
+        restored-max (tree-reduce (fn [a t] (max a (max (abs t))))
+                                  (get restored :params) 0.0)
+        generated (generate-token x (get restored :params) config
+                                  (random-key 7) 8 1.0)]
+    (do
+      (guard :range [0.0 100.0] (tensor [(float (get trained :loss))]))
+      (guard :range [0.0 100.0] (tensor [(float trained-max)]))
+      (guard :range [0.0 100.0] (tensor [(float restored-max)]))
+      (guard :range [0 15] (tensor [(get generated :next_id)]))
+      true)))
