@@ -44,7 +44,10 @@ rust_library(
     ],
     crate_name = "sheaf_compiler",
     edition = crate_edition(),
-    link_deps = ["@iree_runtime//:iree_runtime"],
+    link_deps = [
+        "//bazel:platform_runtime_libs",
+        "@iree//runtime/src/iree/runtime",
+    ],
     rustc_env = {
         "OUT_DIR": "$(execpath :generated_version)",
         "PRELUDE_OUT_DIR": "$(execpath //sheaf/lib:prelude_image)",

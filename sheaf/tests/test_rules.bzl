@@ -16,6 +16,8 @@ def _sheaf_program_test_impl(ctx):
 
     runfiles = ctx.runfiles(
         files = [ctx.file._iree_compile] + ctx.files.data,
+    ).merge(
+        ctx.attr._iree_compile[DefaultInfo].default_runfiles,
     ).merge(ctx.attr._sheaf[DefaultInfo].default_runfiles)
     for target in ctx.attr.data:
         runfiles = runfiles.merge(target[DefaultInfo].default_runfiles)

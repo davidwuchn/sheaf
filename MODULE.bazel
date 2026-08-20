@@ -3,9 +3,18 @@ module(
     version = "2.2.0",
 )
 
+bazel_dep(name = "apple_support", version = "1.24.2")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "libbacktrace", version = "1.0.0-20250926-7939218")
+bazel_dep(name = "llvm", version = "0.8.9")
 bazel_dep(name = "platforms", version = "1.1.0")
-bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "rules_cc", version = "0.2.19")
 bazel_dep(name = "rules_rust", version = "0.73.0")
+
+register_toolchains(
+    "@llvm//toolchain:linux_aarch64_to_linux_aarch64",
+    "@llvm//toolchain:linux_x86_64_to_linux_x86_64",
+)
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
@@ -29,14 +38,26 @@ crate.from_cargo(
 )
 use_repo(crate, "crates")
 
-iree_runtime_repository = use_repo_rule(
-    "//bazel:iree_runtime_repository.bzl",
-    "iree_runtime_repository",
+iree_source_repository = use_repo_rule(
+    "//bazel:iree_source_repository.bzl",
+    "iree_source_repository",
 )
-iree_runtime_repository(name = "iree_runtime")
+iree_source_repository(
+    name = "iree",
+    cargo_toml = "//sheaf:Cargo.toml",
+)
+
+iree_cuda_repository = use_repo_rule(
+    "//bazel:iree_cuda_repository.bzl",
+    "iree_cuda_repository",
+)
+iree_cuda_repository(name = "iree_cuda")
 
 iree_compiler_repository = use_repo_rule(
     "//bazel:iree_compiler_repository.bzl",
     "iree_compiler_repository",
 )
-iree_compiler_repository(name = "iree_compiler")
+iree_compiler_repository(
+    name = "iree_compiler",
+    cargo_toml = "//sheaf:Cargo.toml",
+)

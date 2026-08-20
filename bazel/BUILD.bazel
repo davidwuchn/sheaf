@@ -1,6 +1,27 @@
+load("@rules_cc//cc:defs.bzl", "cc_import", "cc_library")
+
 exports_files([
     "iree_compiler_repository.bzl",
-    "iree_runtime_repository.bzl",
+    "iree_cuda_repository.bzl",
+    "iree_source_repository.bzl",
     "prelude_image.bzl",
     "version_file.bzl",
 ])
+
+cc_import(
+    name = "compiler_rt_builtins",
+    static_library = "@llvm//runtimes/compiler-rt:clang_rt.builtins.static",
+)
+
+cc_library(
+    name = "platform_runtime_libs",
+    deps = select({
+        "@platforms//os:linux": [":compiler_rt_builtins"],
+        "//conditions:default": [],
+    }),
+    linkopts = select({
+        "@platforms//os:osx": ["-Wl,-framework,Accelerate"],
+        "//conditions:default": [],
+    }),
+    visibility = ["//visibility:public"],
+)
