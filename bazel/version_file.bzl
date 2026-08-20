@@ -5,16 +5,23 @@ def _version_file_impl(ctx):
     ctx.actions.run_shell(
         inputs = [ctx.file.cargo_toml],
         outputs = [output],
-        arguments = [ctx.file.cargo_toml.path, output.path],
+        arguments = [
+            ctx.file.cargo_toml.path,
+            output.path,
+            ctx.var.get("SHEAF_BUILD_VERSION", ""),
+        ],
         command = """
 set -eu
-version=$(awk '
-    /^version = / {
-        gsub(/\"/, "", $3)
-        print $3
-        exit
-    }
-' "$1")
+version="$3"
+if [ -z "$version" ]; then
+    version=$(awk '
+        /^version = / {
+            gsub(/\"/, "", $3)
+            print $3
+            exit
+        }
+    ' "$1")
+fi
 test -n "$version"
 mkdir -p "$2"
 printf 'pub const SHEAF_VERSION: &str = "%s";\\n' "$version" > "$2/generated_version.rs"
