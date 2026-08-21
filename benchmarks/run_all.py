@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
 Sheaf benchmark suite.
-  --save       Save results as new baseline (baseline.json)
+  --save [PATH]  Save results under the canonical name, or to PATH
   --device     metal (default), cuda
   --runs N     Runs per benchmark (default: 7)
 """
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
+import platform
 import re
 import statistics
 import subprocess
@@ -16,11 +18,90 @@ import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
-BASELINE_FILE = SCRIPT_DIR / "baseline.json"
-SHEAF = os.environ.get("SHEAF", str(SCRIPT_DIR.parent / "sheaf/target/release/sheaf"))
+REPO = SCRIPT_DIR.parent
+BAZEL_SHEAF = REPO / "bazel-bin/sheaf/sheaf"
+RESULTS_DIR = SCRIPT_DIR / "results"
 DEFAULT_DEVICE = "metal"
 RUNS = 7
 MACRO_RUNS = 3
+
+
+def resolve_sheaf() -> str:
+    sheaf = Path(os.environ.get("SHEAF", BAZEL_SHEAF)).expanduser()
+    if sheaf.is_file():
+        return str(sheaf)
+    raise SystemExit(
+        f"Sheaf binary not found: {sheaf}\n"
+        "Build it with:\n"
+        "  bazel build --config=release //sheaf:bin\n"
+        "or set SHEAF explicitly."
+    )
+
+
+SHEAF = resolve_sheaf()
+
+
+def command_output(command: list[str]) -> str | None:
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() or result.stderr.strip() or None
+
+
+def git_identity() -> str | None:
+    return os.environ.get("SHEAF_GIT_COMMIT") or command_output(
+        ["git", "-C", str(REPO), "rev-parse", "HEAD"]
+    )
+
+
+def normalised_os() -> str:
+    return {"Darwin": "macos", "Linux": "linux"}.get(
+        platform.system(), platform.system().lower()
+    )
+
+
+def normalised_arch() -> str:
+    return {"arm64": "aarch64", "amd64": "x86_64"}.get(
+        platform.machine().lower(), platform.machine().lower()
+    )
+
+
+def result_document(results: dict, args) -> dict:
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "git": git_identity(),
+        "target": {
+            "os": normalised_os(),
+            "arch": normalised_arch(),
+            "backend": args.device,
+        },
+        "sheaf": results,
+    }
+
+
+def record_path(document: dict) -> Path:
+    target = document["target"]
+    commit = document["git"]
+    short_commit = commit[:7] if commit else "unknown"
+    date = document["timestamp"][:10].replace("-", "")
+    return RESULTS_DIR / (
+        f"{date}-{target['os']}-{target['arch']}-{target['backend']}-{short_commit}.json"
+    )
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as file:
+        json.dump(data, file, indent=2)
+        file.write("\n")
+
 
 MICRO = [
     ("matmul [128x128]",
@@ -159,12 +240,31 @@ def bench_self_timed(name: str, script: str, device: str, runs: int) -> float:
     return statistics.median(times)
 
 
-def load_baseline():
-    if not BASELINE_FILE.exists():
+def load_baseline(backend: str) -> tuple[dict | None, Path | None]:
+    target = {
+        "os": normalised_os(),
+        "arch": normalised_arch(),
+        "backend": backend,
+    }
+    pattern = f"????????-{target['os']}-{target['arch']}-{backend}-*.json"
+    candidates = []
+    for path in RESULTS_DIR.glob(pattern):
+        try:
+            with path.open() as file:
+                document = json.load(file)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            document.get("target") == target
+            and isinstance(document.get("timestamp"), str)
+            and isinstance(document.get("git"), str)
+            and isinstance(document.get("sheaf"), dict)
+        ):
+            candidates.append((document["timestamp"], path.name, document, path))
+    if not candidates:
         return None, None
-    with open(BASELINE_FILE) as f:
-        data = json.load(f)
-    return data.get("sheaf"), data.get("git")
+    _, _, document, path = max(candidates)
+    return document, path
 
 
 def print_table(results: dict, baseline_sheaf: dict | None):
@@ -193,7 +293,13 @@ def print_table(results: dict, baseline_sheaf: dict | None):
 
 def main():
     parser = argparse.ArgumentParser(description="Sheaf benchmark suite")
-    parser.add_argument("--save", action="store_true", help="Save results as new baseline")
+    parser.add_argument(
+        "--save",
+        nargs="?",
+        const="",
+        metavar="PATH",
+        help="Save in benchmarks/results, or overwrite PATH",
+    )
     parser.add_argument("--device", default=DEFAULT_DEVICE, choices=["metal", "cuda", "cpu"])
     parser.add_argument("--runs", type=int, default=RUNS)
     args = parser.parse_args()
@@ -227,25 +333,21 @@ def main():
             print(f"  {name:<40} {ms:>10.3f} ms", flush=True)
             results[name] = ms
 
-    baseline_sheaf, baseline_git = load_baseline()
-    if baseline_sheaf:
-        print_table(results, baseline_sheaf)
-        commit_date = subprocess.run(
-            ["git", "log", "-1", "--format=%ci", baseline_git],
-            capture_output=True, text=True
-        ).stdout.strip().split(" ")[0]
-        print(f"\nBaseline: commit {baseline_git} ({commit_date})")
+    baseline, baseline_path = load_baseline(args.device)
+    if baseline:
+        print_table(results, baseline["sheaf"])
+        commit = baseline["git"]
+        timestamp = baseline["timestamp"]
+        print(f"\nBaseline: {baseline_path.name} ({commit[:7]}, {timestamp})")
     else:
-        print("\nNo baseline. Run with --save to record one.")
+        target = f"{normalised_os()}-{normalised_arch()}-{args.device}"
+        print(f"\nNo baseline found for {target}.")
 
-    if args.save:
-        git_rev = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True
-        ).stdout.strip()
-        with open(BASELINE_FILE, "w") as f:
-            json.dump({"git": git_rev, "device": args.device, "sheaf": results}, f, indent=2)
-        print(f"Saved to {BASELINE_FILE}")
+    if args.save is not None:
+        document = result_document(results, args)
+        output = Path(args.save) if args.save else record_path(document)
+        write_json(output, document)
+        print(f"Saved results to {output}")
 
 
 if __name__ == "__main__":

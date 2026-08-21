@@ -1,68 +1,106 @@
 """
-Run benchmarks on remote A10G instance (CUDA).
-Run with: modal run modal_runner.py
+Run the Sheaf CUDA benchmark suite on a remote instance.
+
+Run with:
+  modal run benchmarks/modal_runner.py
+
+Set SHEAF to benchmark a different binary.
 """
 
 import json
-import modal
-import re
+import os
+import subprocess
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+import modal
 
+REPO = Path(__file__).resolve().parent.parent
+BENCHMARKS = REPO / "benchmarks"
+
+
+def resolve_sheaf() -> Path:
+    binary = Path(
+        os.environ.get("SHEAF", REPO / "bazel-bin/sheaf/sheaf")
+    ).expanduser()
+    if binary.is_file():
+        return binary.resolve()
+    raise SystemExit(
+        f"Sheaf binary not found: {binary}\n"
+        "Build it with:\n"
+        "  bazel build --config=release //sheaf:bin\n"
+        "or set SHEAF explicitly."
+    )
+
+
+def source_commit() -> str | None:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+
+
+SHEAF = resolve_sheaf()
+SOURCE_COMMIT = source_commit()
 app = modal.App("sheaf-bench")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("curl")
-    .pip_install("torch", "jax[cuda12]")
+    .apt_install("curl", "unzip")
+    .add_local_file(str(SHEAF), remote_path="/root/sheaf")
     .add_local_file(
-        str(REPO / "sheaf/target/release/sheaf"),
-        remote_path="/root/sheaf",
+        str(BENCHMARKS / "run_all.py"),
+        remote_path="/root/benchmarks/run_all.py",
     )
-    .add_local_dir(
-        str(REPO / "benchmarks"),
-        remote_path="/root/benchmarks",
+    .add_local_file(
+        str(BENCHMARKS / "bench_forward.shf"),
+        remote_path="/root/benchmarks/bench_forward.shf",
+    )
+    .add_local_file(
+        str(BENCHMARKS / "bench_vag_sheaf.shf"),
+        remote_path="/root/benchmarks/bench_vag_sheaf.shf",
     )
 )
 
 
-def parse_bench_output(output: str) -> dict:
-    results = {}
-    for line in output.splitlines():
-        m = re.match(r"\s{2}(\S.+?)\s+([\d.]+)\s+ms/iter", line)
-        if m:
-            results[m.group(1).strip()] = float(m.group(2))
-    return results
-
-
-@app.function(image=image, gpu="A10G", timeout=600)
+@app.function(image=image, gpu="A10G", timeout=1800)
 def bench_cuda():
     import subprocess
 
-    subprocess.run(["chmod", "+x", "/root/sheaf"], check=True)
-
-    def run(label, cmd):
-        print(f"{label}...", flush=True)
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if r.returncode != 0:
-            raise RuntimeError(f"{cmd[0]} failed (exit {r.returncode}):\n{r.stderr}")
-        results = parse_bench_output(r.stdout + r.stderr)
-        print(f"  {len(results)} benchmarks", flush=True)
-        return results
-
-    sheaf_micro = run("Sheaf micro", ["/root/sheaf", "/root/benchmarks/bench.shf", "--device", "cuda"])
-    sheaf_transformer = run("Sheaf transformer", ["/root/sheaf", "/root/benchmarks/bench_transformer.shf", "--device", "cuda"])
-    sheaf_all = {**sheaf_micro, **sheaf_transformer}
-
-    pytorch_all = run("PyTorch", ["python3", "/root/benchmarks/baseline_pytorch.py", "--device", "cuda"])
-    jax_all = run("JAX", ["python3", "/root/benchmarks/baseline_jax.py"])
-
-    return sheaf_all, pytorch_all, jax_all
+    output = "/tmp/results.json"
+    env = {**os.environ, "SHEAF": "/root/sheaf"}
+    if SOURCE_COMMIT:
+        env["SHEAF_GIT_COMMIT"] = SOURCE_COMMIT
+    result = subprocess.run(
+        [
+            "python3",
+            "/root/benchmarks/run_all.py",
+            "--device",
+            "cuda",
+            "--runs",
+            "7",
+            "--save",
+            output,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=1500,
+        env=env,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Sheaf benchmark failed (exit {result.returncode}):\n{result.stderr}"
+        )
+    with open(output) as file:
+        return json.load(file)
 
 
 @app.local_entrypoint()
 def main():
-    sheaf_all, pytorch_all, jax_all = bench_cuda.remote()
-    # JSON on last line for run_all.py to parse
-    print("RESULTS:" + json.dumps({"sheaf": sheaf_all, "pytorch": pytorch_all, "jax": jax_all}))
+    results = bench_cuda.remote()
+    print("RESULTS:" + json.dumps(results))
