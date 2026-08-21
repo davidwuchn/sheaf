@@ -14,6 +14,8 @@ build:debug --compilation_mode=dbg
 build:debug --output_groups=+dsym_folder
 
 build:release --compilation_mode=opt
+build:release --@rules_rust//rust/settings:extra_rustc_flags=-Clto=fat
+build:release --@rules_rust//rust/settings:extra_rustc_flags=-Ccodegen-units=1
 
 build:cpu --@iree//runtime/src/iree/hal/drivers:enabled_drivers=local-sync,local-task
 build:linux-gpu --@iree//runtime/src/iree/hal/drivers:enabled_drivers=local-sync,local-task,cuda,vulkan
