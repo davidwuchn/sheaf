@@ -1,18 +1,9 @@
 name: Build
 
-# Build release artifacts.
+# Build release artifacts with the Bazel toolchain.
 #
 # Produces stripped `sheaf-<target>.tar.gz` archives and uploads them as
 # workflow artifacts named `sheaf-<target>`.
-#
-# Inputs:
-#   targets: JSON array of target IDs
-#            (linux-x86_64, linux-aarch64, macos-aarch64)
-#   build_version: Optional version override passed as
-#                  SHEAF_BUILD_VERSION. Defaults to the Cargo package version.
-#
-# Outputs:
-#   One `sheaf-<target>` artifact per target.
 
 on:
   workflow_call:
@@ -27,188 +18,56 @@ on:
         required: false
         default: ""
 
-env:
-  IREE_REPO: "https://github.com/iree-org/iree.git"
-
 jobs:
-  read-iree-version:
-    runs-on: ubuntu-22.04
-    outputs:
-      version: ${{ steps.read.outputs.version }}
-    steps:
-      - uses: actions/checkout@v5
-      - name: Read IREE version from Cargo.toml
-        id: read
-        run: |
-          VERSION=$(grep '^iree-version' sheaf/Cargo.toml | sed 's/.*"\(.*\)"/\1/')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-  build-iree-runtime:
-    needs: read-iree-version
+  build:
     strategy:
       matrix:
         target: ${{ fromJson(inputs.targets) }}
-    runs-on: ${{ (matrix.target == 'macos-aarch64' && 'macos-15') || 'ubuntu-22.04' }}
+    runs-on: ${{ (matrix.target == 'macos-aarch64' && 'macos-15') || (matrix.target == 'linux-aarch64' && 'ubuntu-24.04-arm') || 'ubuntu-22.04' }}
     steps:
-      - name: Resolve target metadata
-        id: meta
-        run: |
-          case "${{ matrix.target }}" in
-            linux-x86_64)
-              echo "cmake_extra=-DIREE_HAL_DRIVER_CUDA=ON -DIREE_HAL_DRIVER_VULKAN=ON" >> "$GITHUB_OUTPUT"
-              echo "cache_suffix=-cuda-vulkan" >> "$GITHUB_OUTPUT" ;;
-            linux-aarch64)
-              echo "cmake_extra=" >> "$GITHUB_OUTPUT"
-              echo "cache_suffix=-nocuda" >> "$GITHUB_OUTPUT" ;;
-            macos-aarch64)
-              echo "cmake_extra=-DIREE_HAL_DRIVER_METAL=ON" >> "$GITHUB_OUTPUT"
-              echo "cache_suffix=-metal" >> "$GITHUB_OUTPUT" ;;
-          esac
+      - uses: actions/checkout@v5
 
-      - name: Cache IREE runtime
-        id: cache-iree
-        uses: actions/cache@v5
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
         with:
-          path: iree-install
-          key: iree-runtime-${{ needs.read-iree-version.outputs.version }}-${{ matrix.target }}${{ steps.meta.outputs.cache_suffix }}-v1
+          bazelisk-version: 1.28.1
+          bazelisk-cache: true
+          repository-cache: true
+          external-cache: true
 
-      - name: Install cross-compilation toolchain (linux-aarch64)
-        if: steps.cache-iree.outputs.cache-hit != 'true' && matrix.target == 'linux-aarch64'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-      - name: Install CUDA headers (linux-x86_64)
-        if: steps.cache-iree.outputs.cache-hit != 'true' && matrix.target == 'linux-x86_64'
+      - name: Install CUDA toolkit
+        if: matrix.target == 'linux-x86_64'
         run: |
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
           sudo apt-get install -y cuda-nvcc-12-6
 
-      - name: Install build tools
-        if: steps.cache-iree.outputs.cache-hit != 'true'
-        run: |
-          if [[ "${{ matrix.target }}" == macos-* ]]; then
-            brew install cmake ninja
-          else
-            sudo apt-get update
-            sudo apt-get install -y cmake ninja-build
-          fi
-
-      - name: Clone IREE
-        if: steps.cache-iree.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch v${{ needs.read-iree-version.outputs.version }} ${{ env.IREE_REPO }}
-          cd iree
-          git submodule update --init --depth 1
-
-      - name: Build host flatcc (cross-compilation only)
-        if: steps.cache-iree.outputs.cache-hit != 'true' && matrix.target == 'linux-aarch64'
-        run: |
-          cmake -G Ninja -B iree-host-build -S iree \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DIREE_BUILD_COMPILER=OFF \
-            -DIREE_BUILD_TESTS=OFF \
-            -DIREE_BUILD_SAMPLES=OFF
-          cmake --build iree-host-build --target iree-flatcc-cli
-          mkdir -p iree-host-install/bin
-          find iree-host-build -name "iree-flatcc-cli" -type f -exec cp {} iree-host-install/bin/ \;
-
-      - name: Build IREE runtime
-        if: steps.cache-iree.outputs.cache-hit != 'true'
-        run: |
-          EXTRA_FLAGS="${{ steps.meta.outputs.cmake_extra }}"
-          if [[ "${{ matrix.target }}" == "linux-aarch64" ]]; then
-            EXTRA_FLAGS="$EXTRA_FLAGS -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DIREE_HOST_BIN_DIR=${{ github.workspace }}/iree-host-install/bin"
-          fi
-          cmake -G Ninja -B iree-build -S iree \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/iree-install \
-            -DIREE_BUILD_COMPILER=OFF \
-            -DIREE_BUILD_TESTS=OFF \
-            -DIREE_BUILD_SAMPLES=OFF \
-            -DIREE_HAL_DRIVER_LOCAL_SYNC=ON \
-            -DIREE_HAL_DRIVER_LOCAL_TASK=ON \
-            -DIREE_HAL_DRIVER_VULKAN=OFF \
-            $EXTRA_FLAGS
-          cmake --build iree-build --target iree_runtime_unified flatcc_parsing flatcc_runtime || \
-          cmake --build iree-build --target iree_runtime_unified
-          mkdir -p iree-install/lib
-          find iree-build -name "libiree_runtime_unified.a" -exec cp {} iree-install/lib/ \;
-          find iree-build -name "libflatcc*" -type f -exec cp {} iree-install/lib/ \; 2>/dev/null || true
-          ls -la iree-install/lib/
-
-      - name: Upload IREE runtime
-        uses: actions/upload-artifact@v5
-        with:
-          name: iree-runtime-${{ matrix.target }}
-          path: iree-install/lib/
-
-  build-sheaf:
-    needs: build-iree-runtime
-    strategy:
-      matrix:
-        target: ${{ fromJson(inputs.targets) }}
-    runs-on: ${{ (matrix.target == 'macos-aarch64' && 'macos-15') || 'ubuntu-22.04' }}
-    steps:
-      - name: Resolve Rust target + linker
-        id: meta
-        run: |
-          case "${{ matrix.target }}" in
-            linux-x86_64)   echo "rust_target=x86_64-unknown-linux-gnu"  >> "$GITHUB_OUTPUT"; echo "linker=" >> "$GITHUB_OUTPUT"; echo "strip=aarch64-no" >> "$GITHUB_OUTPUT" ;;
-            linux-aarch64)  echo "rust_target=aarch64-unknown-linux-gnu" >> "$GITHUB_OUTPUT"; echo "linker=aarch64-linux-gnu-gcc" >> "$GITHUB_OUTPUT"; echo "strip=cross" >> "$GITHUB_OUTPUT" ;;
-            macos-aarch64)  echo "rust_target=aarch64-apple-darwin"      >> "$GITHUB_OUTPUT"; echo "linker=" >> "$GITHUB_OUTPUT"; echo "strip=native" >> "$GITHUB_OUTPUT" ;;
-          esac
-
-      - uses: actions/checkout@v5
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ steps.meta.outputs.rust_target }}
-
-      - name: Install cross-linker (linux-aarch64)
-        if: matrix.target == 'linux-aarch64'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-      - name: Download IREE runtime
-        uses: actions/download-artifact@v5
-        with:
-          name: iree-runtime-${{ matrix.target }}
-          path: iree-runtime-lib
-
-      - name: Build sheaf
+      - name: Build Sheaf
         env:
-          IREE_RUNTIME_LIB_DIR: ${{ github.workspace }}/iree-runtime-lib
+          IREE_CUDA_TOOLKIT_ROOT: ${{ matrix.target == 'linux-x86_64' && '/usr/local/cuda-12.6' || '' }}
           SHEAF_BUILD_VERSION: ${{ inputs.build_version }}
         run: |
-          if [[ -n "${{ steps.meta.outputs.linker }}" ]]; then
-            mkdir -p .cargo
-            cat > .cargo/config.toml << 'TOML'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "${{ steps.meta.outputs.linker }}"
-          TOML
+          args=(
+            build
+            --config=release
+            --config=${{ matrix.target }}
+          )
+          if [[ -n "$SHEAF_BUILD_VERSION" ]]; then
+            args+=("--define=SHEAF_BUILD_VERSION=$SHEAF_BUILD_VERSION")
           fi
-          cd sheaf
-          cargo build --release --target ${{ steps.meta.outputs.rust_target }}
+          bazel "${args[@]}" //sheaf:bin
 
       - name: Strip and package
         run: |
-          BIN=sheaf/target/${{ steps.meta.outputs.rust_target }}/release/sheaf
-          if [[ "${{ matrix.target }}" == linux-aarch64 ]]; then
-            aarch64-linux-gnu-strip "$BIN"
-          else
-            strip "$BIN"
-          fi
-          tar czf sheaf-${{ matrix.target }}.tar.gz -C sheaf/target/${{ steps.meta.outputs.rust_target }}/release sheaf
+          mkdir -p package
+          cp -L bazel-bin/sheaf/sheaf package/sheaf
+          chmod u+w package/sheaf
+          strip package/sheaf
+          tar czf sheaf-${{ matrix.target }}.tar.gz -C package sheaf
 
       - name: Verify version stamp
-        run: |
-          BIN=sheaf/target/${{ steps.meta.outputs.rust_target }}/release/sheaf
-          echo "Built version: $(${BIN} --version 2>/dev/null || echo '(cannot run on this host)')"
+        run: ./package/sheaf --version
 
       - name: Upload binary
         uses: actions/upload-artifact@v5

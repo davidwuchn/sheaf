@@ -7,6 +7,20 @@ use crate::core::ast::{SheafValue, SourceLocation};
 use crate::core::error::{SheafError, SheafResult};
 use std::rc::Rc;
 
+#[cfg(all(test, not(cargo_source_prelude)))]
+static PARSER_INVOCATIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(all(test, not(cargo_source_prelude)))]
+pub(crate) fn reset_parser_invocations() {
+    PARSER_INVOCATIONS.store(0, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(all(test, not(cargo_source_prelude)))]
+pub(crate) fn parser_invocations() -> usize {
+    PARSER_INVOCATIONS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 type ParseResult<T> = SheafResult<T>;
 
 /// Token types
@@ -534,6 +548,8 @@ impl Parser {
 
 /// Parse Sheaf source code into AST
 pub fn parse(source: &str, filename: impl Into<String>) -> ParseResult<Vec<SheafValue>> {
+    #[cfg(all(test, not(cargo_source_prelude)))]
+    PARSER_INVOCATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let filename = filename.into();
     let mut tokenizer = Tokenizer::new(source, filename.clone());
     let tokens = tokenizer.tokenize()?;

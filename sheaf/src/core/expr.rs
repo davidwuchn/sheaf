@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// A leaf field in a parameter layout: a named tensor with its shape
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ParamField {
     /// Path of keys from the root: e.g. ["attn", "Wq"]
     pub path: Vec<String>,
@@ -22,7 +22,7 @@ pub struct ParamField {
     pub tuple_index: Vec<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ParamLayout {
     pub name: String,
     /// Flattened list of fields in declaration order
@@ -87,7 +87,7 @@ pub struct CompilerContext {
 }
 
 /// Function definition
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FunctionDef {
     pub name: String,
     pub params: Vec<String>,
@@ -256,9 +256,30 @@ fn is_builtin_name(name: &str) -> bool {
     )
 }
 
+const STDLIB: &[(&str, &str)] = &[
+    ("macros.shf", include_str!("../../lib/macros.shf")),
+    ("misc.shf", include_str!("../../lib/misc.shf")),
+    ("nn.shf", include_str!("../../lib/nn.shf")),
+    ("optim.shf", include_str!("../../lib/optim.shf")),
+];
+
 impl CompilerContext {
     pub fn new() -> Self {
-        let mut ctx = Self {
+        let mut context = Self::new_without_prelude();
+        #[cfg(any(sheaf_frontend, cargo_source_prelude))]
+        context.load_prelude_from_source()
+            .expect("embedded Sheaf prelude must compile");
+        #[cfg(not(any(sheaf_frontend, cargo_source_prelude)))]
+        context.load_prelude_image()
+            .expect("embedded Sheaf prelude image must be valid");
+        context
+    }
+
+    /// Construct a compiler context without installing the embedded prelude.
+    ///
+    /// This is the bootstrap entry point used by the prelude compiler.
+    pub fn new_without_prelude() -> Self {
+        Self {
             env: Self::init_env(),
             registry: HashMap::new(),
             local_vars: HashMap::new(),
@@ -271,33 +292,45 @@ impl CompilerContext {
             disable_vmfb: false,
             checked_vmfb_dirs: HashSet::new(),
             macro_engine: MacroEngine::new(),
-        };
-        ctx.load_prelude();
-        ctx
+        }
     }
 
-    /// Load the standard library embedded in the binary.
-    /// Macros first (other modules depend on them), then nn, optim.
-    fn load_prelude(&mut self) {
-        const STDLIB: &[(&str, &str)] = &[
-            ("macros.shf", include_str!("../../lib/macros.shf")),
-            ("misc.shf", include_str!("../../lib/misc.shf")),
-            ("nn.shf", include_str!("../../lib/nn.shf")),
-            ("optim.shf", include_str!("../../lib/optim.shf")),
-        ];
+    /// Parse and compile one prelude module into this context.
+    #[cfg(any(sheaf_frontend, cargo_source_prelude, test))]
+    pub fn compile_prelude_module(&mut self, name: &str, source: &str) -> SheafResult<()> {
+        crate::core::error_format::register_source(name, source);
+        let exprs = crate::core::parse(source, name)?;
+        for expr in &exprs {
+            self.compile(expr)?;
+        }
+        self.prelude_modules.insert(
+            name.strip_suffix(".shf").unwrap_or(name).to_string()
+        );
+        Ok(())
+    }
+
+    /// Compile the embedded standard library from source for bootstrap and tests.
+    #[cfg(any(sheaf_frontend, cargo_source_prelude, test))]
+    pub fn load_prelude_from_source(&mut self) -> SheafResult<()> {
+        for (name, source) in STDLIB {
+            self.compile_prelude_module(name, source)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(sheaf_frontend, cargo_source_prelude)))]
+    fn load_prelude_image(&mut self) -> Result<(), crate::core::prelude::PreludeError> {
         for (name, source) in STDLIB {
             crate::core::error_format::register_source(name, source);
-            if let Ok(exprs) = crate::core::parse(source, *name) {
-                for expr in &exprs {
-                    let _ = self.compile(expr);
-                }
-            }
-            // Mark stdlib modules as loaded so `(use nn)` is a no-op
-            // even if a local nn.shf exists.
-            self.prelude_modules.insert(
-                name.strip_suffix(".shf").unwrap_or(name).to_string()
-            );
         }
+        let source_hash = crate::core::prelude::content_identity(
+            STDLIB.iter().map(|(name, source)| (*name, source.as_bytes())),
+        );
+        crate::core::prelude::install_embedded(
+            self,
+            env!("SHEAF_COMPILER_VERSION"),
+            &source_hash,
+        )
     }
 
 
@@ -571,7 +604,7 @@ impl CompilerContext {
 }
 
 /// Binding pattern for let bindings (simple or destructuring).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum BindingPattern {
     Simple(String),
     Destructure(Vec<BindingPattern>),
@@ -603,7 +636,7 @@ impl std::fmt::Display for BindingPattern {
 }
 
 /// Compiled expression - intermediate representation
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub enum CompiledExpr {
     Integer(i64),
     Float(f64),
@@ -845,7 +878,7 @@ impl std::fmt::Debug for CompiledExpr {
 }
 
 /// Guard check type for runtime assertions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum GuardCheck {
     NoNan,
     Range { lo: f64, hi: f64 },

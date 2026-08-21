@@ -4,7 +4,7 @@
 //! StableHLO type system: StableHLOType, Register, and parsing utilities.
 
 /// StableHLO type representation
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StableHLOType {
     /// Scalar tensor: tensor<f32>
     ScalarF32,

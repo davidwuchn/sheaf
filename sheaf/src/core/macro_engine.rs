@@ -11,7 +11,7 @@ use crate::core::expr::FunctionDef;
 use crate::core::error::{SheafError, SheafResult, SourceLocation};
 
 /// A user-defined macro registered via (defmacro name [params] body-template).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MacroDef {
     pub name: String,
     pub positional_params: Vec<String>,

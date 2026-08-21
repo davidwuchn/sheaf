@@ -17,6 +17,8 @@ name = "sheaf_compiler"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+bincode = "1.3"
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 getrandom = "0.2"
 rustyline = "14"

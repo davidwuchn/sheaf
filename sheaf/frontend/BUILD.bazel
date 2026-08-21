@@ -1,0 +1,42 @@
+load("@crates//:defs.bzl", "crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "frontend",
+    srcs = ["//sheaf:frontend_srcs"],
+    compile_data = [
+        "//sheaf/lib:macros.shf",
+        "//sheaf/lib:misc.shf",
+        "//sheaf/lib:nn.shf",
+        "//sheaf/lib:optim.shf",
+    ],
+    crate_name = "sheaf_frontend",
+    crate_root = "//sheaf:src/frontend.rs",
+    edition = "2024",
+    rustc_flags = [
+        "--cfg=sheaf_frontend",
+        "--check-cfg=cfg(cargo_source_prelude)",
+        "--check-cfg=cfg(iree_runtime)",
+        "--check-cfg=cfg(sheaf_frontend)",
+        "--check-cfg=cfg(test)",
+    ],
+    deps = crate_deps(
+        ["bincode", "serde"],
+        package_name = "sheaf",
+    ),
+)
+
+rust_test(
+    name = "frontend_tests",
+    srcs = ["frontend_tests.rs"],
+    compile_data = [
+        "//sheaf/lib:macros.shf",
+        "//sheaf/lib:misc.shf",
+        "//sheaf/lib:nn.shf",
+        "//sheaf/lib:optim.shf",
+    ],
+    edition = "2024",
+    deps = [":frontend"],
+)

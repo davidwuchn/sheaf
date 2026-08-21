@@ -1,0 +1,22 @@
+load("//bazel:prelude_image.bzl", "prelude_image")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "macros.shf",
+    "misc.shf",
+    "nn.shf",
+    "optim.shf",
+])
+
+prelude_image(
+    name = "prelude_image",
+    compiler = "//sheaf/tools:prelude_compiler",
+    frontend_srcs = ["//sheaf:frontend_srcs"],
+    modules = [
+        "macros.shf",
+        "misc.shf",
+        "nn.shf",
+        "optim.shf",
+    ],
+)

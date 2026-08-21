@@ -19,7 +19,7 @@ use crate::core::ast::SheafValue;
 use std::collections::HashMap;
 
 /// Type of a value emitted into StableHLO MLIR.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StableHLOType {
     ScalarF32,
     ScalarBF16,

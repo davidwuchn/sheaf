@@ -78,7 +78,7 @@ for more code samples.
 
 ### Install
 
-Note: Sheaf is under active development. The langage and compiler interfaces may
+Note: Sheaf is under active development. The language and compiler interfaces may
 still change between releases.
 
 - Download the binary tarball from https://github.com/sheaf-lang/sheaf/releases
@@ -91,33 +91,63 @@ On macOS, the Sheaf binary might be blocked by Gatekeeper. Unlock it with:
 xattr -dr com.apple.quarantine /path/to/sheaf
 ```
 
-### Build from source
+### Quick test
 
-Sheaf statically links against the [IREE](https://iree.dev) runtime, whose
-libraries are not vendored in this repository, so a fresh `git clone` requires
-one extra step before `cargo build` will work:
+Run the nanoGPT example:
 
 ```bash
-cd sheaf
-./build-iree.sh                          # builds IREE into iree-runtime/
-cargo build --release                    # builds Sheaf
-cp target/release/sheaf ~/.local/bin     # (or /usr/local/bin)
+cd examples/nanoGPT
+sheaf train.shf   # training
+sheaf sample.shf  # autoregressive inference
 ```
 
-The following tools are required on both Linux and macOS:
+### Build from source
 
-`cmake ninja git g++ rustc cargo`
+Sheaf and its dependencies are built with [Bazel](https://bazel.build). We
+recommend installing it through [Bazelisk](https://github.com/bazelbuild/bazelisk):
 
-On Linux, you will need to install `cuda-nvcc` and/or the Vulkan headers.
+```bash
+# macOS
+brew install bazelisk
+```
 
-On macOS, the Xcode Command Line Tools are required. Install them with:
+```bash
+# linux x86_64
+sudo curl -L -o /usr/local/bin/bazel \
+  "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64"
+sudo chmod +x /usr/local/bin/bazel
+```
+```bash
+# linux aarch64
+sudo curl -L -o /usr/local/bin/bazel \
+  "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-arm64"
+sudo chmod +x /usr/local/bin/bazel
+```
+Then build Sheaf from the repository root:
+
+```bash
+bazel build --config=release //sheaf:bin
+cp bazel-bin/sheaf/sheaf ~/.local/bin    # or /usr/local/bin
+```
+
+On macOS, Bazel requires the Xcode Command Line Tools:
 
 ```bash
 xcode-select --install
 ```
 
-Sheaf requires Rust 1.85 or later. If your distribution ships an older version,
-either build from a container, or [upgrade your compiler](https://rustup.rs).
+Finally, Sheaf requires `curl` and `unzip` to download the matching IREE compiler toolchain at first use.
+
+#### GPU support
+
+CUDA is automatically enabled on Linux when `nvcc` is available, or you can specify a specific toolkit at build time with 
+` --repo_env=IREE_CUDA_TOOLKIT_ROOT=/path/to/cuda`.
+Running Sheaf with CUDA requires a compatible NVIDIA driver.
+
+Vulkan is enabled by default on Linux, and the required headers are automatically fetched.
+  Running Sheaf with Vulkan requires a Vulkan loader and a compatible device driver.
+
+Metal is enabled by default on Apple Silicon. No extra dependency is needed beyond the Xcode Command Line Tools.
 
 ### Links
 

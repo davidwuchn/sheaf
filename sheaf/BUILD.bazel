@@ -1,0 +1,78 @@
+load("//bazel:version_file.bzl", "cargo_rustc_env", "version_file")
+load("@crates//:defs.bzl", "aliases", "all_crate_deps", "crate_edition")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "Cargo.lock",
+    "Cargo.toml",
+])
+
+filegroup(
+    name = "frontend_srcs",
+    srcs = glob([
+        "src/core/**/*.rs",
+        "src/forms/**/*.rs",
+    ]) + [
+        "src/frontend.rs",
+        "src/lowering/stablehlo/types.rs",
+    ],
+)
+
+version_file(
+    name = "generated_version",
+    cargo_toml = "Cargo.toml",
+)
+
+cargo_rustc_env(
+    name = "cargo_rustc_env",
+    cargo_toml = "Cargo.toml",
+)
+
+rust_library(
+    name = "compiler_lib",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    compile_data = [
+        ":generated_version",
+        "//sheaf/lib:prelude_image",
+        "//sheaf/lib:macros.shf",
+        "//sheaf/lib:misc.shf",
+        "//sheaf/lib:nn.shf",
+        "//sheaf/lib:optim.shf",
+    ],
+    crate_name = "sheaf_compiler",
+    edition = crate_edition(),
+    link_deps = [
+        "//bazel:platform_runtime_libs",
+        "@iree//runtime/src/iree/runtime",
+    ],
+    rustc_env = {
+        "OUT_DIR": "$(execpath :generated_version)",
+        "PRELUDE_OUT_DIR": "$(execpath //sheaf/lib:prelude_image)",
+    },
+    rustc_env_files = [":cargo_rustc_env"],
+    rustc_flags = [
+        "--cfg=iree_runtime",
+        "--check-cfg=cfg(cargo_source_prelude)",
+        "--check-cfg=cfg(iree_runtime)",
+        "--check-cfg=cfg(sheaf_frontend)",
+        "--check-cfg=cfg(test)",
+    ],
+    deps = all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "bin",
+    srcs = glob(["src/bin/sheaf/*.rs"]),
+    aliases = aliases(),
+    binary_name = "sheaf",
+    compile_data = [
+        "assets/reference.md",
+        "assets/sheaf-context.md",
+    ],
+    crate_name = "sheaf",
+    edition = crate_edition(),
+    deps = [":compiler_lib"] + all_crate_deps(normal = True),
+)
