@@ -78,13 +78,13 @@ sheaf_program_test(
 sheaf_program_test(
     name = "regression_nanogpt",
     expression = """
-(use \"./examples/nanoGPT/train.shf\")
+(use \"./examples/nanogpt/train.shf\")
 (use \"./sheaf/tests/regressions.shf\")
 (check-nanogpt)
 """,
     data = [
-        "//:examples/nanoGPT/model.shf",
-        "//:examples/nanoGPT/train.shf",
+        "//examples/nanogpt:model.shf",
+        "//examples/nanogpt:train.shf",
     ],
     size = "large",
     timeout = "long",

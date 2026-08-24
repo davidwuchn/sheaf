@@ -61,3 +61,16 @@ iree_compiler_repository(
     name = "iree_compiler",
     cargo_toml = "//sheaf:Cargo.toml",
 )
+
+http_file = use_repo_rule(
+    "@bazel_tools//tools/build_defs/repo:http.bzl",
+    "http_file",
+)
+http_file(
+    name = "nanogpt_weights",
+    downloaded_file_path = "model.safetensors",
+    sha256 = "4d01102ce7c7d7a41e76ee785211bd35f6734dd7d4a9e3eecd85f1a23308a239",
+    urls = [
+        "https://huggingface.co/dbrll/sheaf-nanogpt-shakespeare/resolve/a4cda36d4659b50af7775dcfabc430f72b37e28d/model.safetensors",
+    ],
+)

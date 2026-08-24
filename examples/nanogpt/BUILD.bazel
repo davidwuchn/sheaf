@@ -1,0 +1,20 @@
+load("//bazel:sheaf_example.bzl", "sheaf_example")
+
+package(default_visibility = ["//visibility:public"])
+
+sheaf_example(
+    name = "nanogpt",
+    script = "sample.shf",
+    files = {
+        "model.shf": "model.shf",
+        "data/shakespeare_char/vocab.json": "data/shakespeare_char/vocab.json",
+        "out-shakespeare-char/config.json": "out-shakespeare-char/config.json",
+        "@nanogpt_weights//file": "out-shakespeare-char/model.safetensors",
+    },
+)
+
+exports_files([
+    "model.shf",
+    "sample.shf",
+    "train.shf",
+])

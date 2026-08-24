@@ -9,6 +9,4 @@ exports_files([
     "examples/hydra/hydra.shf",
     "examples/mlp/mlp.shf",
     "examples/mlp/training.shf",
-    "examples/nanoGPT/model.shf",
-    "examples/nanoGPT/train.shf",
 ])

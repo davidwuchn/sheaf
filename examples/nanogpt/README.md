@@ -7,10 +7,33 @@ model and weights.
 This port explores how Transformer training looks when expressed in a language
 built around pure functions, program transforms, and explicit state.
 
+## Quick start
+
+The examples archive published with Sheaf releases includes pretrained
+weights. Run inference directly from the extracted NanoGPT directory:
+
+```bash
+sheaf sample.shf
+```
+
+To train the model from scratch and run inference with the resulting checkpoint:
+
+```bash
+sheaf train.shf
+sheaf sample.shf
+```
+
+From a source checkout, Bazel downloads the pretrained weights from
+[Hugging Face](https://huggingface.co/dbrll/sheaf-nanogpt-shakespeare) and runs
+inference automatically:
+
+```bash
+bazel run //examples/nanogpt
+```
+
 ## Training model: implicit vs explicit
 
-The main difference with PyTorch is not the training algorithm, but where the
-state lives.
+The main difference between Sheaf and PyTorch is where the state lives.
 
 In PyTorch, training state is attached to objects. Parameters live inside the
 model, while gradients are stored on parameter tensors and optimizer state is
@@ -19,7 +42,7 @@ held by the optimizer.
 ```python
 def train_step(model, optimizer, X, Y, lr, betas, eps, weight_decay, grad_clip):
     logits, loss = model(X, Y)                                   # forward
-    loss.backward()                                              # backward, accumulates into .grad 
+    loss.backward()                                              # backward, accumulates into .grad
 
     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     optimizer.step()                                             # reads .grad, mutates params
@@ -75,53 +98,6 @@ A stack of Transformer blocks is just a list processed with reduce:
 
 ```clojure
 (reduce (fn [h bp] (transformer-block h bp config)) x blocks)
-```
-
-### Execution
-
-The forward function lowers to StableHLO and is compiled by IREE into a VMFB.
-`value-and-grad` operates on the same IR, so the compiled program contains both
-the forward and backward computations.
-
-## Architecture
-
-This port is faithful to Karpathy's `shakespeare_char` config:
-
-|                      |                                               |
-| -------------------- | --------------------------------------------- |
-| Parameters           | 10.65M                                        |
-| Layers / dim / heads | 6 / 384 / 6                                   |
-| Vocab / block size   | 65 / 256                                      |
-| Norm                 | pre-LayerNorm, no bias (`bias=False`)         |
-| Activation           | GELU                                          |
-| QKV                  | fused `[3D, D]` weight, split at runtime      |
-| Optimizer            | AdamW (wd 0.1) + cosine decay + grad-clip 1.0 |
-
-## Files
-
-| File         | Role                                                 |
-| ------------ | ---------------------------------------------------- |
-| `model.shf`  | Architecture: attention, blocks, forward, sampling   |
-| `train.shf`  | Data loading, training step, AdamW + cosine schedule |
-| `sample.shf` | Autoregressive generation                            |
-
-## Quick start
-
-```bash
-sheaf sample.shf     # generate Shakespeare
-sheaf train.shf      # train for 100 steps, checkpoint to SafeTensors
-```
-
-## Example output
-
-Typical output from a 10M-parameter character-level model:
-
-```
-CAMILLO:
-Be the doubting before is not brother,
-The seaster such such of the foes,
-And in my cries abbelaliments it be
-Eing men's to the names?
 ```
 
 ## Sheaf-isms in the code
