@@ -23,8 +23,31 @@ jobs:
       targets: '["linux-x86_64", "linux-aarch64", "macos-aarch64"]'
       build_version: ${{ inputs.build_version || '' }}
 
+  examples:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-version: 1.28.1
+          bazelisk-cache: true
+          repository-cache: true
+          external-cache: true
+
+      - name: Package examples
+        run: ./mkexamples.sh
+
+      - name: Upload examples
+        uses: actions/upload-artifact@v5
+        with:
+          name: sheaf-examples
+          path: sheaf-examples.tar.gz
+          retention-days: 14
+
   release-draft:
-    needs: cuda-test
+    needs: [cuda-test, examples]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-22.04
     steps:

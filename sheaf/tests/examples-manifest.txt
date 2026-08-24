@@ -22,12 +22,12 @@
 # The file MUST be edited with real tabs. Use `cat -t` to inspect (tabs
 # show as ^I). 
 #
-# Execution order: mlp, hydra, clevr, nanoGPT/train, nanoGPT/sample
+# Execution order: mlp, hydra, clevr, nanogpt/train, nanogpt/sample
 # (shortest first, so a breakage surfaces quickly).
 
 # group	entry	inputs	artifacts	validator	timeout
 mlp	run.shf	none	none	mlp	30
 hydra	run.shf	none	none	hydra	30
 clevr	run.shf	params.pkl	none	clevr	30
-nanoGPT	train.shf	out-shakespeare-char/config.json,data/shakespeare_char	out-shakespeare-char/ckpt.safetensors	nanoGPT-train	300
-nanoGPT	sample.shf		none	nanoGPT-sample	120
+nanogpt	train.shf	out-shakespeare-char/config.json,data/shakespeare_char	out-shakespeare-char/ckpt.safetensors	nanoGPT-train	300
+nanogpt	sample.shf		none	nanoGPT-sample	120

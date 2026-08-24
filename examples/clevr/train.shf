@@ -1,0 +1,165 @@
+;; -*- mode: clojure -*-
+
+;; Scene tensor layout: [B, N, 13] where
+;;   dims [0, 8)  = color one-hot  (8 colors)
+;;   dims [8, 11) = shape one-hot  (3 shapes)
+;;   dims [11, 13) = x, y position
+
+(use model)
+(use data)
+(use utils)
+
+
+(defn color-emb [p idx]
+  (* (einsum "k,kd->d" (one-hot idx n-colors) (get p :color_embeddings))
+     color-mask))
+
+(defn shape-emb [p idx]
+  (* (einsum "k,kd->d" (one-hot idx n-shapes) (get p :shape_embeddings))
+     shape-mask))
+
+
+;; eps prevents log(0).
+(defn bce [prob target]
+  (let [eps 1e-7]
+    (* -1.0 (+ (* target (log (+ prob eps)))
+               (* (- 1.0 target) (log (+ (- 1.0 prob) eps)))))))
+
+(defn ce [logits target-idx n-classes]
+  (let [log-p (log-softmax logits :axis -1)
+        target-oh (one-hot target-idx n-classes)]
+    (* -1.0 (sum (* log-p target-oh)))))
+
+;; A score of 0.5 is the decision boundary during attention training.
+(def attention-bias 0.5)
+(def attention-temp 0.5)
+
+(defn loss-filter-color [p scene-batch color-idx target-att]
+  (let [scores    (einsum "...nd,d->...n" scene-batch (color-emb p color-idx))
+        attention (sigmoid (/ (- (slice scores 0 n-objects :axis -1) attention-bias) attention-temp))]
+    (sum (bce attention target-att))))
+
+(defn loss-filter-shape [p scene-batch shape-idx target-att]
+  (let [scores    (einsum "...nd,d->...n" scene-batch (shape-emb p shape-idx))
+        attention (sigmoid (/ (- (slice scores 0 n-objects :axis -1) attention-bias) attention-temp))]
+    (sum (bce attention target-att))))
+
+(defn loss-qcolor-leftmost [p scene-batch shape-idx target-color-idx temp]
+  (let [selected (soft-leftmost (soft-filter scene-batch (shape-emb p shape-idx) temp) temp)
+        logits (einsum "...d,kd->...k"
+                       (slice selected 0 n-colors :axis -1)
+                       (slice (get p :color_embeddings) 0 n-colors :axis -1))]
+    (* 0.5 (ce logits target-color-idx n-colors))))
+
+(defn loss-qshape-leftmost [p scene-batch color-idx target-shape-idx temp]
+  (let [selected (soft-leftmost (soft-filter scene-batch (color-emb p color-idx) temp) temp)
+        logits (einsum "...d,kd->...k"
+                       (slice selected n-colors (+ n-colors n-shapes) :axis -1)
+                       (slice (get p :shape_embeddings) n-colors (+ n-colors n-shapes) :axis -1))]
+    (ce logits target-shape-idx n-shapes)))
+
+(defn train-step [state loss-fn lr]
+  (let [[loss grads] ((value-and-grad loss-fn) (get state :params))
+        [np nm nv nt] (adam-step (get state :params) grads
+                                (get state :m) (get state :v)
+                                (get state :t) lr 0.9 0.999 1e-8)]
+    {:params np :m nm :v nv :t nt :loss loss}))
+
+
+(defn sample-exists-color [state objects scene-batch k lr]
+  (let [cidx (int (random-randint k '[] 0 n-colors))
+        tgt  (tensor (map (fn [o] (if (= (attr-idx (get o :color)) cidx) 1.0 0.0)) objects))]
+    (assoc (train-step state (fn [p] (loss-filter-color p scene-batch cidx tgt)) lr)
+           :type "exists-color")))
+
+(defn sample-exists-shape [state objects scene-batch k lr]
+  (let [sidx (int (random-randint k '[] 0 n-shapes))
+        tgt  (tensor (map (fn [o] (if (= (attr-idx (get o :shape)) sidx) 1.0 0.0)) objects))]
+    (assoc (train-step state (fn [p] (loss-filter-shape p scene-batch sidx tgt)) lr)
+           :type "exists-shape")))
+
+(defn sample-query-color [state objects scene-batch rand-obj temp lr]
+  (let [sname  (get rand-obj :shape)
+        lm-obj (leftmost-by-attr objects :shape sname)]
+    (assoc (train-step state
+             (fn [p] (loss-qcolor-leftmost p scene-batch (attr-idx sname) (attr-idx (get lm-obj :color)) temp))
+             lr)
+           :type "query-color")))
+
+(defn sample-query-shape [state objects scene-batch rand-obj temp lr]
+  (let [cname  (get rand-obj :color)
+        lm-obj (leftmost-by-attr objects :color cname)]
+    (assoc (train-step state
+             (fn [p] (loss-qshape-leftmost p scene-batch (attr-idx cname) (attr-idx (get lm-obj :shape)) temp))
+             lr)
+           :type "query-shape")))
+
+(defn leftmost-by-attr [objects attr-name attr-val]
+  (let [candidates (filter (fn [o] (= (get o attr-name) attr-val)) objects)]
+    (reduce (fn [best o] (if (< (get o :x) (get best :x)) o best))
+            (first candidates) (rest candidates))))
+
+(defn annealing-temp [step n-steps]
+  (let [progress (/ (float step) (float n-steps))]
+    (if (< progress 0.25) 1.0
+    (if (< progress 0.50) 0.5
+    (if (< progress 0.75) 0.2
+                          0.1)))))
+
+
+;; The inference constants are saved alongside the learned embeddings.
+;; sigmoid(5 * (presence - 1.72)) crosses 0.5 when roughly one object is present.
+(def exists-threshold 1.72)
+
+(def inference-config {:temps {:filter 0.1 :unique 0.1 :leftmost 0.1 :spatial 0.05}
+                       :thresholds {:spatial 0.0 :exists exists-threshold}})
+
+(let [seed    42
+      [ck sk] (random-split (random-key seed))
+      params  {:color_embeddings (* (random-normal ck '[8 13]) 0.3)
+               :shape_embeddings (* (random-normal sk '[3 13]) 0.3)}
+      lr      0.005
+      n-steps 10000
+
+      final
+        (repeat [step n-steps]
+          [state {:params params
+                  :m (tree-map-zeros params)
+                  :v (tree-map-zeros params)
+                  :t 0
+                  :key (second (random-split (random-key seed)))}]
+          (let [[k1 k2 k3 k4] (random-split (get state :key) 4)
+                scene    (generate-scene k2 4)
+                objects  (get scene :objects)
+                scene-batch  (reshape (scene-to-tensor scene) '[1 5 13])
+                temp     (annealing-temp step n-steps)
+                rand-obj (nth objects (int (random-randint k3 '[] 0 (count objects))))
+
+                result
+                  (case (mod step 4)
+                    0 (sample-exists-color state objects scene-batch k4 lr)
+                    1 (sample-exists-shape state objects scene-batch k4 lr)
+                    2 (sample-query-color  state objects scene-batch rand-obj temp lr)
+                    3 (sample-query-shape  state objects scene-batch rand-obj temp lr))
+
+                _ (when (= (mod step 101) 0)
+                    (print "Step {:4} | Loss: {:.4f} | Temp: {:.2f} | {}"
+                           step (get result :loss) temp (get result :type)))]
+
+            {:params (get result :params)
+             :m (get result :m)
+             :v (get result :v)
+             :t (get result :t)
+             :key k1}))
+
+      trained (get final :params)]
+
+  (print "")
+  (print "=== Learned color_embeddings ===")
+  (print (slice (get trained :color_embeddings) 0 8 :axis -1))
+  (print "")
+  (print "=== Learned shape_embeddings ===")
+  (print (slice (get trained :shape_embeddings) 8 11 :axis -1))
+  (print "")
+  (io "save" "params.pkl" (merge trained inference-config))
+  (print "Saved trained params to params.pkl"))
