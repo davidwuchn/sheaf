@@ -76,6 +76,22 @@ sheaf_program_test(
 )
 
 sheaf_program_test(
+    name = "regression_clevr_training",
+    expression = """
+(use "./examples/clevr/data.shf")
+(use "./examples/clevr/model.shf")
+(use "./sheaf/tests/regressions.shf")
+(check-clevr-training)
+""",
+    data = [
+        "//:examples/clevr/data.shf",
+        "//:examples/clevr/model.shf",
+        "//:examples/clevr/utils.shf",
+    ],
+    size = "small",
+)
+
+sheaf_program_test(
     name = "regression_nanogpt",
     expression = """
 (use \"./examples/nanogpt/train.shf\")
@@ -104,6 +120,7 @@ test_suite(
     tests = [
         ":compiler_tests",
         ":regression_clevr",
+        ":regression_clevr_training",
         ":regression_hydra",
         ":regression_macros",
         ":regression_mlp",
