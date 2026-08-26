@@ -29,7 +29,7 @@ impl StableHLOEmitter {
     /// Emit a constant i32 scalar
     pub fn emit_constant_i32(&mut self, value: i64) -> Register {
         let reg = self.fresh_register();
-        let ty = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+        let ty = StableHLOType::typed_tensor(vec![], "i32");
         self.body.push(format!(
             "    {} = stablehlo.constant dense<{}> : {}",
             reg.to_mlir(),

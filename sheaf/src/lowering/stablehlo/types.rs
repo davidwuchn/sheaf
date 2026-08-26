@@ -3,11 +3,15 @@
 
 //! StableHLO type system: StableHLOType, Register, and parsing utilities.
 
+use crate::core::dtype::ElementType;
+
 /// StableHLO type representation
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StableHLOType {
     /// Scalar tensor: tensor<f32>
     ScalarF32,
+    /// Scalar tensor: tensor<f16>
+    ScalarF16,
     /// Scalar tensor: tensor<bf16>
     ScalarBF16,
     /// Scalar tensor: tensor<f64>
@@ -17,7 +21,7 @@ pub enum StableHLOType {
     /// Scalar tensor: tensor<i1> (boolean)
     ScalarI1,
     /// Tensor with shape: tensor<2x3xf32>
-    Tensor { shape: Vec<i64>, dtype: String },
+    Tensor { shape: Vec<i64>, dtype: ElementType },
     /// Tuple of types: tuple<tensor<2x3xf32>, tensor<8xf32>>
     /// When keys is Some, this represents a dict (reconstructed as Value::Dict on output).
     Tuple(Vec<StableHLOType>, Option<Vec<String>>),
@@ -26,6 +30,10 @@ pub enum StableHLOType {
 impl StableHLOType {
     pub fn scalar_f32() -> Self {
         Self::ScalarF32
+    }
+
+    pub fn scalar_f16() -> Self {
+        Self::ScalarF16
     }
 
     pub fn scalar_bf16() -> Self {
@@ -37,52 +45,46 @@ impl StableHLOType {
     }
 
     pub fn f32_tensor(shape: impl Into<Vec<i64>>) -> Self {
-        Self::Tensor {
-            shape: shape.into(),
-            dtype: "f32".to_string(),
-        }
+        Self::tensor(shape, ElementType::F32)
+    }
+
+    pub fn f16_tensor(shape: impl Into<Vec<i64>>) -> Self {
+        Self::tensor(shape, ElementType::F16)
     }
 
     pub fn bf16_tensor(shape: impl Into<Vec<i64>>) -> Self {
-        Self::Tensor {
-            shape: shape.into(),
-            dtype: "bf16".to_string(),
-        }
+        Self::tensor(shape, ElementType::BF16)
     }
 
-    /// Create a tensor with the given dtype string ("f32", "bf16", "i32", etc.)
+    /// Create a tensor with the given StableHLO element type.
+    pub fn tensor(shape: impl Into<Vec<i64>>, dtype: ElementType) -> Self {
+        Self::Tensor { shape: shape.into(), dtype }
+    }
+
+    /// Create a tensor from a StableHLO element type string.
     pub fn typed_tensor(shape: impl Into<Vec<i64>>, dtype: &str) -> Self {
-        Self::Tensor {
-            shape: shape.into(),
-            dtype: dtype.to_string(),
-        }
+        let dtype = ElementType::from_mlir_str(dtype)
+            .unwrap_or_else(|| panic!("unsupported StableHLO element type: {}", dtype));
+        Self::tensor(shape, dtype)
     }
 
     pub fn i32_tensor(shape: impl Into<Vec<i64>>) -> Self {
-        Self::Tensor {
-            shape: shape.into(),
-            dtype: "i32".to_string(),
-        }
+        Self::tensor(shape, ElementType::I32)
     }
 
     pub fn i64_tensor(shape: impl Into<Vec<i64>>) -> Self {
-        Self::Tensor {
-            shape: shape.into(),
-            dtype: "i64".to_string(),
-        }
+        Self::tensor(shape, ElementType::I64)
     }
 
     pub fn i1_tensor(shape: impl Into<Vec<i64>>) -> Self {
-        Self::Tensor {
-            shape: shape.into(),
-            dtype: "i1".to_string(),
-        }
+        Self::tensor(shape, ElementType::Bool)
     }
 
     /// Get the shape of this type, or empty slice for scalars/tuples
     pub fn shape(&self) -> &[i64] {
         match self {
             Self::ScalarF32
+            | Self::ScalarF16
             | Self::ScalarBF16
             | Self::ScalarF64
             | Self::ScalarI64
@@ -92,22 +94,29 @@ impl StableHLOType {
         }
     }
 
-    /// Get the dtype string
-    pub fn dtype(&self) -> &str {
+    /// Get the element type of a tensor leaf.
+    pub fn element_type(&self) -> Option<ElementType> {
         match self {
-            Self::ScalarF32 => "f32",
-            Self::ScalarBF16 => "bf16",
-            Self::ScalarF64 => "f64",
-            Self::ScalarI64 => "i64",
-            Self::ScalarI1 => "i1",
-            Self::Tensor { dtype, .. } => dtype,
-            Self::Tuple(..) => "tuple",
+            Self::ScalarF32 => Some(ElementType::F32),
+            Self::ScalarF16 => Some(ElementType::F16),
+            Self::ScalarBF16 => Some(ElementType::BF16),
+            Self::ScalarF64 => Some(ElementType::F64),
+            Self::ScalarI64 => Some(ElementType::I64),
+            Self::ScalarI1 => Some(ElementType::Bool),
+            Self::Tensor { dtype, .. } => Some(*dtype),
+            Self::Tuple(..) => None,
         }
     }
 
-    /// Is this a float type (f32 or bf16)?
+    /// Get the StableHLO dtype string.
+    pub fn dtype(&self) -> &str {
+        self.element_type()
+            .map(ElementType::to_mlir_str)
+            .unwrap_or("tuple")
+    }
+
     pub fn is_float(&self) -> bool {
-        matches!(self.dtype(), "f32" | "bf16")
+        self.element_type().is_some_and(ElementType::is_float)
     }
 
     /// Check if two types have the same tuple nesting structure.
@@ -128,20 +137,21 @@ impl StableHLOType {
     pub fn to_mlir(&self) -> String {
         match self {
             Self::ScalarF32 => "tensor<f32>".to_string(),
+            Self::ScalarF16 => "tensor<f16>".to_string(),
             Self::ScalarBF16 => "tensor<bf16>".to_string(),
             Self::ScalarF64 => "tensor<f64>".to_string(),
             Self::ScalarI64 => "tensor<i64>".to_string(),
             Self::ScalarI1 => "tensor<i1>".to_string(),
             Self::Tensor { shape, dtype } => {
                 if shape.is_empty() {
-                    format!("tensor<{}>", dtype)
+                    format!("tensor<{}>", dtype.to_mlir_str())
                 } else {
                     let shape_str = shape
                         .iter()
                         .map(|d| d.to_string())
                         .collect::<Vec<_>>()
                         .join("x");
-                    format!("tensor<{}x{}>", shape_str, dtype)
+                    format!("tensor<{}x{}>", shape_str, dtype.to_mlir_str())
                 }
             }
             Self::Tuple(elems, _) => {
@@ -171,6 +181,7 @@ impl StableHLOType {
             if parts.len() == 1 {
                 return match parts[0] {
                     "f32" => Some(Self::ScalarF32),
+                    "f16" => Some(Self::ScalarF16),
                     "bf16" => Some(Self::ScalarBF16),
                     "f64" => Some(Self::ScalarF64),
                     "i64" => Some(Self::ScalarI64),
@@ -178,12 +189,12 @@ impl StableHLOType {
                     _ => None,
                 };
             }
-            let dtype = parts.last()?.to_string();
+            let dtype = ElementType::from_mlir_str(parts.last()?)?;
             let shape: Option<Vec<i64>> = parts[..parts.len() - 1]
                 .iter()
                 .map(|d| d.parse::<i64>().ok())
                 .collect();
-            return shape.map(|s| Self::Tensor { shape: s, dtype });
+            return shape.map(|shape| Self::Tensor { shape, dtype });
         }
         None
     }
@@ -235,5 +246,33 @@ impl Register {
             Self::Reg(id) => format!("%{}", id),
             Self::Arg(id) => format!("%arg{}", id),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StableHLOType;
+    use crate::core::dtype::ElementType;
+
+    #[test]
+    fn tensor_serde_remains_compatible_with_string_dtypes() {
+        let ty = StableHLOType::tensor(vec![2, 3], ElementType::BF16);
+        let json = serde_json::to_string(&ty).unwrap();
+        assert_eq!(json, r#"{"Tensor":{"shape":[2,3],"dtype":"bf16"}}"#);
+        assert_eq!(serde_json::from_str::<StableHLOType>(&json).unwrap(), ty);
+    }
+
+    #[test]
+    fn parses_all_supported_tensor_element_types() {
+        for dtype in ["f16", "bf16", "f32", "f64", "i1", "i32", "i64"] {
+            let mlir = format!("tensor<2x{}>", dtype);
+            let ty = StableHLOType::parse(&mlir).unwrap();
+            assert_eq!(ty.to_mlir(), mlir);
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_tensor_element_types() {
+        assert!(StableHLOType::parse("tensor<2xcomplex<f32>>").is_none());
     }
 }

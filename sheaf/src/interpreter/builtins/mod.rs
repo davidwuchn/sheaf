@@ -94,18 +94,7 @@ pub(crate) fn as_scalar(arr: &ArrayD<f32>) -> f32 {
 }
 
 fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
-    let max_ndim = a.len().max(b.len());
-    let mut result = Vec::with_capacity(max_ndim);
-    for i in 0..max_ndim {
-        let da = if i < a.len() { a[a.len() - 1 - i] } else { 1 };
-        let db = if i < b.len() { b[b.len() - 1 - i] } else { 1 };
-        if da == db { result.push(da); }
-        else if da == 1 { result.push(db); }
-        else if db == 1 { result.push(da); }
-        else { return None; }
-    }
-    result.reverse();
-    Some(result)
+    crate::core::shape::broadcast_shapes(a, b).ok()
 }
 
 fn result_dtype(a: Dtype, b: Dtype) -> Dtype {

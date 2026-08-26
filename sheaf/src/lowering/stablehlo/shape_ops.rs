@@ -15,11 +15,7 @@ impl StableHLOEmitter {
     ) -> (Register, StableHLOType) {
         let reg = self.fresh_register();
         // Preserve dtype from operand
-        let dtype = match operand_ty {
-            StableHLOType::Tensor { dtype, .. } => dtype.clone(),
-            _ => "f32".to_string(),
-        };
-        let result_ty = StableHLOType::Tensor { shape: new_shape.to_vec(), dtype };
+        let result_ty = StableHLOType::typed_tensor(new_shape.to_vec(), operand_ty.dtype());
 
         self.body.push(format!(
             "    {} = stablehlo.reshape {} : ({}) -> {}",

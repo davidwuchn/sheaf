@@ -131,22 +131,8 @@ impl StableHLOEmitter {
             "f32"
         };
 
-        // Numpy-style broadcasting: align from trailing dims, take max of each
-        let max_ndim = lhs_shape.len().max(rhs_shape.len());
-        let mut result_shape = Vec::with_capacity(max_ndim);
-        for i in 0..max_ndim {
-            let l = if i < max_ndim - lhs_shape.len() {
-                1
-            } else {
-                lhs_shape[i - (max_ndim - lhs_shape.len())]
-            };
-            let r = if i < max_ndim - rhs_shape.len() {
-                1
-            } else {
-                rhs_shape[i - (max_ndim - rhs_shape.len())]
-            };
-            result_shape.push(l.max(r));
-        }
+        let result_shape = crate::core::shape::broadcast_shapes(lhs_shape, rhs_shape)
+            .expect("binary operand shapes must be validated before StableHLO lowering");
         StableHLOType::typed_tensor(result_shape, result_dtype)
     }
 }

@@ -457,27 +457,10 @@ fn matmul_result_shape(a: &ArrayD<f32>, b: &ArrayD<f32>) -> Vec<usize> {
 
 fn compute_broadcast_shape(shapes: &[&[usize]]) -> Result<Vec<usize>, crate::core::error::SheafError> {
     let mut result = Vec::new();
-    let mut max_len = 0;
-    for s in shapes {
-        max_len = max_len.max(s.len());
+    for shape in shapes {
+        result = crate::core::shape::broadcast_shapes(&result, shape)
+            .map_err(|_| runtime_error("broadcast mismatch"))?;
     }
-
-    for i in 1..=max_len {
-        let mut dim = 1;
-        for s in shapes {
-            if i <= s.len() {
-                let s_dim = s[s.len() - i];
-                if s_dim != 1 {
-                    if dim != 1 && s_dim != dim {
-                        return Err(runtime_error("broadcast mismatch"));
-                    }
-                    dim = s_dim;
-                }
-            }
-        }
-        result.push(dim);
-    }
-    result.reverse();
     Ok(result)
 }
 

@@ -97,15 +97,15 @@ fn decode_raw(raw: &[u8], dtype: &str) -> Result<(Vec<f32>, Dtype), String> {
         )),
         "F16" => Ok((
             raw.chunks_exact(2)
-                .map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]])))
+                .map(|c| crate::core::dtype::f16_bits_to_f32(u16::from_le_bytes([c[0], c[1]])))
                 .collect(),
-            Dtype::F32,
+            Dtype::F16,
         )),
         "BF16" => Ok((
             raw.chunks_exact(2)
-                .map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16))
+                .map(|c| crate::core::dtype::bf16_bits_to_f32(u16::from_le_bytes([c[0], c[1]])))
                 .collect(),
-            Dtype::F32,
+            Dtype::BF16,
         )),
         "I32" => Ok((
             raw.chunks_exact(4)
@@ -128,28 +128,6 @@ fn decode_raw(raw: &[u8], dtype: &str) -> Result<(Vec<f32>, Dtype), String> {
             Dtype::I32,
         )),
         other => Err(format!("unsupported dtype '{}'", other)),
-    }
-}
-
-fn f16_to_f32(h: u16) -> f32 {
-    let sign = ((h >> 15) & 1) as u32;
-    let exp = ((h >> 10) & 0x1F) as u32;
-    let frac = (h & 0x3FF) as u32;
-    if exp == 0 {
-        if frac == 0 {
-            f32::from_bits(sign << 31)
-        } else {
-            let mut e = 0u32;
-            let mut f = frac;
-            while f & 0x400 == 0 { f <<= 1; e += 1; }
-            f &= 0x3FF;
-            let e = 127 - 15 + 1 - e;
-            f32::from_bits((sign << 31) | (e << 23) | (f << 13))
-        }
-    } else if exp == 31 {
-        if frac == 0 { f32::from_bits((sign << 31) | (0xFF << 23)) } else { f32::NAN }
-    } else {
-        f32::from_bits((sign << 31) | ((exp + 127 - 15) << 23) | (frac << 13))
     }
 }
 
@@ -294,14 +272,14 @@ fn flatten_into(
             Ok(())
         }
         Value::Tensor { data, dtype } => {
-            out.push((leaf_key(prefix, "tensor"), tensor_to_entry(data, *dtype)));
+            out.push((leaf_key(prefix, "tensor"), tensor_to_entry(data, *dtype)?));
             Ok(())
         }
         Value::DeviceBuffer(db) => {
             let host = db
                 .to_host()
                 .map_err(|e| runtime_error(format!("safetensors: D2H: {}", e)))?;
-            out.push((leaf_key(prefix, "tensor"), tensor_to_entry(&host, db.dtype)));
+            out.push((leaf_key(prefix, "tensor"), tensor_to_entry(&host, db.dtype)?));
             Ok(())
         }
         // Scalars are stored as 0-d tensors so they survive a round trip.
@@ -335,23 +313,30 @@ fn flatten_into(
     }
 }
 
-fn tensor_to_entry(data: &ArrayD<f32>, dtype: Dtype) -> TensorEntry {
+fn tensor_to_entry(data: &ArrayD<f32>, dtype: Dtype) -> Result<TensorEntry, SheafError> {
     let shape: Vec<usize> = data.shape().to_vec();
     let flat: Vec<f32> = data.iter().copied().collect();
     let (dtype_str, bytes) = match dtype {
+        Dtype::F16 => {
+            let mut b = Vec::with_capacity(flat.len() * 2);
+            for f in &flat {
+                b.extend_from_slice(&crate::core::dtype::f32_to_f16_bits(*f).to_le_bytes());
+            }
+            ("F16", b)
+        }
+        Dtype::BF16 => {
+            let mut b = Vec::with_capacity(flat.len() * 2);
+            for f in &flat {
+                b.extend_from_slice(&crate::core::dtype::f32_to_bf16_bits(*f).to_le_bytes());
+            }
+            ("BF16", b)
+        }
         Dtype::F32 => {
             let mut b = Vec::with_capacity(flat.len() * 4);
             for f in &flat {
                 b.extend_from_slice(&f.to_le_bytes());
             }
             ("F32", b)
-        }
-        Dtype::BF16 => {
-            let mut b = Vec::with_capacity(flat.len() * 2);
-            for f in &flat {
-                b.extend_from_slice(&f32_to_bf16_bits(*f).to_le_bytes());
-            }
-            ("BF16", b)
         }
         Dtype::I32 => {
             let mut b = Vec::with_capacity(flat.len() * 4);
@@ -364,27 +349,29 @@ fn tensor_to_entry(data: &ArrayD<f32>, dtype: Dtype) -> TensorEntry {
             "BOOL",
             flat.iter().map(|f| if *f != 0.0 { 1u8 } else { 0u8 }).collect(),
         ),
+        Dtype::F64 | Dtype::I64 => {
+            return Err(runtime_error(format!(
+                "safetensors: unsupported runtime tensor dtype {}",
+                dtype,
+            )));
+        }
     };
-    TensorEntry { dtype_str, shape, bytes }
-}
-
-/// Round-to-nearest-even conversion f32 -> bf16 bit pattern.
-fn f32_to_bf16_bits(f: f32) -> u16 {
-    let bits = f.to_bits();
-    let lsb = (bits >> 16) & 1;
-    let rounding_bias = 0x7FFF + lsb;
-    (bits.wrapping_add(rounding_bias) >> 16) as u16
+    Ok(TensorEntry { dtype_str, shape, bytes })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn tensor(vals: &[f32], shape: &[usize]) -> Value {
+    fn typed_tensor(vals: &[f32], shape: &[usize], dtype: Dtype) -> Value {
         Value::Tensor {
             data: Arc::new(ArrayD::from_shape_vec(IxDyn(shape), vals.to_vec()).unwrap()),
-            dtype: Dtype::F32,
+            dtype,
         }
+    }
+
+    fn tensor(vals: &[f32], shape: &[usize]) -> Value {
+        typed_tensor(vals, shape, Dtype::F32)
     }
 
     fn get<'a>(v: &'a Value, key: &str) -> &'a Value {
@@ -455,5 +442,24 @@ mod tests {
         assert!(8 + n <= bytes.len());
         let _: serde_json::Value = serde_json::from_slice(&bytes[8..8 + n]).unwrap();
         assert_eq!((8 + n) % 8, 0, "data section should be 8-byte aligned");
+    }
+
+    #[test]
+    fn save_load_preserves_sixteen_bit_dtypes() {
+        for dtype in [Dtype::F16, Dtype::BF16] {
+            let value = typed_tensor(&[1.0, -2.0], &[2], dtype);
+            let bytes = save_safetensors(&value).unwrap();
+            let loaded = load_safetensors(&bytes).unwrap();
+            assert!(matches!(get(&loaded, "tensor"), Value::Tensor { dtype: loaded_dtype, .. } if *loaded_dtype == dtype));
+        }
+    }
+
+    #[test]
+    fn save_rejects_dtypes_without_runtime_storage() {
+        for dtype in [Dtype::F64, Dtype::I64] {
+            let value = typed_tensor(&[1.0], &[1], dtype);
+            let error = save_safetensors(&value).unwrap_err();
+            assert!(error.to_string().contains("unsupported runtime tensor dtype"));
+        }
     }
 }

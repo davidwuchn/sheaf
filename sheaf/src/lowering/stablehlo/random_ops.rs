@@ -12,7 +12,7 @@ impl StableHLOEmitter {
         let lo_val = (seed as u64) & 0xFFFFFFFF;
         let hi_val = ((seed as u64) >> 32) & 0xFFFFFFFF;
 
-        let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+        let scalar_i32 = StableHLOType::typed_tensor(vec![], "i32");
         let one_i32 = StableHLOType::i32_tensor(vec![1]);
         let two_i32 = StableHLOType::i32_tensor(vec![2]);
 
@@ -59,7 +59,7 @@ impl StableHLOEmitter {
         let n2_i32_ty = StableHLOType::i32_tensor(vec![n2]);
         let n2_f32_ty = StableHLOType::f32_tensor(vec![n2]);
         let n_f32_ty = StableHLOType::f32_tensor(vec![total]);
-        let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+        let scalar_i32 = StableHLOType::typed_tensor(vec![], "i32");
 
         // Bitcast key to i32, extract lo and hi
         let i32_2_ty = StableHLOType::i32_tensor(vec![2]);
@@ -281,7 +281,7 @@ impl StableHLOEmitter {
         let total: i64 = shape.iter().product();
         let n_i32_ty = StableHLOType::i32_tensor(vec![total]);
         let n_f32_ty = StableHLOType::f32_tensor(vec![total]);
-        let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+        let scalar_i32 = StableHLOType::typed_tensor(vec![], "i32");
 
         // Bitcast key to i32, extract lo and hi
         let i32_2_ty = StableHLOType::i32_tensor(vec![2]);
@@ -427,7 +427,7 @@ impl StableHLOEmitter {
         let total: i64 = shape.iter().product();
         let n_i32_ty = StableHLOType::i32_tensor(vec![total]);
         let n_f32_ty = StableHLOType::f32_tensor(vec![total]);
-        let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+        let scalar_i32 = StableHLOType::typed_tensor(vec![], "i32");
 
         // Bitcast key to i32, extract lo and hi
         let i32_2_ty = StableHLOType::i32_tensor(vec![2]);
@@ -614,8 +614,8 @@ impl StableHLOEmitter {
     ) -> (Register, StableHLOType) {
         let result_reg = self.fresh_register();
         let result_ty = match from_ty {
-            StableHLOType::ScalarF32 => StableHLOType::Tensor { shape: vec![], dtype: to_dtype.to_string() },
-            StableHLOType::Tensor { shape, .. } => StableHLOType::Tensor { shape: shape.clone(), dtype: to_dtype.to_string() },
+            StableHLOType::ScalarF32 => StableHLOType::typed_tensor(vec![], to_dtype),
+            StableHLOType::Tensor { shape, .. } => StableHLOType::typed_tensor(shape.clone(), to_dtype),
             _ => panic!("bitcast_convert: unsupported type {:?}", from_ty),
         };
         self.body.push(format!(
@@ -649,7 +649,7 @@ impl StableHLOEmitter {
         n: usize,
     ) -> (Register, StableHLOType) {
         let i32_ty = StableHLOType::i32_tensor(vec![2]);
-        let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+        let scalar_i32 = StableHLOType::typed_tensor(vec![], "i32");
         let one_i32 = StableHLOType::i32_tensor(vec![1]);
 
         // Bitcast f32 key to i32 for integer arithmetic
@@ -767,7 +767,7 @@ impl StableHLOEmitter {
         // Hash key to uniform float
         // Bitcast to i32, take lo, abs, convert to f32, divide by 2^31
         let i32_2_ty = StableHLOType::i32_tensor(vec![2]);
-        let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+        let scalar_i32 = StableHLOType::typed_tensor(vec![], "i32");
         let (key_i32, _) = self.emit_bitcast_convert(key, key_ty, "i32");
 
         let lo_1d = self.fresh_register();

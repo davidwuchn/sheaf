@@ -256,7 +256,7 @@ impl StableHLOEmitter {
             ));
 
             let idx_reg = self.emit_constant_i32(index);
-            let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+            let scalar_i32 = StableHLOType::typed_tensor(vec![], "i32");
             let result_reg = self.fresh_register();
             self.body.push(format!(
                 "    {} = stablehlo.dynamic_update_slice {}, {}, {} : ({}, {}, {}) -> {}",
@@ -285,7 +285,7 @@ impl StableHLOEmitter {
             // Start indices: [index, 0, 0, ...]
             let idx_reg = self.emit_constant_i32(index);
             let zero_idx = self.emit_constant_i32(0);
-            let scalar_i32 = StableHLOType::Tensor { shape: vec![], dtype: "i32".to_string() };
+            let scalar_i32 = StableHLOType::typed_tensor(vec![], "i32");
             let mut start_regs = vec![idx_reg.to_mlir()];
             for _ in 1..ndim {
                 start_regs.push(zero_idx.to_mlir());
@@ -348,11 +348,7 @@ impl StableHLOEmitter {
 
         let mut result_shape = shape.to_vec();
         result_shape[axis] = end - start;
-        let dtype = match input_ty {
-            StableHLOType::Tensor { dtype, .. } => dtype.clone(),
-            _ => "f32".to_string(),
-        };
-        let result_ty = StableHLOType::Tensor { shape: result_shape, dtype };
+        let result_ty = StableHLOType::typed_tensor(result_shape, input_ty.dtype());
 
         let result_reg = self.fresh_register();
         self.body.push(format!(

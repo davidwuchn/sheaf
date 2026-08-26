@@ -5,6 +5,7 @@
 
 use crate::core::expr::CompiledExpr;
 use crate::core::error::SheafError;
+pub use crate::core::dtype::ElementType as Dtype;
 use crate::runtime::iree_session::DeviceBufferInner;
 use ndarray::{ArrayD, IxDyn};
 use std::borrow::Cow;
@@ -12,56 +13,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Dtype {
-    F32,
-    BF16,
-    I32,
-    Bool,
-}
-
-impl Dtype {
-    /// MLIR type string for StableHLO codegen.
-    pub fn to_mlir_str(self) -> &'static str {
-        match self {
-            Dtype::F32 => "f32",
-            Dtype::BF16 => "bf16",
-            Dtype::I32 => "i32",
-            Dtype::Bool => "i1",
-        }
-    }
-
-    /// Byte size per element.
-    pub fn element_size(self) -> usize {
-        match self {
-            Dtype::F32 | Dtype::I32 => 4,
-            Dtype::BF16 => 2,
-            Dtype::Bool => 1,
-        }
-    }
-
-    /// Parse from keyword string (e.g. ":f32", ":bf16").
-    pub fn from_keyword(s: &str) -> Option<Self> {
-        match s {
-            "f32" => Some(Dtype::F32),
-            "bf16" => Some(Dtype::BF16),
-            "i32" => Some(Dtype::I32),
-            "bool" => Some(Dtype::Bool),
-            _ => None,
-        }
-    }
-
-    /// Short name for REPL display (e.g. "f32", "bf16", "i32", "bool").
-    pub fn name(self) -> &'static str {
-        match self {
-            Dtype::F32 => "f32",
-            Dtype::BF16 => "bf16",
-            Dtype::I32 => "i32",
-            Dtype::Bool => "bool",
-        }
-    }
-}
 
 pub type BuiltinFnPtr = fn(&[Value], &BTreeMap<String, Value>) -> Result<Value, crate::core::error::SheafError>;
 
@@ -300,7 +251,8 @@ fn format_tensor_f32(x: f32) -> String {
 fn format_element(x: f32, dtype: Dtype) -> String {
     match dtype {
         Dtype::I32 => format!("{}", x as i32),
-        Dtype::F32 | Dtype::BF16 => format_tensor_f32(x),
+        Dtype::I64 => format!("{}", x as i64),
+        Dtype::F16 | Dtype::BF16 | Dtype::F32 | Dtype::F64 => format_tensor_f32(x),
         Dtype::Bool => if x != 0.0 { "true".to_string() } else { "false".to_string() },
     }
 }
@@ -368,7 +320,8 @@ fn format_tensor_nd(arr: &ArrayD<f32>, dtype: Dtype) -> String {
             let x = arr.first().copied().unwrap_or(0.0);
             match dtype {
                 Dtype::I32 => format!("{}", x as i32),
-                Dtype::F32 | Dtype::BF16 => format_tensor_f32(x),
+                Dtype::I64 => format!("{}", x as i64),
+                Dtype::F16 | Dtype::BF16 | Dtype::F32 | Dtype::F64 => format_tensor_f32(x),
                 Dtype::Bool => if x != 0.0 { "true".to_string() } else { "false".to_string() },
             }
         }

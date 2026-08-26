@@ -116,20 +116,15 @@ pub fn trace_function_signature(
 fn stablehlo_to_dummy_value(ty: &StableHLOType) -> Value {
     match ty {
         StableHLOType::ScalarF32 | StableHLOType::ScalarF64 => Value::Float(0.0),
-        StableHLOType::ScalarBF16 => Value::Float(0.0),
+        StableHLOType::ScalarF16 | StableHLOType::ScalarBF16 => Value::Float(0.0),
         StableHLOType::ScalarI64 => Value::Int(0),
         StableHLOType::ScalarI1 => Value::Bool(false),
         StableHLOType::Tensor { shape, dtype } => {
             let dims: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
             let data = ArrayD::zeros(IxDyn(&dims));
-            let rt_dtype = match dtype.as_str() {
-                "bf16" => Dtype::BF16,
-                "i32" => Dtype::I32,
-                _ => Dtype::F32,
-            };
             Value::Tensor {
                 data: Arc::new(data),
-                dtype: rt_dtype,
+                dtype: *dtype,
             }
         }
         StableHLOType::Tuple(elems, _) => {

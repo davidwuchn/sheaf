@@ -282,21 +282,16 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn broadcast_shape(shapes: &[&[usize]]) -> Result<Vec<usize>, crate::core::error::SheafError> {
-    let max_ndim = shapes.iter().map(|s| s.len()).max().unwrap_or(0);
-    let mut result = vec![1usize; max_ndim];
+    let mut result = Vec::new();
     for shape in shapes {
-        let offset = max_ndim - shape.len();
-        for (i, &dim) in shape.iter().enumerate() {
-            let ri = offset + i;
-            if result[ri] == 1 {
-                result[ri] = dim;
-            } else if dim != 1 && dim != result[ri] {
-                return Err(runtime_error(format!(
-                    "where: cannot broadcast shapes, dimension mismatch {} vs {} at axis {}",
-                    result[ri], dim, ri
-                )));
-            }
-        }
+        result = crate::core::shape::broadcast_shapes(&result, shape).map_err(|error| {
+            let rank = result.len().max(shape.len());
+            let axis = rank - error.axis_from_right - 1;
+            runtime_error(format!(
+                "where: cannot broadcast shapes, dimension mismatch {} vs {} at axis {}",
+                error.lhs, error.rhs, axis
+            ))
+        })?;
     }
     Ok(result)
 }
