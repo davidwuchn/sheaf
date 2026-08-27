@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Element types shared by inference, lowering, interpreter, and runtime.
+//! Tensor dtypes.
 
 use std::fmt;
 
@@ -100,6 +100,94 @@ impl fmt::Display for ElementType {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DtypeStrength {
+    Weak,
+    Strong,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DtypeOperand {
+    pub dtype: ElementType,
+    pub strength: DtypeStrength,
+}
+
+impl DtypeOperand {
+    pub const fn weak(dtype: ElementType) -> Self {
+        Self { dtype, strength: DtypeStrength::Weak }
+    }
+
+    pub const fn strong(dtype: ElementType) -> Self {
+        Self { dtype, strength: DtypeStrength::Strong }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DtypeMismatch {
+    pub lhs: ElementType,
+    pub rhs: ElementType,
+}
+
+impl fmt::Display for DtypeMismatch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "dtype mismatch: {} and {}", self.lhs, self.rhs)
+    }
+}
+
+pub fn resolve_arithmetic_dtype(
+    lhs: DtypeOperand,
+    rhs: DtypeOperand,
+) -> Result<ElementType, DtypeMismatch> {
+    if lhs.dtype == rhs.dtype {
+        return Ok(lhs.dtype);
+    }
+
+    let dtype = match (lhs.strength, rhs.strength) {
+        (DtypeStrength::Strong, DtypeStrength::Strong) => None,
+        (DtypeStrength::Weak, DtypeStrength::Strong) => {
+            resolve_weak_dtype(lhs.dtype, rhs.dtype)
+        }
+        (DtypeStrength::Strong, DtypeStrength::Weak) => {
+            resolve_weak_dtype(rhs.dtype, lhs.dtype)
+        }
+        (DtypeStrength::Weak, DtypeStrength::Weak) => {
+            resolve_weak_pair(lhs.dtype, rhs.dtype)
+        }
+    };
+    dtype.ok_or(DtypeMismatch {
+        lhs: lhs.dtype,
+        rhs: rhs.dtype,
+    })
+}
+
+fn resolve_weak_dtype(weak: ElementType, strong: ElementType) -> Option<ElementType> {
+    if strong.is_float() {
+        (weak.is_float() || weak.is_integer()).then_some(strong)
+    } else if strong.is_integer() {
+        weak.is_integer().then_some(strong)
+    } else {
+        None
+    }
+}
+
+fn resolve_weak_pair(lhs: ElementType, rhs: ElementType) -> Option<ElementType> {
+    if lhs.is_float() || rhs.is_float() {
+        Some(if lhs == ElementType::F64 || rhs == ElementType::F64 {
+            ElementType::F64
+        } else {
+            ElementType::F32
+        })
+    } else if lhs.is_integer() && rhs.is_integer() {
+        Some(if lhs == ElementType::I64 || rhs == ElementType::I64 {
+            ElementType::I64
+        } else {
+            ElementType::I32
+        })
+    } else {
+        None
+    }
+}
+
 #[cfg(not(sheaf_frontend))]
 pub(crate) fn f32_to_bf16_bits(value: f32) -> u16 {
     let bits = value.to_bits();
@@ -179,7 +267,8 @@ pub(crate) fn f16_bits_to_f32(bits: u16) -> f32 {
 #[cfg(all(test, not(sheaf_frontend)))]
 mod tests {
     use super::{
-        ElementType, bf16_bits_to_f32, f16_bits_to_f32, f32_to_bf16_bits, f32_to_f16_bits,
+        DtypeOperand, ElementType, bf16_bits_to_f32, f16_bits_to_f32, f32_to_bf16_bits,
+        f32_to_f16_bits, resolve_arithmetic_dtype,
     };
 
     #[test]
@@ -206,6 +295,64 @@ mod tests {
         for dtype in ["f64", "i1", "i64"] {
             assert_eq!(ElementType::from_keyword(dtype), None, "{dtype}");
         }
+    }
+
+    #[test]
+    fn weak_scalars_adopt_strong_float_dtypes() {
+        for dtype in [ElementType::F16, ElementType::BF16, ElementType::F32] {
+            assert_eq!(
+                resolve_arithmetic_dtype(
+                    DtypeOperand::strong(dtype),
+                    DtypeOperand::weak(ElementType::F32),
+                ),
+                Ok(dtype),
+            );
+            assert_eq!(
+                resolve_arithmetic_dtype(
+                    DtypeOperand::weak(ElementType::I32),
+                    DtypeOperand::strong(dtype),
+                ),
+                Ok(dtype),
+            );
+        }
+    }
+
+    #[test]
+    fn strong_dtypes_must_match() {
+        for rhs in [ElementType::BF16, ElementType::F32] {
+            assert!(resolve_arithmetic_dtype(
+                DtypeOperand::strong(ElementType::F16),
+                DtypeOperand::strong(rhs),
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn weak_float_does_not_narrow_to_integer() {
+        assert!(resolve_arithmetic_dtype(
+            DtypeOperand::strong(ElementType::I32),
+            DtypeOperand::weak(ElementType::F32),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn weak_dtypes_use_default_widths() {
+        assert_eq!(
+            resolve_arithmetic_dtype(
+                DtypeOperand::weak(ElementType::I32),
+                DtypeOperand::weak(ElementType::F32),
+            ),
+            Ok(ElementType::F32),
+        );
+        assert_eq!(
+            resolve_arithmetic_dtype(
+                DtypeOperand::weak(ElementType::I32),
+                DtypeOperand::weak(ElementType::I64),
+            ),
+            Ok(ElementType::I64),
+        );
     }
 
     #[test]
