@@ -115,6 +115,20 @@ sheaf_program_test(
     size = "small",
 )
 
+sheaf_program_test(
+    name = "regression_runtime_dtypes",
+    expression = """
+(defn sixteen-bit-roundtrip [x] (reshape x (quote [1])))
+(let [f16 (sixteen-bit-roundtrip (cast (tensor [1.0006]) :f16))
+      bf16 (sixteen-bit-roundtrip (cast (tensor [1.005]) :bf16))]
+  (do
+    (guard :range [1.0009 1.0011] f16)
+    (guard :range [1.007 1.009] bf16)
+    true))
+""",
+    size = "small",
+)
+
 test_suite(
     name = "all",
     tests = [
@@ -125,6 +139,7 @@ test_suite(
         ":regression_macros",
         ":regression_mlp",
         ":regression_nanogpt",
+        ":regression_runtime_dtypes",
         ":interpreter_tests",
         ":mem_attribution",
         ":parser_tests",

@@ -710,7 +710,9 @@ impl IreeSession {
                     .map(|j| iree_hal_buffer_view_shape_dim(bv, j) as usize)
                     .collect();
                 let elem_type = iree_hal_buffer_view_element_type(bv);
-                let dtype = if elem_type == IREE_HAL_ELEMENT_TYPE_BFLOAT_16 {
+                let dtype = if elem_type == IREE_HAL_ELEMENT_TYPE_FLOAT_16 {
+                    Dtype::F16
+                } else if elem_type == IREE_HAL_ELEMENT_TYPE_BFLOAT_16 {
                     Dtype::BF16
                 } else if elem_type == IREE_HAL_ELEMENT_TYPE_INT_32 {
                     Dtype::I32
@@ -722,7 +724,7 @@ impl IreeSession {
                 // interpreter hot loops (e.g. nth on generate-token output).
                 if shape.is_empty() {
                     let buf = iree_hal_buffer_view_buffer(bv);
-                    let byte_len = if dtype == Dtype::BF16 { 2u64 } else { 4u64 };
+                    let byte_len = if matches!(dtype, Dtype::F16 | Dtype::BF16) { 2u64 } else { 4u64 };
                     let mut raw = [0u8; 4];
                     let status = iree_hal_device_transfer_d2h(
                         self.device_handle.device,
@@ -737,9 +739,12 @@ impl IreeSession {
                     ref_.ptr = std::ptr::null_mut();
                     iree_vm_ref_release(&mut ref_);
                     if iree_status_is_ok(status) {
-                        let val = if dtype == Dtype::BF16 {
+                        let val = if dtype == Dtype::F16 {
                             let bits = u16::from_le_bytes([raw[0], raw[1]]);
-                            f32::from_bits((bits as u32) << 16)
+                            crate::core::dtype::f16_bits_to_f32(bits)
+                        } else if dtype == Dtype::BF16 {
+                            let bits = u16::from_le_bytes([raw[0], raw[1]]);
+                            crate::core::dtype::bf16_bits_to_f32(bits)
                         } else {
                             f32::from_le_bytes(raw)
                         };

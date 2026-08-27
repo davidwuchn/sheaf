@@ -26,15 +26,17 @@ pub(super) unsafe fn value_to_buffer_view(
                     .as_slice()
                     .ok_or_else(|| iree_err("cannot convert non-contiguous tensor to IREE buffer"))?;
                 let (byte_data, element_type) = match dtype {
-                    Dtype::BF16 => {
-                        // f32 -> bf16: truncate to top 16 bits
+                    Dtype::F16 => {
                         let bytes: Vec<u8> = f32_slice
                             .iter()
-                            .flat_map(|f| {
-                                let bits = f.to_bits();
-                                let bf16_bits = (bits >> 16) as u16;
-                                bf16_bits.to_ne_bytes()
-                            })
+                            .flat_map(|f| crate::core::dtype::f32_to_f16_bits(*f).to_ne_bytes())
+                            .collect();
+                        (bytes, IREE_HAL_ELEMENT_TYPE_FLOAT_16)
+                    }
+                    Dtype::BF16 => {
+                        let bytes: Vec<u8> = f32_slice
+                            .iter()
+                            .flat_map(|f| crate::core::dtype::f32_to_bf16_bits(*f).to_ne_bytes())
                             .collect();
                         (bytes, IREE_HAL_ELEMENT_TYPE_BFLOAT_16)
                     }
@@ -138,6 +140,18 @@ pub(super) unsafe fn buffer_view_to_value(
                 return Err(iree_err("failed to read IREE buffer data"));
             }
             (f32_buf, Dtype::F32)
+        } else if elem_type == IREE_HAL_ELEMENT_TYPE_FLOAT_16 {
+            let byte_len = n_elems * 2;
+            let mut raw: Vec<u16> = vec![0; n_elems];
+            let status = iree_hal_device_transfer_d2h(
+                device, buf, 0, raw.as_mut_ptr() as *mut c_void, byte_len as u64, 0,
+                iree_timeout_t::infinite(),
+            );
+            if !iree_status_is_ok(status) {
+                iree_status_fprint(libc_stderr(), status);
+                return Err(iree_err("failed to read IREE buffer data (f16)"));
+            }
+            (raw.iter().map(|&bits| crate::core::dtype::f16_bits_to_f32(bits)).collect(), Dtype::F16)
         } else if elem_type == IREE_HAL_ELEMENT_TYPE_BFLOAT_16 {
             let byte_len = n_elems * 2;
             let mut raw: Vec<u16> = vec![0; n_elems];
@@ -151,7 +165,7 @@ pub(super) unsafe fn buffer_view_to_value(
                 return Err(iree_err("failed to read IREE buffer data (bf16)"));
             }
             let f32_buf: Vec<f32> = raw.iter()
-                .map(|&bits| f32::from_bits((bits as u32) << 16))
+                .map(|&bits| crate::core::dtype::bf16_bits_to_f32(bits))
                 .collect();
             (f32_buf, Dtype::BF16)
         } else if elem_type == IREE_HAL_ELEMENT_TYPE_INT_32 {

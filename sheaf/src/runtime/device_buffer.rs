@@ -50,6 +50,26 @@ impl DeviceBufferInner {
             let buf = iree_hal_buffer_view_buffer(self.bv);
 
             let f32_buf = match self.dtype {
+                Dtype::F16 => {
+                    let byte_len = n_elems * 2;
+                    let mut raw: Vec<u16> = vec![0; n_elems];
+                    let status = iree_hal_device_transfer_d2h(
+                        self.device.device,
+                        buf,
+                        0,
+                        raw.as_mut_ptr() as *mut c_void,
+                        byte_len as u64,
+                        0,
+                        iree_timeout_t::infinite(),
+                    );
+                    if !iree_status_is_ok(status) {
+                        iree_status_fprint(libc_stderr(), status);
+                        return Err(super::buffer_convert::iree_err("d2h transfer failed (f16)"));
+                    }
+                    raw.iter()
+                        .map(|&bits| crate::core::dtype::f16_bits_to_f32(bits))
+                        .collect()
+                }
                 Dtype::BF16 => {
                     let byte_len = n_elems * 2;
                     let mut raw: Vec<u16> = vec![0; n_elems];
@@ -66,8 +86,9 @@ impl DeviceBufferInner {
                         iree_status_fprint(libc_stderr(), status);
                         return Err(super::buffer_convert::iree_err("d2h transfer failed (bf16)"));
                     }
-                    // bf16 -> f32: shift left 16 bits (bf16 is the top 16 bits of f32)
-                    raw.iter().map(|&bits| f32::from_bits((bits as u32) << 16)).collect()
+                    raw.iter()
+                        .map(|&bits| crate::core::dtype::bf16_bits_to_f32(bits))
+                        .collect()
                 }
                 _ => {
                     let byte_len = n_elems * 4;
