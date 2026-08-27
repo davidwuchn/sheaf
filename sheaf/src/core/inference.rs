@@ -1,36 +1,28 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! Type inference for function signatures
+//! Type inference.
 
 use crate::lowering::stablehlo::StableHLOType;
+use crate::core::dtype::ElementType;
 use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::SheafResult;
 
-/// Recursive value structure layout for reconstructing dicts/lists from flat tuples.
+/// Layout of a flattened value.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ValueLayout {
-    /// Dict with ordered (key, sub-layout) pairs
     Dict(Vec<(String, ValueLayout)>),
-    /// List with sub-layouts per element
     List(Vec<ValueLayout>),
-    /// Leaf (tensor or scalar): no reconstruction needed
     Leaf,
 }
 
-/// Function signature (parameter types + return type)
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FunctionSignature {
     pub param_types: Vec<StableHLOType>,
     pub return_type: StableHLOType,
-    /// If the function returns a Dict, the sorted key names for reconstruction
     pub return_dict_keys: Option<Vec<String>>,
-    /// Layouts of dict/tuple arguments, keyed by their StableHLO type.
-    /// Used to reconstruct nested dicts from flat tuples in JIT return values.
+    /// Layouts of structured arguments.
     pub arg_type_layouts: Vec<(StableHLOType, ValueLayout)>,
-    /// Scalar leaves that were baked into this compiled VMFB as literal
-    /// constants, captured from the dict argument(s) at first-compile time.
-    /// Used only for staleness warnings (Rec 1) — does not affect dispatch.
     #[serde(with = "captured_scalar_map")]
     pub captured_scalars: std::collections::HashMap<(String, Vec<usize>), f64>,
 }
@@ -60,7 +52,6 @@ mod captured_scalar_map {
 }
 
 impl ValueLayout {
-    /// Build a ValueLayout from an interpreter Value (captures dict/list structure).
     #[cfg(not(sheaf_frontend))]
     pub fn from_value(val: &crate::interpreter::value::Value) -> Self {
         use crate::interpreter::value::Value;
@@ -80,9 +71,7 @@ impl ValueLayout {
         }
     }
 
-    /// Reconstruct a Value from a flat tuple using this layout.
-    /// Converts Value::Tuple -> Value::Dict/List based on the stored structure.
-    /// Also recurses into Value::Dict sub-values that may still contain Tuples.
+    /// Restores a flattened value.
     #[cfg(not(sheaf_frontend))]
     pub fn reconstruct(&self, val: crate::interpreter::value::Value) -> crate::interpreter::value::Value {
         use crate::interpreter::value::Value;
@@ -117,9 +106,7 @@ impl ValueLayout {
     }
 }
 
-/// Reconstruct a JIT return value by matching sub-tuple types against known layouts.
-/// Walks the return type tree; at each Tuple level, checks if its type matches
-/// a known layout from the argument types.
+/// Restores a flattened JIT result.
 #[cfg(not(sheaf_frontend))]
 pub fn reconstruct_jit_result(
     val: crate::interpreter::value::Value,
@@ -127,11 +114,9 @@ pub fn reconstruct_jit_result(
     layouts: &[(StableHLOType, ValueLayout)],
 ) -> crate::interpreter::value::Value {
     use crate::interpreter::value::Value;
-    // Check if the whole type matches a known layout
     if let Some((_, layout)) = layouts.iter().find(|(t, _)| t == ty) {
         return layout.reconstruct(val);
     }
-    // Recurse into sub-elements of a Tuple
     match (ty, val) {
         (StableHLOType::Tuple(elem_tys, _), Value::Tuple(elems)) if elem_tys.len() == elems.len() => {
             let reconstructed: Vec<Value> = elem_tys
@@ -141,8 +126,6 @@ pub fn reconstruct_jit_result(
                 .collect();
             Value::Tuple(reconstructed)
         }
-        // Dict already constructed by unflatten_value: recurse into values
-        // using the layout matching on each sub-value
         (StableHLOType::Tuple(elem_tys, _), Value::Dict(map)) if elem_tys.len() == map.len() => {
             let mut result = std::collections::BTreeMap::new();
             for (i, (key, sub_val)) in map.into_iter().enumerate() {
@@ -155,15 +138,6 @@ pub fn reconstruct_jit_result(
     }
 }
 
-/// Infer the signature of a function from its parameters and body
-///
-/// Strategy:
-/// 1. Build a symbol table by traversing the body
-/// 2. Infer types for each parameter based on how they're used
-/// 3. Infer return type from body
-///
-/// `known_param_types`: pre-known types for specific params (e.g. from tracing),
-/// overrides inference. Maps param name -> StableHLOType.
 pub fn infer_function_signature(
     params: &[String],
     body_expr: &CompiledExpr,
@@ -171,27 +145,20 @@ pub fn infer_function_signature(
     infer_function_signature_with_known(params, body_expr, &[])
 }
 
-/// Like `infer_function_signature` but accepts pre-known param types.
+/// Infers a signature with known parameter types.
 pub fn infer_function_signature_with_known(
     params: &[String],
     body_expr: &CompiledExpr,
     known: &[(String, StableHLOType)],
 ) -> SheafResult<FunctionSignature> {
-    // Build symbol table with inferred types
     let mut symbol_types = std::collections::HashMap::new();
 
-    // Seed with known param types so return type inference can use them
     for (name, ty) in known {
         symbol_types.insert(name.clone(), ty.clone());
     }
 
-    // Also seed GetTupleElement leaf types into symbol_types so
-    // infer_type_with_context can resolve field references like W, b
-    seed_tuple_element_types(body_expr, &mut symbol_types, known);
-
     infer_symbol_types(body_expr, &mut symbol_types)?;
 
-    // Infer parameter types from symbol table
     let param_types: Vec<StableHLOType> = params
         .iter()
         .map(|p| {
@@ -202,10 +169,7 @@ pub fn infer_function_signature_with_known(
         })
         .collect();
 
-    // Infer return type from body
     let return_type = infer_type_with_context(body_expr, &symbol_types)?;
-
-    // Detect dict return keys from body expression
     let return_dict_keys = find_return_dict_keys(body_expr);
 
     Ok(FunctionSignature {
@@ -217,7 +181,6 @@ pub fn infer_function_signature_with_known(
     })
 }
 
-/// Walk through Let/Do wrappers to find a Dict return expression and extract its keys.
 fn find_return_dict_keys(expr: &CompiledExpr) -> Option<Vec<String>> {
     match expr {
         CompiledExpr::Dict(pairs) => {
@@ -240,54 +203,6 @@ fn find_return_dict_keys(expr: &CompiledExpr) -> Option<Vec<String>> {
     }
 }
 
-/// Seed symbol_types with the resolved element types of GetTupleElement nodes.
-/// This lets return-type inference work for expressions involving typed params.
-fn seed_tuple_element_types(
-    expr: &CompiledExpr,
-    symbol_types: &mut std::collections::HashMap<String, StableHLOType>,
-    known: &[(String, StableHLOType)],
-) {
-    match expr {
-        CompiledExpr::GetTupleElement { param, indices } => {
-            // Resolve the type of this element from the known param type
-            if let Some((_, param_ty)) = known.iter().find(|(n, _)| n == param)
-               && let Some(element_ty) = resolve_tuple_index(param_ty, indices)
-            {
-                // We can't directly name this node, but its type is used in FunctionCall args
-                // Store it in a synthetic key for context
-                let key = format!(
-                    "__get_tuple_{}__{}",
-                    param,
-                    indices
-                        .iter()
-                        .map(|i| i.to_string())
-                        .collect::<Vec<_>>()
-                        .join("_")
-                );
-                symbol_types.insert(key, element_ty);
-            }
-        }
-        CompiledExpr::FunctionCall { args, .. } => {
-            for arg in args {
-                seed_tuple_element_types(arg, symbol_types, known);
-            }
-        }
-        CompiledExpr::Let { bindings, body } => {
-            for (_, v) in bindings {
-                seed_tuple_element_types(v, symbol_types, known);
-            }
-            seed_tuple_element_types(body, symbol_types, known);
-        }
-        CompiledExpr::Do(exprs) => {
-            for e in exprs {
-                seed_tuple_element_types(e, symbol_types, known);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Walk a StableHLO tuple type following a sequence of indices.
 fn resolve_tuple_index(ty: &StableHLOType, indices: &[usize]) -> Option<StableHLOType> {
     let mut current = ty.clone();
     for &idx in indices {
@@ -301,17 +216,13 @@ fn resolve_tuple_index(ty: &StableHLOType, indices: &[usize]) -> Option<StableHL
     Some(current)
 }
 
-/// Infer types for symbols by analyzing how they're used in the expression
 fn infer_symbol_types(
     expr: &CompiledExpr,
     symbol_types: &mut std::collections::HashMap<String, StableHLOType>,
 ) -> SheafResult<()> {
     match expr {
         CompiledExpr::FunctionCall { name, args, .. } => {
-            // Infer types from function call context
             if name == "@" && args.len() == 2 {
-                // Matrix multiply: (@ lhs rhs)
-                // If rhs type is known (e.g. from tuple), use it to constrain lhs
                 let rhs_ty = infer_type_with_context(&args[1], symbol_types).ok();
                 let lhs_ty = infer_type_with_context(&args[0], symbol_types).ok();
 
@@ -319,7 +230,6 @@ fn infer_symbol_types(
                     let ty = if let Some(rhs) = &rhs_ty {
                         let rhs_shape = rhs.shape();
                         if rhs_shape.len() == 2 {
-                            // lhs must have contracting dim = rhs_shape[0], use batch=1
                             StableHLOType::f32_tensor(vec![1, rhs_shape[0]])
                         } else {
                             StableHLOType::f32_tensor(vec![1, 1])
@@ -344,7 +254,6 @@ fn infer_symbol_types(
                 }
             }
 
-            // sum/mean: first arg should be at least 2D
             if (name == "sum" || name == "mean")
                 && !args.is_empty()
                 && let CompiledExpr::Symbol(sym) = &args[0]
@@ -354,7 +263,6 @@ fn infer_symbol_types(
                     .or_insert(StableHLOType::f32_tensor(vec![1, 1]));
             }
 
-            // Recurse into arguments
             for arg in args {
                 infer_symbol_types(arg, symbol_types)?;
             }
@@ -392,7 +300,6 @@ fn infer_symbol_types(
         }
 
         CompiledExpr::Symbol(name) => {
-            // Default to scalar if not seen before
             symbol_types
                 .entry(name.clone())
                 .or_insert(StableHLOType::scalar_f32());
@@ -404,166 +311,84 @@ fn infer_symbol_types(
     Ok(())
 }
 
-/// Infer type with a symbol context
 pub(crate) fn infer_type_with_context(
     expr: &CompiledExpr,
     symbol_types: &std::collections::HashMap<String, StableHLOType>,
 ) -> SheafResult<StableHLOType> {
     match expr {
+        CompiledExpr::Integer(_) | CompiledExpr::Float(_) | CompiledExpr::Boolean(_) => {
+            Ok(StableHLOType::scalar_f32())
+        }
+        CompiledExpr::Vector(elements) => {
+            Ok(StableHLOType::f32_tensor(infer_vector_shape(elements)))
+        }
         CompiledExpr::Symbol(name) => Ok(symbol_types
             .get(name)
             .cloned()
             .unwrap_or(StableHLOType::scalar_f32())),
-
-        CompiledExpr::GetTupleElement { param, indices } => {
-            // Resolve element type from the param's tuple type in symbol_types
-            if let Some(param_ty) = symbol_types.get(param)
-               && let Some(element_ty) = resolve_tuple_index(param_ty, indices)
-            {
-                return Ok(element_ty);
-            }
-            Ok(StableHLOType::scalar_f32())
-        }
-
+        CompiledExpr::GetTupleElement { param, indices } => Ok(symbol_types
+            .get(param)
+            .and_then(|ty| resolve_tuple_index(ty, indices))
+            .unwrap_or(StableHLOType::scalar_f32())),
         CompiledExpr::FunctionCall { name, args, .. } => {
-            // Use context-aware inference for args
-            let ctx_infer = |e: &CompiledExpr| infer_type_with_context(e, symbol_types);
-            match name.as_str() {
-                "+" | "-" | "*" | "/" => {
-                    if args.is_empty() {
-                        return Ok(StableHLOType::scalar_f32());
-                    }
-                    ctx_infer(&args[0])
-                }
-                "@" => {
-                    if args.len() != 2 {
-                        return Ok(StableHLOType::scalar_f32());
-                    }
-                    let lhs_ty = ctx_infer(&args[0])?;
-                    let rhs_ty = ctx_infer(&args[1])?;
-                    let lhs_shape = lhs_ty.shape();
-                    let rhs_shape = rhs_ty.shape();
-                    if lhs_shape.len() == 2 && rhs_shape.len() == 2 {
-                        Ok(StableHLOType::f32_tensor(vec![lhs_shape[0], rhs_shape[1]]))
-                    } else {
-                        Ok(lhs_ty)
-                    }
-                }
-                // Unary ops (including user-defined like softmax): preserve arg type
-                "relu" | "sigmoid" | "tanh" | "sqrt" | "exp" | "log" | "softmax" => {
-                    if args.is_empty() {
-                        return Ok(StableHLOType::scalar_f32());
-                    }
-                    ctx_infer(&args[0])
-                }
-                _ => infer_function_call_type(name, args),
-            }
+            infer_function_call_type(name, args, symbol_types)
         }
-
         CompiledExpr::Let { bindings, body } => {
-            // Extend symbol_types with let bindings, then infer body type
             let mut extended = symbol_types.clone();
-            for (name, val) in bindings {
-                let ty = infer_type_with_context(val, &extended)?;
-                if let BindingPattern::Simple(name_str) = &name {
-                    extended.insert(name_str.clone(), ty);
+            for (pattern, value) in bindings {
+                let ty = infer_type_with_context(value, &extended)?;
+                if let BindingPattern::Simple(name) = pattern {
+                    extended.insert(name.clone(), ty);
                 }
-                // Destructure patterns do not introduce a single symbol; skip.
             }
             infer_type_with_context(body, &extended)
         }
-
-        CompiledExpr::Do(exprs) => {
-            if let Some(last) = exprs.last() {
-                infer_type_with_context(last, symbol_types)
-            } else {
-                Ok(StableHLOType::scalar_f32())
-            }
-        }
-
-        CompiledExpr::Dict(pairs) => {
-            // Dict becomes a tuple sorted by key: infer element types
-            let mut sorted: Vec<_> = pairs.iter().collect();
-            sorted.sort_by(|(k1, _), (k2, _)| {
-                let key1 = match k1 {
-                    CompiledExpr::Keyword(k) => k.clone(),
-                    _ => format!("{:?}", k1),
-                };
-                let key2 = match k2 {
-                    CompiledExpr::Keyword(k) => k.clone(),
-                    _ => format!("{:?}", k2),
-                };
-                key1.cmp(&key2)
-            });
-            let dict_keys: Vec<String> = sorted
-                .iter()
-                .filter_map(|(k, _)| match k {
-                    CompiledExpr::Keyword(k) => Some(k.clone()),
-                    _ => None,
-                })
-                .collect();
-            let mut elem_tys = Vec::new();
-            for (_, val) in &sorted {
-                elem_tys.push(infer_type_with_context(val, symbol_types)?);
-            }
-            Ok(StableHLOType::Tuple(elem_tys, Some(dict_keys)))
-        }
-
-        _ => infer_type(expr),
-    }
-}
-
-/// Infer the type of a compiled expression
-fn infer_type(expr: &CompiledExpr) -> SheafResult<StableHLOType> {
-    match expr {
-        CompiledExpr::Integer(_) => Ok(StableHLOType::scalar_f32()),
-        CompiledExpr::Float(_) => Ok(StableHLOType::scalar_f32()),
-        CompiledExpr::Boolean(_) => Ok(StableHLOType::scalar_f32()),
-
-        CompiledExpr::Vector(elements) => {
-            Ok(StableHLOType::f32_tensor(infer_vector_shape(elements)))
-        }
-
-        CompiledExpr::FunctionCall { name, args, .. } => infer_function_call_type(name, args),
-
-        CompiledExpr::Let { body, .. } => infer_type(body),
-
         CompiledExpr::If {
             then_branch,
             else_branch,
             ..
         } => {
-            // Both branches are expected to have the same type.
-            let then_ty = infer_type(then_branch)?;
+            let then_ty = infer_type_with_context(then_branch, symbol_types)?;
             if let Some(else_expr) = else_branch {
-                let else_ty = infer_type(else_expr)?;
-                let _ = else_ty;
+                infer_type_with_context(else_expr, symbol_types)?;
             }
             Ok(then_ty)
         }
-
-        CompiledExpr::Do(exprs) => {
-            if let Some(last) = exprs.last() {
-                infer_type(last)
-            } else {
-                Ok(StableHLOType::scalar_f32())
-            }
+        CompiledExpr::Do(exprs) => exprs
+            .last()
+            .map(|expr| infer_type_with_context(expr, symbol_types))
+            .unwrap_or_else(|| Ok(StableHLOType::scalar_f32())),
+        CompiledExpr::Dict(pairs) => {
+            let mut sorted: Vec<_> = pairs.iter().collect();
+            sorted.sort_by(|(lhs, _), (rhs, _)| {
+                let lhs = match lhs {
+                    CompiledExpr::Keyword(key) => key.clone(),
+                    _ => format!("{:?}", lhs),
+                };
+                let rhs = match rhs {
+                    CompiledExpr::Keyword(key) => key.clone(),
+                    _ => format!("{:?}", rhs),
+                };
+                lhs.cmp(&rhs)
+            });
+            let keys = sorted
+                .iter()
+                .filter_map(|(key, _)| match key {
+                    CompiledExpr::Keyword(key) => Some(key.clone()),
+                    _ => None,
+                })
+                .collect();
+            let elements = sorted
+                .iter()
+                .map(|(_, value)| infer_type_with_context(value, symbol_types))
+                .collect::<SheafResult<Vec<_>>>()?;
+            Ok(StableHLOType::Tuple(elements, Some(keys)))
         }
-
-        CompiledExpr::Symbol(_) => {
-            // Symbol should have been resolved, default to scalar
-            Ok(StableHLOType::scalar_f32())
-        }
-
         _ => Ok(StableHLOType::scalar_f32()),
     }
 }
 
-/// Recursively infer the shape of a vector literal.
-///
-/// `[1.0 2.0 3.0]`             -> `[3]`
-/// `[[1.0 2.0] [3.0 4.0]]`     -> `[2, 2]`
-/// `[[[1] [2]] [[3] [4]]]`     -> `[2, 2, 1]`
+/// Returns the shape of a vector literal.
 fn infer_vector_shape(elements: &[CompiledExpr]) -> Vec<i64> {
     if elements.is_empty() {
         return vec![0];
@@ -578,160 +403,148 @@ fn infer_vector_shape(elements: &[CompiledExpr]) -> Vec<i64> {
     }
 }
 
-/// Infer type of a function call based on operation
-fn infer_function_call_type(name: &str, args: &[CompiledExpr]) -> SheafResult<StableHLOType> {
+fn infer_function_call_type(
+    name: &str,
+    args: &[CompiledExpr],
+    symbol_types: &std::collections::HashMap<String, StableHLOType>,
+) -> SheafResult<StableHLOType> {
     match name {
-        // Binary arithmetic ops preserve input type
-        "+" | "-" | "*" | "/" => {
-            if args.is_empty() {
-                return Ok(StableHLOType::scalar_f32());
-            }
-            infer_type(&args[0])
-        }
-
-        // Matrix multiply: [M,K] @ [K,N] -> [M,N]
+        "+" | "-" | "*" | "/" => args
+            .first()
+            .map(|arg| infer_type_with_context(arg, symbol_types))
+            .unwrap_or_else(|| Ok(StableHLOType::scalar_f32())),
         "@" => {
             if args.len() != 2 {
                 return Ok(StableHLOType::scalar_f32());
             }
-
-            let lhs_ty = infer_type(&args[0])?;
-            let rhs_ty = infer_type(&args[1])?;
-
+            let lhs_ty = infer_type_with_context(&args[0], symbol_types)?;
+            let rhs_ty = infer_type_with_context(&args[1], symbol_types)?;
             let lhs_shape = lhs_ty.shape();
             let rhs_shape = rhs_ty.shape();
-
             if lhs_shape.len() == 2 && rhs_shape.len() == 2 {
-                // [M, K] @ [K, N] -> [M, N]
-                Ok(StableHLOType::f32_tensor(vec![lhs_shape[0], rhs_shape[1]]))
+                Ok(inferred_tensor_type(
+                    vec![lhs_shape[0], rhs_shape[1]],
+                    lhs_ty.element_type().unwrap_or(ElementType::F32),
+                ))
             } else {
-                // Fallback
                 Ok(lhs_ty)
             }
         }
-
-        // Unary ops preserve input type
-        "relu" | "sigmoid" | "tanh" | "sqrt" | "exp" | "log" | "softmax" => {
-            if args.is_empty() {
-                return Ok(StableHLOType::scalar_f32());
-            }
-            infer_type(&args[0])
-        }
-
-        // zeros: (zeros [M N]) -> tensor<MxNxf32>
-        "zeros" => {
-            if let Some(CompiledExpr::Vector(shape_elems)) = args.first() {
-                let shape: Vec<i64> = shape_elems
-                    .iter()
-                    .filter_map(|e| match e {
-                        CompiledExpr::Integer(n) => Some(*n),
-                        _ => None,
-                    })
-                    .collect();
-                Ok(StableHLOType::f32_tensor(shape))
-            } else {
-                Ok(StableHLOType::scalar_f32())
-            }
-        }
-
-        // random-normal: (random-normal key [M N]) -> tensor<MxNxf32>
-        "random-normal" => {
-            if args.len() < 2 {
-                return Ok(StableHLOType::scalar_f32());
-            }
-            if let CompiledExpr::Vector(shape_elems) = &args[1] {
-                let shape: Vec<i64> = shape_elems
-                    .iter()
-                    .filter_map(|e| match e {
-                        CompiledExpr::Integer(n) => Some(*n),
-                        _ => None,
-                    })
-                    .collect();
-                Ok(StableHLOType::f32_tensor(shape))
-            } else {
-                Ok(StableHLOType::scalar_f32())
-            }
-        }
-
-        // sum: (sum x :axis N :keepdims bool) -> removes or keeps axis N
-        "sum" | "mean" => {
-            if args.is_empty() {
-                return Ok(StableHLOType::scalar_f32());
-            }
-            let input_ty = infer_type(&args[0])?;
-            let shape = input_ty.shape();
-            if shape.is_empty() {
-                return Ok(StableHLOType::scalar_f32());
-            }
-            // Parse :axis and :keepdims from args
-            let mut axis: i64 = -1;
-            let mut keepdims = false;
-            let mut i = 1;
-            while i + 1 < args.len() {
-                match &args[i] {
-                    CompiledExpr::Keyword(k) if k == "axis" => {
-                        if let CompiledExpr::Integer(n) = &args[i + 1] {
-                            axis = *n;
-                        }
-                        i += 2;
-                    }
-                    CompiledExpr::Keyword(k) if k == "keepdims" => {
-                        if let CompiledExpr::Boolean(b) = &args[i + 1] {
-                            keepdims = *b;
-                        }
-                        i += 2;
-                    }
-                    _ => {
-                        i += 1;
-                    }
-                }
-            }
-            let ndim = shape.len();
-            let axis_usize = if axis < 0 {
-                (ndim as i64 + axis) as usize
-            } else {
-                axis as usize
-            };
-            let axis_usize = axis_usize.min(ndim.saturating_sub(1));
-            if keepdims {
-                let mut out_shape = shape.to_vec();
-                out_shape[axis_usize] = 1;
-                Ok(StableHLOType::f32_tensor(out_shape))
-            } else {
-                let out_shape: Vec<i64> = shape
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| *i != axis_usize)
-                    .map(|(_, &d)| d)
-                    .collect();
-                if out_shape.is_empty() {
-                    Ok(StableHLOType::scalar_f32())
-                } else {
-                    Ok(StableHLOType::f32_tensor(out_shape))
-                }
-            }
-        }
-
-        // Unknown function: assume scalar
+        "relu" | "sigmoid" | "tanh" | "sqrt" | "exp" | "log" | "softmax" => args
+            .first()
+            .map(|arg| infer_type_with_context(arg, symbol_types))
+            .unwrap_or_else(|| Ok(StableHLOType::scalar_f32())),
+        "zeros" => Ok(args
+            .first()
+            .and_then(literal_shape)
+            .map(StableHLOType::f32_tensor)
+            .unwrap_or_else(StableHLOType::scalar_f32)),
+        "random-normal" => Ok(args
+            .get(1)
+            .and_then(literal_shape)
+            .map(StableHLOType::f32_tensor)
+            .unwrap_or_else(StableHLOType::scalar_f32)),
+        "sum" | "mean" => infer_reduction_type(args, symbol_types),
         _ => Ok(StableHLOType::scalar_f32()),
     }
 }
 
-/// Helper to check if an expression resolves to a non-scalar type (tensor or tuple)
-/// in a given symbol context. Used by classify_vectors.
+fn literal_shape(expr: &CompiledExpr) -> Option<Vec<i64>> {
+    let CompiledExpr::Vector(elements) = expr else {
+        return None;
+    };
+    elements
+        .iter()
+        .map(|element| match element {
+            CompiledExpr::Integer(dimension) => Some(*dimension),
+            _ => None,
+        })
+        .collect()
+}
+
+fn infer_reduction_type(
+    args: &[CompiledExpr],
+    symbol_types: &std::collections::HashMap<String, StableHLOType>,
+) -> SheafResult<StableHLOType> {
+    let Some(input) = args.first() else {
+        return Ok(StableHLOType::scalar_f32());
+    };
+    let input_ty = infer_type_with_context(input, symbol_types)?;
+    let shape = input_ty.shape();
+    if shape.is_empty() {
+        return Ok(input_ty);
+    }
+
+    let mut axis = -1;
+    let mut keepdims = false;
+    let mut index = 1;
+    while index + 1 < args.len() {
+        match &args[index] {
+            CompiledExpr::Keyword(keyword) if keyword == "axis" => {
+                if let CompiledExpr::Integer(value) = &args[index + 1] {
+                    axis = *value;
+                }
+                index += 2;
+            }
+            CompiledExpr::Keyword(keyword) if keyword == "keepdims" => {
+                if let CompiledExpr::Boolean(value) = &args[index + 1] {
+                    keepdims = *value;
+                }
+                index += 2;
+            }
+            _ => index += 1,
+        }
+    }
+
+    let rank = shape.len();
+    let axis = if axis < 0 {
+        (rank as i64 + axis) as usize
+    } else {
+        axis as usize
+    }
+    .min(rank - 1);
+    let mut result_shape = shape.to_vec();
+    if keepdims {
+        result_shape[axis] = 1;
+    } else {
+        result_shape.remove(axis);
+    }
+    Ok(inferred_tensor_type(
+        result_shape,
+        input_ty.element_type().unwrap_or(ElementType::F32),
+    ))
+}
+
+fn inferred_tensor_type(shape: Vec<i64>, dtype: ElementType) -> StableHLOType {
+    if !shape.is_empty() {
+        return StableHLOType::tensor(shape, dtype);
+    }
+    match dtype {
+        ElementType::F16 => StableHLOType::ScalarF16,
+        ElementType::BF16 => StableHLOType::ScalarBF16,
+        ElementType::F32 => StableHLOType::ScalarF32,
+        ElementType::F64 => StableHLOType::ScalarF64,
+        ElementType::I64 => StableHLOType::ScalarI64,
+        ElementType::Bool => StableHLOType::ScalarI1,
+        ElementType::I32 => StableHLOType::tensor(shape, dtype),
+    }
+}
+
 pub fn expr_is_tensor(
     expr: &CompiledExpr,
     symbol_types: &std::collections::HashMap<String, StableHLOType>,
 ) -> bool {
-    match infer_type_with_context(expr, symbol_types) {
-        Ok(ty) => !ty.shape().is_empty(),
-        Err(_) => false,
-    }
+    infer_type_with_context(expr, symbol_types)
+        .is_ok_and(|ty| matches!(ty, StableHLOType::Tuple(..)) || !ty.shape().is_empty())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn infer_type(expr: &CompiledExpr) -> SheafResult<StableHLOType> {
+        infer_type_with_context(expr, &std::collections::HashMap::new())
+    }
 
     fn make_compiled_float(x: f64) -> CompiledExpr {
         CompiledExpr::Float(x)
@@ -758,7 +571,6 @@ mod tests {
 
     #[test]
     fn test_infer_add() {
-        // (+ 1.0 2.0) -> tensor<f32>
         let expr = make_compiled_call(
             "+",
             vec![make_compiled_float(1.0), make_compiled_float(2.0)],
@@ -768,8 +580,68 @@ mod tests {
     }
 
     #[test]
+    fn context_flows_through_let_bindings() {
+        let mut symbols = std::collections::HashMap::new();
+        symbols.insert(
+            "x".to_string(),
+            StableHLOType::bf16_tensor(vec![2, 3]),
+        );
+        let expr = CompiledExpr::Let {
+            bindings: vec![(
+                BindingPattern::Simple("y".to_string()),
+                CompiledExpr::Symbol("x".to_string()),
+            )],
+            body: Box::new(CompiledExpr::Symbol("y".to_string())),
+        };
+        assert_eq!(
+            infer_type_with_context(&expr, &symbols).unwrap(),
+            StableHLOType::bf16_tensor(vec![2, 3]),
+        );
+    }
+
+    #[test]
+    fn tuple_elements_resolve_from_parameter_types() {
+        let mut symbols = std::collections::HashMap::new();
+        symbols.insert(
+            "params".to_string(),
+            StableHLOType::Tuple(
+                vec![StableHLOType::f16_tensor(vec![3, 4])],
+                Some(vec!["weight".to_string()]),
+            ),
+        );
+        let expr = CompiledExpr::GetTupleElement {
+            param: "params".to_string(),
+            indices: vec![0],
+        };
+        assert_eq!(
+            infer_type_with_context(&expr, &symbols).unwrap(),
+            StableHLOType::f16_tensor(vec![3, 4]),
+        );
+    }
+
+    #[test]
+    fn reductions_preserve_element_types() {
+        let mut symbols = std::collections::HashMap::new();
+        symbols.insert(
+            "x".to_string(),
+            StableHLOType::f16_tensor(vec![2, 3]),
+        );
+        let expr = make_compiled_call(
+            "sum",
+            vec![
+                CompiledExpr::Symbol("x".to_string()),
+                CompiledExpr::Keyword("axis".to_string()),
+                CompiledExpr::Integer(1),
+            ],
+        );
+        assert_eq!(
+            infer_type_with_context(&expr, &symbols).unwrap(),
+            StableHLOType::f16_tensor(vec![2]),
+        );
+    }
+
+    #[test]
     fn test_infer_matrix() {
-        // [[1.0 2.0] [3.0 4.0]] -> tensor<2x2xf32>
         let expr = make_compiled_vector(vec![
             make_compiled_vector(vec![make_compiled_float(1.0), make_compiled_float(2.0)]),
             make_compiled_vector(vec![make_compiled_float(3.0), make_compiled_float(4.0)]),
@@ -780,7 +652,6 @@ mod tests {
 
     #[test]
     fn test_infer_matmul() {
-        // [[1.0 2.0]] @ [[3.0] [4.0]] -> tensor<1x1xf32>
         let lhs = make_compiled_vector(vec![make_compiled_vector(vec![
             make_compiled_float(1.0),
             make_compiled_float(2.0),
@@ -796,10 +667,18 @@ mod tests {
     }
 
     #[test]
+    fn tuple_expressions_are_non_scalar() {
+        let expr = CompiledExpr::Dict(vec![(
+            CompiledExpr::Keyword("x".to_string()),
+            make_compiled_float(1.0),
+        )]);
+        assert!(expr_is_tensor(&expr, &std::collections::HashMap::new()));
+    }
+
+    #[test]
     fn test_infer_signature() {
         let params = vec!["x".to_string(), "y".to_string()];
 
-        // Body: (+ x y) - returns scalar
         let body = make_compiled_call(
             "+",
             vec![
@@ -820,8 +699,6 @@ mod tests {
     fn test_infer_matmul_signature() {
         let params = vec!["A".to_string(), "B".to_string()];
 
-        // Body: (@ A B) where A is 2x3, B is 3x4 -> should return 2x4
-        // For now, we'll simulate with literals
         let a_matrix = make_compiled_vector(vec![
             make_compiled_vector(vec![
                 make_compiled_float(1.0),
@@ -858,7 +735,6 @@ mod tests {
         let body = make_compiled_call("@", vec![a_matrix, b_matrix]);
         let sig = infer_function_signature(&params, &body).unwrap();
 
-        // Return should be 2x4
         assert_eq!(sig.return_type, StableHLOType::f32_tensor(vec![2, 4]));
     }
 }
