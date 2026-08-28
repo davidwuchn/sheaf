@@ -4,9 +4,11 @@
 //! Type inference.
 
 use crate::lowering::stablehlo::StableHLOType;
-use crate::core::dtype::ElementType;
+use crate::core::dtype::{
+    DtypeOperand, ElementType, resolve_arithmetic_dtype,
+};
 use crate::core::expr::{BindingPattern, CompiledExpr};
-use crate::core::error::SheafResult;
+use crate::core::error::{SheafError, SheafResult};
 
 /// Layout of a flattened value.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -315,6 +317,18 @@ pub(crate) fn infer_type_with_context(
     expr: &CompiledExpr,
     symbol_types: &std::collections::HashMap<String, StableHLOType>,
 ) -> SheafResult<StableHLOType> {
+    infer_type_with_weak_scalars(
+        expr,
+        symbol_types,
+        &std::collections::HashSet::new(),
+    )
+}
+
+fn infer_type_with_weak_scalars(
+    expr: &CompiledExpr,
+    symbol_types: &std::collections::HashMap<String, StableHLOType>,
+    weak_scalars: &std::collections::HashSet<String>,
+) -> SheafResult<StableHLOType> {
     match expr {
         CompiledExpr::Integer(_) | CompiledExpr::Float(_) | CompiledExpr::Boolean(_) => {
             Ok(StableHLOType::scalar_f32())
@@ -331,32 +345,42 @@ pub(crate) fn infer_type_with_context(
             .and_then(|ty| resolve_tuple_index(ty, indices))
             .unwrap_or(StableHLOType::scalar_f32())),
         CompiledExpr::FunctionCall { name, args, .. } => {
-            infer_function_call_type(name, args, symbol_types)
+            infer_function_call_type(name, args, symbol_types, weak_scalars)
         }
         CompiledExpr::Let { bindings, body } => {
             let mut extended = symbol_types.clone();
+            let mut extended_weak = weak_scalars.clone();
             for (pattern, value) in bindings {
-                let ty = infer_type_with_context(value, &extended)?;
+                let ty = infer_type_with_weak_scalars(value, &extended, &extended_weak)?;
                 if let BindingPattern::Simple(name) = pattern {
                     extended.insert(name.clone(), ty);
+                    if is_weak_scalar(value, &extended_weak) {
+                        extended_weak.insert(name.clone());
+                    } else {
+                        extended_weak.remove(name);
+                    }
                 }
             }
-            infer_type_with_context(body, &extended)
+            infer_type_with_weak_scalars(body, &extended, &extended_weak)
         }
         CompiledExpr::If {
             then_branch,
             else_branch,
             ..
         } => {
-            let then_ty = infer_type_with_context(then_branch, symbol_types)?;
+            let then_ty = infer_type_with_weak_scalars(
+                then_branch,
+                symbol_types,
+                weak_scalars,
+            )?;
             if let Some(else_expr) = else_branch {
-                infer_type_with_context(else_expr, symbol_types)?;
+                infer_type_with_weak_scalars(else_expr, symbol_types, weak_scalars)?;
             }
             Ok(then_ty)
         }
         CompiledExpr::Do(exprs) => exprs
             .last()
-            .map(|expr| infer_type_with_context(expr, symbol_types))
+            .map(|expr| infer_type_with_weak_scalars(expr, symbol_types, weak_scalars))
             .unwrap_or_else(|| Ok(StableHLOType::scalar_f32())),
         CompiledExpr::Dict(pairs) => {
             let mut sorted: Vec<_> = pairs.iter().collect();
@@ -380,7 +404,9 @@ pub(crate) fn infer_type_with_context(
                 .collect();
             let elements = sorted
                 .iter()
-                .map(|(_, value)| infer_type_with_context(value, symbol_types))
+                .map(|(_, value)| {
+                    infer_type_with_weak_scalars(value, symbol_types, weak_scalars)
+                })
                 .collect::<SheafResult<Vec<_>>>()?;
             Ok(StableHLOType::Tuple(elements, Some(keys)))
         }
@@ -407,18 +433,28 @@ fn infer_function_call_type(
     name: &str,
     args: &[CompiledExpr],
     symbol_types: &std::collections::HashMap<String, StableHLOType>,
+    weak_scalars: &std::collections::HashSet<String>,
 ) -> SheafResult<StableHLOType> {
     match name {
-        "+" | "-" | "*" | "/" => args
+        "+" => infer_add_type(args, symbol_types, weak_scalars),
+        "-" | "*" | "/" => args
             .first()
-            .map(|arg| infer_type_with_context(arg, symbol_types))
+            .map(|arg| infer_type_with_weak_scalars(arg, symbol_types, weak_scalars))
             .unwrap_or_else(|| Ok(StableHLOType::scalar_f32())),
         "@" => {
             if args.len() != 2 {
                 return Ok(StableHLOType::scalar_f32());
             }
-            let lhs_ty = infer_type_with_context(&args[0], symbol_types)?;
-            let rhs_ty = infer_type_with_context(&args[1], symbol_types)?;
+            let lhs_ty = infer_type_with_weak_scalars(
+                &args[0],
+                symbol_types,
+                weak_scalars,
+            )?;
+            let rhs_ty = infer_type_with_weak_scalars(
+                &args[1],
+                symbol_types,
+                weak_scalars,
+            )?;
             let lhs_shape = lhs_ty.shape();
             let rhs_shape = rhs_ty.shape();
             if lhs_shape.len() == 2 && rhs_shape.len() == 2 {
@@ -432,7 +468,7 @@ fn infer_function_call_type(
         }
         "relu" | "sigmoid" | "tanh" | "sqrt" | "exp" | "log" | "softmax" => args
             .first()
-            .map(|arg| infer_type_with_context(arg, symbol_types))
+            .map(|arg| infer_type_with_weak_scalars(arg, symbol_types, weak_scalars))
             .unwrap_or_else(|| Ok(StableHLOType::scalar_f32())),
         "zeros" => Ok(args
             .first()
@@ -444,8 +480,79 @@ fn infer_function_call_type(
             .and_then(literal_shape)
             .map(StableHLOType::f32_tensor)
             .unwrap_or_else(StableHLOType::scalar_f32)),
-        "sum" | "mean" => infer_reduction_type(args, symbol_types),
+        "sum" | "mean" => infer_reduction_type(args, symbol_types, weak_scalars),
         _ => Ok(StableHLOType::scalar_f32()),
+    }
+}
+
+fn infer_add_type(
+    args: &[CompiledExpr],
+    symbol_types: &std::collections::HashMap<String, StableHLOType>,
+    weak_scalars: &std::collections::HashSet<String>,
+) -> SheafResult<StableHLOType> {
+    let Some(first) = args.first() else {
+        return Ok(StableHLOType::scalar_f32());
+    };
+    let mut result = infer_type_with_weak_scalars(first, symbol_types, weak_scalars)?;
+    let mut result_is_weak = is_weak_scalar(first, weak_scalars);
+
+    for arg in &args[1..] {
+        let rhs = infer_type_with_weak_scalars(arg, symbol_types, weak_scalars)?;
+        let rhs_is_weak = is_weak_scalar(arg, weak_scalars);
+        let lhs_dtype = result.element_type().unwrap_or(ElementType::F32);
+        let rhs_dtype = rhs.element_type().unwrap_or(ElementType::F32);
+        let dtype = resolve_arithmetic_dtype(
+            if result_is_weak {
+                DtypeOperand::weak(lhs_dtype)
+            } else {
+                DtypeOperand::strong(lhs_dtype)
+            },
+            if rhs_is_weak {
+                DtypeOperand::weak(rhs_dtype)
+            } else {
+                DtypeOperand::strong(rhs_dtype)
+            },
+        )
+        .map_err(|error| SheafError::Compile {
+            message: format!("+: {}", error),
+            location: crate::core::error::SourceLocation::unknown(),
+        })?;
+        let shape = crate::core::shape::broadcast_shapes(result.shape(), rhs.shape())
+            .map_err(|error| SheafError::Compile {
+                message: format!(
+                    "+: cannot broadcast dimensions {} and {}",
+                    error.lhs,
+                    error.rhs,
+                ),
+                location: crate::core::error::SourceLocation::unknown(),
+            })?;
+        result = if shape.is_empty()
+            && (matches!(result, StableHLOType::Tensor { .. })
+                || matches!(rhs, StableHLOType::Tensor { .. }))
+        {
+            StableHLOType::tensor(shape, dtype)
+        } else {
+            inferred_tensor_type(shape, dtype)
+        };
+        result_is_weak &= rhs_is_weak;
+    }
+    Ok(result)
+}
+
+fn is_weak_scalar(
+    expr: &CompiledExpr,
+    weak_scalars: &std::collections::HashSet<String>,
+) -> bool {
+    match expr {
+        CompiledExpr::Integer(_) | CompiledExpr::Float(_) => true,
+        CompiledExpr::Symbol(name) => weak_scalars.contains(name),
+        CompiledExpr::FunctionCall { name, args, .. } if name == "+" => {
+            args.iter().all(|arg| is_weak_scalar(arg, weak_scalars))
+        }
+        CompiledExpr::Do(exprs) => exprs
+            .last()
+            .is_some_and(|expr| is_weak_scalar(expr, weak_scalars)),
+        _ => false,
     }
 }
 
@@ -465,11 +572,12 @@ fn literal_shape(expr: &CompiledExpr) -> Option<Vec<i64>> {
 fn infer_reduction_type(
     args: &[CompiledExpr],
     symbol_types: &std::collections::HashMap<String, StableHLOType>,
+    weak_scalars: &std::collections::HashSet<String>,
 ) -> SheafResult<StableHLOType> {
     let Some(input) = args.first() else {
         return Ok(StableHLOType::scalar_f32());
     };
-    let input_ty = infer_type_with_context(input, symbol_types)?;
+    let input_ty = infer_type_with_weak_scalars(input, symbol_types, weak_scalars)?;
     let shape = input_ty.shape();
     if shape.is_empty() {
         return Ok(input_ty);
@@ -617,6 +725,53 @@ mod tests {
             infer_type_with_context(&expr, &symbols).unwrap(),
             StableHLOType::f16_tensor(vec![3, 4]),
         );
+    }
+
+    #[test]
+    fn addition_uses_tensor_dtype_for_weak_scalars() {
+        let mut symbols = std::collections::HashMap::new();
+        symbols.insert(
+            "x".to_string(),
+            StableHLOType::f16_tensor(vec![2]),
+        );
+        let expr = CompiledExpr::Let {
+            bindings: vec![(
+                BindingPattern::Simple("one".to_string()),
+                make_compiled_float(1.0),
+            )],
+            body: Box::new(make_compiled_call(
+                "+",
+                vec![
+                    CompiledExpr::Symbol("x".to_string()),
+                    CompiledExpr::Symbol("one".to_string()),
+                ],
+            )),
+        };
+        assert_eq!(
+            infer_type_with_context(&expr, &symbols).unwrap(),
+            StableHLOType::f16_tensor(vec![2]),
+        );
+    }
+
+    #[test]
+    fn addition_rejects_strong_dtype_mismatches() {
+        let mut symbols = std::collections::HashMap::new();
+        symbols.insert(
+            "x".to_string(),
+            StableHLOType::f16_tensor(vec![2]),
+        );
+        symbols.insert(
+            "y".to_string(),
+            StableHLOType::bf16_tensor(vec![2]),
+        );
+        let expr = make_compiled_call(
+            "+",
+            vec![
+                CompiledExpr::Symbol("x".to_string()),
+                CompiledExpr::Symbol("y".to_string()),
+            ],
+        );
+        assert!(infer_type_with_context(&expr, &symbols).is_err());
     }
 
     #[test]
