@@ -119,6 +119,22 @@ impl StableHLOType {
         self.element_type().is_some_and(ElementType::is_float)
     }
 
+    pub fn with_element_type(&self, dtype: ElementType) -> Option<Self> {
+        match self {
+            Self::Tensor { shape, .. } => Some(Self::tensor(shape.clone(), dtype)),
+            Self::Tuple(..) => None,
+            _ => Some(match dtype {
+                ElementType::F16 => Self::ScalarF16,
+                ElementType::BF16 => Self::ScalarBF16,
+                ElementType::F32 => Self::ScalarF32,
+                ElementType::F64 => Self::ScalarF64,
+                ElementType::I64 => Self::ScalarI64,
+                ElementType::Bool => Self::ScalarI1,
+                ElementType::I32 => Self::tensor(Vec::new(), ElementType::I32),
+            }),
+        }
+    }
+
     /// Check if two types have the same tuple nesting structure.
     /// Leaf types (tensors, scalars) are considered structurally equivalent.
     pub fn tuple_structure_matches(&self, other: &Self) -> bool {

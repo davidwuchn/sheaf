@@ -4,8 +4,9 @@
 //! Math, comparison, and boolean builtin codegen.
 
 use crate::lowering::stablehlo::{Register, StableHLOType};
+use crate::core::dtype::{DtypeOperand, resolve_arithmetic_dtype};
 use crate::core::expr::CompiledExpr;
-use crate::core::error::SheafResult;
+use crate::core::error::{SheafError, SheafResult};
 use super::CodeGenerator;
 
 impl<'a> CodeGenerator<'a> {
@@ -14,7 +15,10 @@ impl<'a> CodeGenerator<'a> {
         name: &str,
         args: &[CompiledExpr],
     ) -> Option<SheafResult<(Register, StableHLOType)>> {
-        if matches!(name, "+" | "-" | "*" | "/") && args.len() >= 2 {
+        if name == "+" && args.len() >= 2 {
+            Some(self.gen_add(args))
+        }
+        else if matches!(name, "-" | "*" | "/") && args.len() >= 2 {
             Some(self.gen_arithmetic(name, args))
         }
         else if matches!(name, "**" | "//" | "%" | "mod") && args.len() == 2 {
@@ -53,6 +57,56 @@ impl<'a> CodeGenerator<'a> {
         else {
             None
         }
+    }
+
+    fn gen_add(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let (mut acc_reg, mut acc_ty) = self.generate(&args[0])?;
+        let mut acc_is_weak = self.weak_scalars.contains(&acc_reg);
+
+        for arg in &args[1..] {
+            let (mut rhs_reg, mut rhs_ty) = self.generate(arg)?;
+            let rhs_is_weak = self.weak_scalars.contains(&rhs_reg);
+            let lhs_dtype = acc_ty.element_type().ok_or_else(add_type_error)?;
+            let rhs_dtype = rhs_ty.element_type().ok_or_else(add_type_error)?;
+            let dtype = resolve_arithmetic_dtype(
+                if acc_is_weak {
+                    DtypeOperand::weak(lhs_dtype)
+                } else {
+                    DtypeOperand::strong(lhs_dtype)
+                },
+                if rhs_is_weak {
+                    DtypeOperand::weak(rhs_dtype)
+                } else {
+                    DtypeOperand::strong(rhs_dtype)
+                },
+            )
+            .map_err(|error| SheafError::Compile {
+                message: format!("+: {}", error),
+                location: crate::core::error::SourceLocation::unknown(),
+            })?;
+
+            if lhs_dtype != dtype {
+                let target = acc_ty.with_element_type(dtype).ok_or_else(add_type_error)?;
+                acc_reg = self.emitter.emit_convert(&acc_reg, &acc_ty, &target);
+                acc_ty = target;
+            }
+            if rhs_dtype != dtype {
+                let target = rhs_ty.with_element_type(dtype).ok_or_else(add_type_error)?;
+                rhs_reg = self.emitter.emit_convert(&rhs_reg, &rhs_ty, &target);
+                rhs_ty = target;
+            }
+
+            (acc_reg, acc_ty) =
+                self.emitter.emit_binop("+", &acc_reg, &rhs_reg, &acc_ty, &rhs_ty);
+            acc_is_weak &= rhs_is_weak;
+            if acc_is_weak {
+                self.weak_scalars.insert(acc_reg);
+            }
+        }
+        Ok((acc_reg, acc_ty))
     }
 
     fn gen_arithmetic(
@@ -172,5 +226,12 @@ impl<'a> CodeGenerator<'a> {
         let op = if name == "minimum" { "min" } else { "max" };
         let (result_reg, result_ty) = self.emitter.emit_binop(op, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
         Ok((result_reg, result_ty))
+    }
+}
+
+fn add_type_error() -> SheafError {
+    SheafError::Compile {
+        message: "+: expected tensor or scalar operands".to_string(),
+        location: crate::core::error::SourceLocation::unknown(),
     }
 }

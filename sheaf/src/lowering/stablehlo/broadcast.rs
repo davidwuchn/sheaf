@@ -107,15 +107,16 @@ impl StableHLOEmitter {
         reg
     }
 
-    /// Broadcast types: choose result type for binary op.
-    /// Preserves dtype: if both sides are bf16, result is bf16.
-    /// If one side is f32 and the other bf16, result is f32 (widening).
     pub(crate) fn broadcast_types(&self, lhs: &StableHLOType, rhs: &StableHLOType) -> StableHLOType {
         let lhs_shape = lhs.shape();
         let rhs_shape = rhs.shape();
 
         if lhs_shape.is_empty() && rhs_shape.is_empty() {
-            return lhs.clone();
+            return match (lhs, rhs) {
+                (StableHLOType::Tensor { .. }, _) => lhs.clone(),
+                (_, StableHLOType::Tensor { .. }) => rhs.clone(),
+                _ => lhs.clone(),
+            };
         }
         if lhs_shape.is_empty() {
             return rhs.clone();
@@ -124,15 +125,12 @@ impl StableHLOEmitter {
             return lhs.clone();
         }
 
-        // Resolve result dtype: both bf16 -> bf16, mixed -> f32
-        let result_dtype = if lhs.dtype() == "bf16" && rhs.dtype() == "bf16" {
-            "bf16"
-        } else {
-            "f32"
+        let result_dtype = match (lhs.element_type(), rhs.element_type()) {
+            (Some(lhs), Some(rhs)) if lhs == rhs => lhs,
+            _ => crate::core::dtype::ElementType::F32,
         };
-
         let result_shape = crate::core::shape::broadcast_shapes(lhs_shape, rhs_shape)
             .expect("binary operand shapes must be validated before StableHLO lowering");
-        StableHLOType::typed_tensor(result_shape, result_dtype)
+        StableHLOType::tensor(result_shape, result_dtype)
     }
 }

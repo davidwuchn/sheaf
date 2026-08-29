@@ -21,7 +21,7 @@ pub(crate) use helpers::{
     try_flatten_to_constant, TupleLeaf, collect_tuple_references, collect_tuple_type_leaves,
     expand_tuple_to_symbols,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Recursively flatten tuple types into leaf tensor types.
 pub fn flatten_param_types(param_types: &[StableHLOType]) -> Vec<StableHLOType> {
@@ -47,6 +47,7 @@ fn flatten_type(ty: &StableHLOType, out: &mut Vec<StableHLOType>) {
 pub struct CodeGenerator<'a> {
     emitter: StableHLOEmitter,
     bindings: HashMap<String, (Register, StableHLOType)>,
+    weak_scalars: HashSet<Register>,
     /// Let-bound lambdas are inlined rather than emitted as SSA values.
     lambda_bindings: HashMap<String, CompiledExpr>,
     function_registry: Option<&'a HashMap<String, crate::core::expr::FunctionDef>>,
@@ -63,6 +64,7 @@ impl<'a> CodeGenerator<'a> {
         Self {
             emitter: StableHLOEmitter::new(),
             bindings: HashMap::new(),
+            weak_scalars: HashSet::new(),
             lambda_bindings: HashMap::new(),
             function_registry: None,
             tuple_key_layouts: HashMap::new(),
@@ -77,6 +79,7 @@ impl<'a> CodeGenerator<'a> {
         Self {
             emitter: StableHLOEmitter::new(),
             bindings: HashMap::new(),
+            weak_scalars: HashSet::new(),
             lambda_bindings: HashMap::new(),
             function_registry: Some(registry),
             tuple_key_layouts: HashMap::new(),
@@ -103,6 +106,7 @@ impl<'a> CodeGenerator<'a> {
         Self {
             emitter,
             bindings,
+            weak_scalars: HashSet::new(),
             lambda_bindings: HashMap::new(),
             function_registry: Some(registry),
             tuple_key_layouts: HashMap::new(),
@@ -268,13 +272,14 @@ impl<'a> CodeGenerator<'a> {
     pub fn generate(&mut self, expr: &CompiledExpr) -> SheafResult<(Register, StableHLOType)> {
         match expr {
             CompiledExpr::Integer(n) => {
-                // Treat integers as floats for now (matches Python behavior)
                 let reg = self.emitter.emit_constant_f32(*n as f64);
+                self.weak_scalars.insert(reg);
                 Ok((reg, StableHLOType::scalar_f32()))
             }
 
             CompiledExpr::Float(x) => {
                 let reg = self.emitter.emit_constant_f32(*x);
+                self.weak_scalars.insert(reg);
                 Ok((reg, StableHLOType::scalar_f32()))
             }
 
