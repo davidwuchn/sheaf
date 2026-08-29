@@ -32,7 +32,7 @@ fn builtin_add(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if args.len() == 1 {
         return Ok(args[0].clone());
     }
-    with_dtype_kwarg(binary_op(args, |a, b| a + b), kw)
+    with_dtype_kwarg(add_with_dtype_policy(args), kw)
 }
 
 fn builtin_sub(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
@@ -72,7 +72,7 @@ fn builtin_mod(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_pow(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    // Strength reduction: detect small integer exponents and use multiplication
+    // Use multiplication for small integer exponents.
     if args.len() == 2 {
         let exp_int = match &args[1] {
             Value::Int(n) => Some(*n),
@@ -211,8 +211,7 @@ fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             Ok(Value::tensor_f32(a1.dot(&b2).into_dyn()))
         }
         _ if a.ndim() >= 2 && b.ndim() >= 2 => {
-            // Batched matmul: [...batch, M, K] @ [...batch, K, N] -> [...batch, M, N]
-            // Also handles nD @ 2D and 2D @ nD by broadcasting the 2D operand
+            // [..., M, K] @ [..., K, N] -> [..., M, N]
             let a_shape = a.shape();
             let b_shape = b.shape();
             let m = a_shape[a.ndim() - 2];
@@ -236,7 +235,7 @@ fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                     .map_err(|e| runtime_error(e.to_string()))?)
             } else { None };
 
-            // Ensure contiguous layout for batched reshape (>2D only)
+            // Make batched inputs contiguous before reshaping.
             let a_flat = if a.ndim() > 2 {
                 Some(a.as_standard_layout().into_owned().into_shape_with_order((batch_size, m, k))
                     .map_err(|e| runtime_error(format!("@: reshape a: {}", e)))?)
@@ -301,9 +300,6 @@ fn expand_einsum_ellipsis(subscript: &str, shape_a: &[usize], shape_b: &[usize])
     subscript.replace("...", &batch_labels)
 }
 
-/// Try to decompose an einsum into permute -> reshape 3D -> BLAS matmul -> reshape -> permute.
-/// Every 2-operand einsum where each label falls into batch/free_a/free_b/contract
-/// can be expressed this way.
 fn try_einsum_as_matmul(
     idx_a: &[char], idx_b: &[char], idx_out: &[char],
     a: &ArrayD<f32>, b: &ArrayD<f32>,
@@ -344,12 +340,10 @@ fn try_einsum_as_matmul(
     let free_b_size: usize = free_b_dims.iter().product::<usize>().max(1);
     let contract_size: usize = resolve(&contract)?.iter().product::<usize>().max(1);
 
-    // Permute A to [batch..., free_a..., contract...]
     let a_order: Vec<char> = batch.iter().chain(free_a.iter()).chain(contract.iter()).copied().collect();
     let a_perm: Vec<usize> = a_order.iter()
         .map(|c| idx_a.iter().position(|x| x == c))
         .collect::<Option<Vec<_>>>()?;
-    // Permute B to [batch..., contract..., free_b...]
     let b_order: Vec<char> = batch.iter().chain(contract.iter()).chain(free_b.iter()).copied().collect();
     let b_perm: Vec<usize> = b_order.iter()
         .map(|c| idx_b.iter().position(|x| x == c))
@@ -361,7 +355,6 @@ fn try_einsum_as_matmul(
     let a_3d = a_t.into_shape_with_order((batch_size, free_a_size, contract_size)).ok()?;
     let b_3d = b_t.into_shape_with_order((batch_size, contract_size, free_b_size)).ok()?;
 
-    // Batched matmul via BLAS
     let mut result_data = Vec::with_capacity(batch_size * free_a_size * free_b_size);
     for i in 0..batch_size {
         let ai = a_3d.index_axis(ndarray::Axis(0), i)
@@ -371,13 +364,11 @@ fn try_einsum_as_matmul(
         result_data.extend(ai.dot(&bi).iter());
     }
 
-    // Reshape to [batch..., free_a..., free_b...]
     let mut intermediate_shape = batch_dims;
     intermediate_shape.extend(&free_a_dims);
     intermediate_shape.extend(&free_b_dims);
     let intermediate = ArrayD::from_shape_vec(IxDyn(&intermediate_shape), result_data).ok()?;
 
-    // Permute to match output label order
     let intermediate_labels: Vec<char> = batch.iter()
         .chain(free_a.iter()).chain(free_b.iter()).copied().collect();
     let out_perm: Vec<usize> = idx_out.iter()
@@ -431,9 +422,6 @@ fn einsum_naive(
     ArrayD::from_shape_vec(IxDyn(&out_shape), result).unwrap()
 }
 
-/// dL/dA for C = A @ B, given (A, B, adj)
-/// Handles 1D edge cases: when A is 1D [K], adj is 1D [N], B is [K, N]
-/// Standard: adj @ B^T, but when adj is 1D we need reshape.
 fn matmul_result_shape(a: &ArrayD<f32>, b: &ArrayD<f32>) -> Vec<usize> {
     match (a.ndim(), b.ndim()) {
         (1, 1) => vec![],
@@ -611,8 +599,6 @@ fn builtin_matmul_grad_lhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     Ok(Value::tensor_f32(result))
 }
 
-/// dL/dB for C = A @ B, given (A, B, adj)
-/// Handles 1D edge cases: when A is 1D [K], need outer product.
 fn builtin_matmul_grad_rhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 3 { return Err(runtime_error("@-grad-rhs requires 3 arguments: A, B, adj")); }
     let (a, _) = to_array(&args[0])?;
@@ -704,7 +690,6 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let idx_b: Vec<char> = parts[1].chars().collect();
     let idx_out: Vec<char> = rhs.chars().collect();
 
-    // Validate subscript dimension count matches operand shapes
     if idx_a.len() != a.ndim() {
         return Err(runtime_error(format!(
             "einsum: operand A has {} dimensions but subscript '{}' specifies {}",
@@ -718,7 +703,6 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         )));
     }
 
-    // Build sizes from non-scalar operand first, then broadcast scalar operands
     let mut sizes: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
     for (&label, &dim) in idx_b.iter().zip(b.shape().iter()) {
         sizes.insert(label, dim);
@@ -727,7 +711,6 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         sizes.insert(label, dim);
     }
 
-    // Broadcast scalar operands to expected shape from subscript
     if a.ndim() == 0 && !idx_a.is_empty() {
         let scalar = as_scalar(&a);
         let shape: Vec<usize> = idx_a.iter().map(|c| sizes.get(c).copied().unwrap_or(1)).collect();
@@ -739,7 +722,6 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         b = ArrayD::from_elem(IxDyn(&shape), scalar);
     }
 
-    // Try BLAS-accelerated path, fall back to naive loops
     let arr = try_einsum_as_matmul(&idx_a, &idx_b, &idx_out, &a, &b, &sizes)
         .unwrap_or_else(|| einsum_naive(&idx_a, &idx_b, &idx_out, &a, &b, &sizes));
 

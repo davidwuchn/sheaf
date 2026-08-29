@@ -243,3 +243,44 @@ fn test_io_safetensors_roundtrip() {
         diff
     );
 }
+
+#[test]
+fn addition_uses_weak_scalar_dtypes() {
+    use sheaf_compiler::core::dtype::ElementType;
+    use sheaf_compiler::interpreter::value::Value;
+
+    for (dtype, literal, expected) in [
+        (ElementType::F16, "1.0006", 1.000_976_6),
+        (ElementType::BF16, "1.005", 1.0078125),
+    ] {
+        for scalar_first in [false, true] {
+            let expression = if scalar_first {
+                format!("(+ {literal} (cast (tensor [0.0]) :{}))", dtype.name())
+            } else {
+                format!("(+ (cast (tensor [0.0]) :{}) {literal})", dtype.name())
+            };
+            let Value::Tensor { data, dtype: result_dtype } = eval_exprs(&expression).unwrap()
+            else {
+                panic!("expected a tensor");
+            };
+            assert_eq!(result_dtype, dtype);
+            assert_eq!(data.as_slice().unwrap(), &[expected]);
+        }
+    }
+
+    let value = eval_exprs(
+        "(+ (reshape (cast (tensor [1.0]) :f16) (quote [])) 1.0)",
+    )
+    .unwrap();
+    let Value::Tensor { data, dtype } = value else {
+        panic!("expected a tensor");
+    };
+    assert!(data.shape().is_empty());
+    assert_eq!(dtype, ElementType::F16);
+
+    let error = eval_exprs(
+        "(+ (cast (tensor [1.0]) :f16) (cast (tensor [1.0]) :bf16))",
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("dtype mismatch: f16 and bf16"));
+}

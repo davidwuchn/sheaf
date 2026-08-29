@@ -16,6 +16,7 @@ mod io;
 mod random;
 mod losses;
 
+use crate::core::error::SheafError;
 use crate::interpreter::env::{arity_error, runtime_error, Env};
 use crate::interpreter::value::{Dtype, Value};
 use ndarray::{ArrayD, Dimension, IxDyn};
@@ -41,7 +42,6 @@ pub fn register_builtins(env: &mut Env) {
     env.set_builtin("stop-gradient", builtin_stop_gradient);
 }
 
-/// stop-gradient: identity in the forward pass; autodiff assigns zero gradient.
 fn builtin_stop_gradient(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 1 {
         return Err(runtime_error("stop-gradient expects exactly 1 argument"));
@@ -50,8 +50,6 @@ fn builtin_stop_gradient(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 /// Resolve a potentially negative index against a dimension length.
-/// Negative indices wrap from the end: -1 -> len-1, -2 -> len-2, etc.
-/// Returns an error if the resolved index is out of bounds or if the input is NaN.
 fn resolve_idx(f: f64, len: usize) -> Result<usize, crate::core::error::SheafError> {
     if f.is_nan() {
         return Err(runtime_error("index cannot be NaN"));
@@ -97,6 +95,12 @@ fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
     crate::core::shape::broadcast_shapes(a, b).ok()
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BinaryDtypePolicy {
+    Legacy,
+    WeakScalars,
+}
+
 fn result_dtype(a: Dtype, b: Dtype) -> Dtype {
     if a == b { return a; }
     if a == Dtype::Bool { return b; }
@@ -115,7 +119,7 @@ fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
     }
     // The common two-argument case borrows tensor storage instead of cloning it.
     if args.len() == 2 {
-        return binary_op_two(&args[0], &args[1], op);
+        return binary_op_two(&args[0], &args[1], op, BinaryDtypePolicy::Legacy);
     }
     let (cow, mut dt) = to_array(&args[0])?;
     let mut acc = cow.into_owned();
@@ -182,23 +186,54 @@ fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
     }
 }
 
-/// Zero-clone fast path for binary ops with exactly 2 arguments.
-/// Borrows tensor data directly from Arc instead of cloning.
-fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
+fn add_with_dtype_policy(args: &[Value]) -> R {
+    if args.len() < 2 {
+        return Err(runtime_error(format!(
+            "+: expected at least 2 arguments, got {}",
+            args.len(),
+        )));
+    }
+    let mut result = args[0].clone();
+    for arg in &args[1..] {
+        result = binary_op_two(
+            &result,
+            arg,
+            |lhs, rhs| lhs + rhs,
+            BinaryDtypePolicy::WeakScalars,
+        )?;
+    }
+    Ok(result)
+}
+
+/// Zero-clone fast path for binary ops with 2 arguments.
+fn binary_op_two(
+    a: &Value,
+    b: &Value,
+    op: fn(f32, f32) -> f32,
+    policy: BinaryDtypePolicy,
+) -> R {
     // Materialize DeviceBuffers to host for arithmetic
     let a_host;
     let b_host;
     let a = if matches!(a, Value::DeviceBuffer(_)) { a_host = a.ensure_host_cow()?; &*a_host } else { a };
     let b = if matches!(b, Value::DeviceBuffer(_)) { b_host = b.ensure_host_cow()?; &*b_host } else { b };
 
-    let a_scalar = scalar_of(a);
-    let b_scalar = scalar_of(b);
-    let adt = dtype_of(a);
-    let bdt = dtype_of(b);
-    let dt = result_dtype(adt, bdt);
+    let (dt, has_strong_operand) = match policy {
+        BinaryDtypePolicy::Legacy => (result_dtype(dtype_of(a), dtype_of(b)), false),
+        BinaryDtypePolicy::WeakScalars => weak_scalar_result_dtype(a, b)?,
+    };
+    let quantize = |value| {
+        if has_strong_operand {
+            crate::core::dtype::quantize_f32(value, dt)
+        } else {
+            value
+        }
+    };
+    let a_scalar = scalar_of(a).map(quantize);
+    let b_scalar = scalar_of(b).map(quantize);
 
     if let (Some(sa), Some(sb)) = (a_scalar, b_scalar) {
-        let x = op(sa, sb);
+        let x = quantize(op(sa, sb));
         return if dt == Dtype::I32 && x == x.floor() {
             Ok(Value::Int(x as i64))
         } else {
@@ -207,21 +242,21 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
     }
 
     if let (Some(s), Value::Tensor { data, .. }) = (a_scalar, b) {
-        let result = if data.ndim() == 0 {
+        let result = if data.ndim() == 0 && policy == BinaryDtypePolicy::Legacy {
             let x = op(s, as_scalar(data));
             return Ok(Value::Float(x));
         } else {
-            data.mapv(|x| op(s, x))
+            data.mapv(|x| quantize(op(s, x)))
         };
         return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
     }
 
     if let (Value::Tensor { data, .. }, Some(s)) = (a, b_scalar) {
-        let result = if data.ndim() == 0 {
+        let result = if data.ndim() == 0 && policy == BinaryDtypePolicy::Legacy {
             let x = op(as_scalar(data), s);
             return Ok(Value::Float(x));
         } else {
-            data.mapv(|x| op(x, s))
+            data.mapv(|x| quantize(op(x, s)))
         };
         return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
     }
@@ -229,27 +264,52 @@ fn binary_op_two(a: &Value, b: &Value, op: fn(f32, f32) -> f32) -> R {
     if let (Value::Tensor { data: ad, .. }, Value::Tensor { data: bd, .. }) = (a, b) {
         let result = if ad.ndim() == 0 {
             let s = as_scalar(ad);
-            if bd.ndim() == 0 {
+            if bd.ndim() == 0 && policy == BinaryDtypePolicy::Legacy {
                 return Ok(Value::Float(op(s, as_scalar(bd))));
             }
-            bd.mapv(|x| op(s, x))
+            bd.mapv(|x| quantize(op(s, x)))
         } else if bd.ndim() == 0 {
             let s = as_scalar(bd);
-            ad.mapv(|x| op(x, s))
+            ad.mapv(|x| quantize(op(x, s)))
         } else if ad.shape() == bd.shape() {
-            ndarray::Zip::from(ad.as_ref()).and(bd.as_ref()).map_collect(|&a, &b| op(a, b))
+            ndarray::Zip::from(ad.as_ref())
+                .and(bd.as_ref())
+                .map_collect(|&a, &b| quantize(op(a, b)))
         } else {
             let out_shape = broadcast_shape(ad.shape(), bd.shape()).ok_or_else(|| {
                 runtime_error(format!("Cannot broadcast shapes {:?} and {:?}", ad.shape(), bd.shape()))
             })?;
             let a_bc = ad.broadcast(&out_shape[..]).ok_or_else(|| runtime_error("broadcast failed"))?;
             let b_bc = bd.broadcast(&out_shape[..]).ok_or_else(|| runtime_error("broadcast failed"))?;
-            ndarray::Zip::from(&a_bc).and(&b_bc).map_collect(|&a, &b| op(a, b))
+            ndarray::Zip::from(&a_bc)
+                .and(&b_bc)
+                .map_collect(|&a, &b| quantize(op(a, b)))
         };
         return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
     }
 
     Err(runtime_error(format!("Expected numbers, got {} and {}", a.short_desc(), b.short_desc())))
+}
+
+fn weak_scalar_result_dtype(a: &Value, b: &Value) -> Result<(Dtype, bool), SheafError> {
+    use crate::core::dtype::{DtypeOperand, DtypeStrength, resolve_arithmetic_dtype};
+
+    let operand = |value: &Value| match value {
+        Value::Int(_) => Some(DtypeOperand::weak(Dtype::I32)),
+        Value::Float(_) => Some(DtypeOperand::weak(Dtype::F32)),
+        Value::Bool(_) => Some(DtypeOperand::weak(Dtype::Bool)),
+        Value::Tensor { dtype, .. } => Some(DtypeOperand::strong(*dtype)),
+        _ => None,
+    };
+    let lhs = operand(a)
+        .ok_or_else(|| runtime_error(format!("+: expected a number, got {}", a.short_desc())))?;
+    let rhs = operand(b)
+        .ok_or_else(|| runtime_error(format!("+: expected a number, got {}", b.short_desc())))?;
+    let dtype = resolve_arithmetic_dtype(lhs, rhs)
+        .map_err(|error| runtime_error(format!("+: {}", error)))?;
+    let has_strong_operand = lhs.strength == DtypeStrength::Strong
+        || rhs.strength == DtypeStrength::Strong;
+    Ok((dtype, has_strong_operand))
 }
 
 fn scalar_of(v: &Value) -> Option<f32> {
@@ -303,7 +363,7 @@ fn get_axis(kw: &BTreeMap<String, Value>) -> Option<i64> {
     })
 }
 
-/// Extract dtype override from kwargs (e.g. `:bf16` flag).
+/// Extract dtype override from kwargs (e.g. :bf16 flag).
 fn get_dtype_kwarg(kw: &BTreeMap<String, Value>) -> Option<Dtype> {
     for key in kw.keys() {
         if let Some(dt) = Dtype::from_keyword(key) {

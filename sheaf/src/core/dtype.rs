@@ -189,6 +189,18 @@ fn resolve_weak_pair(lhs: ElementType, rhs: ElementType) -> Option<ElementType> 
 }
 
 #[cfg(not(sheaf_frontend))]
+pub(crate) fn quantize_f32(value: f32, dtype: ElementType) -> f32 {
+    match dtype {
+        ElementType::F16 => f16_bits_to_f32(f32_to_f16_bits(value)),
+        ElementType::BF16 => bf16_bits_to_f32(f32_to_bf16_bits(value)),
+        ElementType::I32 => (value as i32) as f32,
+        ElementType::I64 => (value as i64) as f32,
+        ElementType::Bool => (value != 0.0) as u8 as f32,
+        ElementType::F32 | ElementType::F64 => value,
+    }
+}
+
+#[cfg(not(sheaf_frontend))]
 pub(crate) fn f32_to_bf16_bits(value: f32) -> u16 {
     let bits = value.to_bits();
     if value.is_nan() {
