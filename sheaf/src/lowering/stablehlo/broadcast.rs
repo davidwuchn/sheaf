@@ -6,7 +6,6 @@
 use super::{Register, StableHLOEmitter, StableHLOType};
 
 impl StableHLOEmitter {
-    /// Maybe broadcast operands to match result shape
     pub(crate) fn maybe_broadcast_operands(
         &mut self,
         lhs: &Register,
@@ -34,7 +33,6 @@ impl StableHLOEmitter {
         (actual_lhs, actual_rhs)
     }
 
-    /// Emit broadcast_in_dim to convert from_ty to to_ty
     pub fn emit_broadcast(
         &mut self,
         operand: &Register,
@@ -47,8 +45,6 @@ impl StableHLOEmitter {
         let dims = if from_shape.is_empty() {
             vec![]
         } else {
-            // Try numpy-style right-alignment first:
-            // [4] -> [4, 4] maps to dims=[1], [1, 256] -> [4, 256, 384] maps to dims=[1, 2]
             let offset = to_shape.len() - from_shape.len();
             let right_aligned: Vec<usize> = (offset..to_shape.len()).collect();
             let valid = from_shape.iter().enumerate().all(|(i, &src)| {
@@ -57,8 +53,6 @@ impl StableHLOEmitter {
             if valid {
                 right_aligned
             } else {
-                // Fallback: greedy left-to-right size matching
-                // [1024] -> [1024, 65] maps to dims=[0]
                 let mut mapping = Vec::with_capacity(from_shape.len());
                 let mut search_start = 0;
                 for &src_dim in from_shape {
@@ -71,7 +65,6 @@ impl StableHLOEmitter {
                     }
                 }
                 if mapping.len() != from_shape.len() {
-                    // Last resort: right-align anyway (let StableHLO report the error)
                     right_aligned
                 } else {
                     mapping

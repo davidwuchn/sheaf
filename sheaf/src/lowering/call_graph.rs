@@ -1,108 +1,25 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Build the call graph used by JIT eligibility.
-//!
-//! This pass ensures that only functions whose reachable callees satisfy the
-//! JIT requirements (purity, tensor support, and an acyclic call graph) are
-//! accepted.
-//!
-//! The graph only contains registry-defined functions; builtins and higher-order
-//! constructs are analyzed separately.
+//! JIT call graph.
 
 use crate::core::expr::{CompiledExpr, FunctionDef};
 use crate::lowering::effects::{collect_effects, collect_hof_calls};
+use crate::lowering::walk::walk_expr;
 use std::collections::{HashMap, HashSet};
 
-/// Contiguous index identifying a node in a [`CallGraph`].
 pub type NodeId = usize;
 
-/// Returns the registry functions called directly from a compiled body.
 pub fn direct_callees(body: &CompiledExpr) -> HashSet<String> {
-    let mut out: HashSet<String> = HashSet::new();
-    collect_callees_rec(body, &mut out);
-    out
+    let mut callees = HashSet::new();
+    walk_expr(body, &mut |expr| {
+        if let CompiledExpr::FunctionCall { name, .. } = expr {
+            callees.insert(name.clone());
+        }
+    });
+    callees
 }
 
-/// Keep this traversal in sync with the recursive walkers in `effects.rs`.
-fn collect_callees_rec(expr: &CompiledExpr, out: &mut HashSet<String>) {
-    match expr {
-        CompiledExpr::FunctionCall { name, args, .. } => {
-            out.insert(name.clone());
-            for arg in args {
-                collect_callees_rec(arg, out);
-            }
-        }
-        CompiledExpr::Let { bindings, body } => {
-            for (_, v) in bindings {
-                collect_callees_rec(v, out);
-            }
-            collect_callees_rec(body, out);
-        }
-        CompiledExpr::Do(exprs) => {
-            for e in exprs {
-                collect_callees_rec(e, out);
-            }
-        }
-        CompiledExpr::If { condition, then_branch, else_branch } => {
-            collect_callees_rec(condition, out);
-            collect_callees_rec(then_branch, out);
-            if let Some(e) = else_branch {
-                collect_callees_rec(e, out);
-            }
-        }
-        CompiledExpr::Lambda { body, .. } => {
-            collect_callees_rec(body, out);
-        }
-        CompiledExpr::LambdaCall { callee, args } => {
-            collect_callees_rec(callee, out);
-            for arg in args {
-                collect_callees_rec(arg, out);
-            }
-        }
-        CompiledExpr::Vector(exprs) => {
-            for e in exprs {
-                collect_callees_rec(e, out);
-            }
-        }
-        CompiledExpr::Dict(pairs) => {
-            for (k, v) in pairs {
-                collect_callees_rec(k, out);
-                collect_callees_rec(v, out);
-            }
-        }
-        CompiledExpr::Repeat { count, acc_init, body, .. } => {
-            collect_callees_rec(count, out);
-            collect_callees_rec(acc_init, out);
-            collect_callees_rec(body, out);
-        }
-        CompiledExpr::While { condition, acc_init, body, .. } => {
-            collect_callees_rec(condition, out);
-            collect_callees_rec(acc_init, out);
-            collect_callees_rec(body, out);
-        }
-        CompiledExpr::Guard { expr, .. } => {
-            collect_callees_rec(expr, out);
-        }
-        CompiledExpr::Def { value, .. } => {
-            collect_callees_rec(value, out);
-        }
-        CompiledExpr::Integer(_)
-        | CompiledExpr::Float(_)
-        | CompiledExpr::Boolean(_)
-        | CompiledExpr::Nil
-        | CompiledExpr::String(_)
-        | CompiledExpr::Keyword(_)
-        | CompiledExpr::Symbol(_)
-        | CompiledExpr::FunctionRef(_)
-        | CompiledExpr::Quoted(_)
-        | CompiledExpr::GetTupleElement { .. }
-        | CompiledExpr::Tuple(_)
-        | CompiledExpr::ValueAndGrad { .. } => {}
-    }
-}
-
-/// A directed graph of registry function calls.
 pub struct CallGraph {
     name_to_id: HashMap<String, NodeId>,
     id_to_name: Vec<String>,
@@ -110,10 +27,6 @@ pub struct CallGraph {
 }
 
 impl CallGraph {
-    /// Build the graph from a snapshot of the registry.
-    ///
-    /// Only registry-to-registry calls are represented; builtins and lambdas are
-    /// handled separately by `jit_eligibility`.
     pub fn from_registry(registry: &HashMap<String, FunctionDef>) -> Self {
         let id_to_name: Vec<String> = registry.keys().cloned().collect();
         let name_to_id: HashMap<String, NodeId> = id_to_name
@@ -141,18 +54,14 @@ impl CallGraph {
         Self { name_to_id, id_to_name, edges }
     }
 
-    /// Number of nodes in the graph.
     pub fn node_count(&self) -> usize {
         self.id_to_name.len()
     }
 
-    /// Resolve a [`NodeId`] back to its function name.
     pub fn name_of(&self, id: NodeId) -> &str {
         &self.id_to_name[id]
     }
 
-    /// Returns the NodeIds of every registry function reachable from `root`,
-    /// including `root` itself, sorted ascending.
     pub fn reachable(&self, root: &str) -> Vec<NodeId> {
         let Some(&start) = self.name_to_id.get(root) else {
             return Vec::new();
@@ -184,8 +93,6 @@ impl CallGraph {
         out
     }
 
-    /// Returns the NodeIds of all functions that participate in a call cycle
-    /// (including self-loops), sorted ascending.
     pub fn nodes_in_cycles(&self) -> Vec<NodeId> {
         let n = self.id_to_name.len();
         let mut in_cycle: Vec<bool> = vec![false; n];
@@ -256,7 +163,7 @@ impl CallGraph {
                                 break;
                             }
                         }
-                        // A size-1 SCC is only cyclic if it self-loops.
+                        // A single-node component needs a self-loop.
                         if size == 1 {
                             in_cycle[popped_v] =
                                 self.edges[popped_v].contains(&popped_v);
@@ -276,10 +183,6 @@ impl CallGraph {
     }
 }
 
-/// Returns whether `root` is eligible for JIT compilation.
-///
-/// `Ok(())` indicates that every reachable function is effect-free,
-/// contains no higher-order calls, and is acyclic.
 pub fn jit_eligibility(
     root: &str,
     registry: &HashMap<String, FunctionDef>,
@@ -408,7 +311,7 @@ mod tests {
         assert_eq!(cycles.len(), 2);
 
         let err = jit_eligibility("f", &registry).unwrap_err();
-        assert!(err.contains("recursive"), "eligibility error should mention recursion: {}", err);
+        assert!(err.contains("recursive"), "missing recursion error: {}", err);
     }
 
     #[test]
@@ -442,6 +345,22 @@ mod tests {
 
         let reach = CallGraph::from_registry(&registry).reachable("f");
         assert_eq!(reach.len(), 3, "f, g, h reachable");
+    }
+
+    #[test]
+    fn tuple_callee_is_checked() {
+        let mut registry = HashMap::new();
+        registry.insert(
+            "g".to_string(),
+            fn_def("g", call("print", sym("x"))),
+        );
+        registry.insert(
+            "f".to_string(),
+            fn_def("f", CompiledExpr::Tuple(vec![call("g", sym("x"))])),
+        );
+
+        let err = jit_eligibility("f", &registry).unwrap_err();
+        assert!(err.contains("print"), "missing transitive effect: {}", err);
     }
 
     #[test]

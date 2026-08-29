@@ -5,25 +5,15 @@
 
 use crate::core::dtype::ElementType;
 
-/// StableHLO type representation
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StableHLOType {
-    /// Scalar tensor: tensor<f32>
     ScalarF32,
-    /// Scalar tensor: tensor<f16>
     ScalarF16,
-    /// Scalar tensor: tensor<bf16>
     ScalarBF16,
-    /// Scalar tensor: tensor<f64>
     ScalarF64,
-    /// Scalar tensor: tensor<i64>
     ScalarI64,
-    /// Scalar tensor: tensor<i1> (boolean)
     ScalarI1,
-    /// Tensor with shape: tensor<2x3xf32>
     Tensor { shape: Vec<i64>, dtype: ElementType },
-    /// Tuple of types: tuple<tensor<2x3xf32>, tensor<8xf32>>
-    /// When keys is Some, this represents a dict (reconstructed as Value::Dict on output).
     Tuple(Vec<StableHLOType>, Option<Vec<String>>),
 }
 
@@ -56,12 +46,10 @@ impl StableHLOType {
         Self::tensor(shape, ElementType::BF16)
     }
 
-    /// Create a tensor with the given StableHLO element type.
     pub fn tensor(shape: impl Into<Vec<i64>>, dtype: ElementType) -> Self {
         Self::Tensor { shape: shape.into(), dtype }
     }
 
-    /// Create a tensor from a StableHLO element type string.
     pub fn typed_tensor(shape: impl Into<Vec<i64>>, dtype: &str) -> Self {
         let dtype = ElementType::from_mlir_str(dtype)
             .unwrap_or_else(|| panic!("unsupported StableHLO element type: {}", dtype));
@@ -80,7 +68,6 @@ impl StableHLOType {
         Self::tensor(shape, ElementType::Bool)
     }
 
-    /// Get the shape of this type, or empty slice for scalars/tuples
     pub fn shape(&self) -> &[i64] {
         match self {
             Self::ScalarF32
@@ -94,7 +81,6 @@ impl StableHLOType {
         }
     }
 
-    /// Get the element type of a tensor leaf.
     pub fn element_type(&self) -> Option<ElementType> {
         match self {
             Self::ScalarF32 => Some(ElementType::F32),
@@ -108,7 +94,6 @@ impl StableHLOType {
         }
     }
 
-    /// Get the StableHLO dtype string.
     pub fn dtype(&self) -> &str {
         self.element_type()
             .map(ElementType::to_mlir_str)
@@ -135,8 +120,6 @@ impl StableHLOType {
         }
     }
 
-    /// Check if two types have the same tuple nesting structure.
-    /// Leaf types (tensors, scalars) are considered structurally equivalent.
     pub fn tuple_structure_matches(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Tuple(a, _), Self::Tuple(b, _)) => {
@@ -181,8 +164,6 @@ impl StableHLOType {
         }
     }
 
-    /// Parse an MLIR type string back into a StableHLOType.
-    /// Accepts: "tensor<f32>", "tensor<2x3xf32>", "tuple<tensor<2xf32>, tensor<f32>>".
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         if s.starts_with("tuple<") && s.ends_with('>') {
@@ -216,7 +197,6 @@ impl StableHLOType {
     }
 }
 
-/// Split top-level comma-separated args in a tuple, respecting nesting.
 pub(super) fn split_tuple_args(s: &str) -> Vec<&str> {
     let mut result = Vec::new();
     let mut depth = 0;
@@ -239,12 +219,9 @@ pub(super) fn split_tuple_args(s: &str) -> Vec<&str> {
     result
 }
 
-/// Register name in SSA form: %0, %1, etc. or %arg0, %arg1, etc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Register {
-    /// Regular SSA register: %0, %1, etc.
     Reg(usize),
-    /// Function argument: %arg0, %arg1, etc.
     Arg(usize),
 }
 

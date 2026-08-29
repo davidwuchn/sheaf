@@ -6,10 +6,6 @@
 use super::{Register, StableHLOEmitter, StableHLOType};
 
 impl StableHLOEmitter {
-    /// Emit stablehlo.reduce to compute sum along one axis.
-    ///
-    /// input: tensor<...xf32>, axis: which dimension to reduce
-    /// returns: tensor with that dimension removed (or size 1 if keepdims)
     pub fn emit_reduce_sum(
         &mut self,
         input: &Register,
@@ -18,7 +14,6 @@ impl StableHLOEmitter {
         keepdims: bool,
     ) -> (Register, StableHLOType) {
         let shape = input_ty.shape();
-        // Scalar reduce is a no-op: nothing to sum over
         if shape.is_empty() {
             return (*input, input_ty.clone());
         }
@@ -30,7 +25,6 @@ impl StableHLOEmitter {
         };
         let axis_usize = axis_usize.min(ndim.saturating_sub(1));
 
-        // Result shape: remove the reduced axis
         let reduced_shape: Vec<i64> = shape
             .iter()
             .enumerate()
@@ -44,7 +38,6 @@ impl StableHLOEmitter {
             StableHLOType::f32_tensor(reduced_shape)
         };
 
-        // Zero initializer (scalar)
         let zero_reg = self.emit_constant_f32(0.0);
         let result_reg = self.fresh_register();
 
@@ -60,7 +53,6 @@ impl StableHLOEmitter {
         ));
 
         if keepdims {
-            // Re-insert the reduced dimension as size 1
             let mut keepdim_shape = shape.to_vec();
             keepdim_shape[axis_usize] = 1;
             let keepdim_ty = StableHLOType::f32_tensor(keepdim_shape);
@@ -79,10 +71,6 @@ impl StableHLOEmitter {
         }
     }
 
-    /// Emit stablehlo.reduce to compute mean along one axis.
-    /// Results are cached: calling with the same (input, axis, keepdims) returns
-    /// the previously computed register, avoiding duplicate reductions (e.g. var
-    /// internally calling mean on the same operand that mean already computed).
     pub fn emit_reduce_mean(
         &mut self,
         input: &Register,
@@ -93,7 +81,6 @@ impl StableHLOEmitter {
         let shape = input_ty.shape();
         let ndim = shape.len();
 
-        // mean of a scalar is identity
         if ndim == 0 {
             return (*input, input_ty.clone());
         }
@@ -112,10 +99,8 @@ impl StableHLOEmitter {
 
         let (sum_reg, sum_ty) = self.emit_reduce_sum(input, input_ty, axis, keepdims);
 
-        // Divide by n
         let n_reg = self.emit_constant_f32(n);
 
-        // Broadcast n to match sum shape if needed
         let result_reg = self.fresh_register();
         if sum_ty == StableHLOType::scalar_f32() {
             self.body.push(format!(
@@ -146,7 +131,6 @@ impl StableHLOEmitter {
         (result_reg, sum_ty)
     }
 
-    /// Emit stablehlo.reduce to compute max along one axis.
     pub fn emit_reduce_max(
         &mut self,
         input: &Register,
@@ -179,7 +163,6 @@ impl StableHLOEmitter {
             StableHLOType::f32_tensor(reduced_shape)
         };
 
-        // -inf initializer for max reduction
         let init_reg = self.fresh_register();
         self.body.push(format!(
             "    {} = stablehlo.constant dense<0xFF800000> : {}",
@@ -218,7 +201,6 @@ impl StableHLOEmitter {
         }
     }
 
-    /// Emit stablehlo.reduce to compute min along one axis.
     pub fn emit_reduce_min(
         &mut self,
         input: &Register,
@@ -251,7 +233,6 @@ impl StableHLOEmitter {
             StableHLOType::f32_tensor(reduced_shape)
         };
 
-        // +inf initializer for min reduction
         let init_reg = self.fresh_register();
         self.body.push(format!(
             "    {} = stablehlo.constant dense<0x7F800000> : {}",
@@ -290,7 +271,6 @@ impl StableHLOEmitter {
         }
     }
 
-    /// Emit stablehlo.reduce to compute product along one axis.
     pub fn emit_reduce_product(
         &mut self,
         input: &Register,
@@ -323,7 +303,6 @@ impl StableHLOEmitter {
             StableHLOType::f32_tensor(reduced_shape)
         };
 
-        // 1.0 initializer for product
         let one_reg = self.emit_constant_f32(1.0);
         let result_reg = self.fresh_register();
 
@@ -357,8 +336,7 @@ impl StableHLOEmitter {
         }
     }
 
-    /// Emit argmax: index of the maximum value along an axis.
-    /// max_val -> compare -> iota -> where(mask, iota, +inf) -> reduce_min -> i32
+    // Select the first index equal to the reduced extremum.
     pub fn emit_argmax(
         &mut self,
         input: &Register,
@@ -373,10 +351,8 @@ impl StableHLOEmitter {
             axis as usize
         };
 
-        // Get max value along axis (keepdims=true for broadcasting)
         let (max_reg, max_ty) = self.emit_reduce_max(input, input_ty, axis, true);
 
-        // Compare input == max_val (bool mask)
         let (mask_reg, mask_ty) = self.emit_compare("==", input, &max_reg, input_ty, &max_ty);
 
         // Create iota indices along axis
@@ -394,16 +370,13 @@ impl StableHLOEmitter {
         // Where mask is true, take iota index; else +inf
         let (masked_reg, _masked_ty) = self.emit_select(&mask_reg, &iota_reg, &inf_reg, &mask_ty, &iota_ty, input_ty);
 
-        // Reduce min along axis -> first index of maximum value
         let (result_f32, result_f32_ty) = self.emit_reduce_min(&masked_reg, input_ty, axis, false);
 
-        // Convert f32 indices to i32 (indexing values)
         let result_i32_ty = StableHLOType::i32_tensor(result_f32_ty.shape());
         let result_i32 = self.emit_convert(&result_f32, &result_f32_ty, &result_i32_ty);
         (result_i32, result_i32_ty)
     }
 
-    /// Emit argmin: index of the minimum value along an axis.
     pub fn emit_argmin(
         &mut self,
         input: &Register,
@@ -418,10 +391,8 @@ impl StableHLOEmitter {
             axis as usize
         };
 
-        // Get min value along axis (keepdims=true for broadcasting)
         let (min_reg, min_ty) = self.emit_reduce_min(input, input_ty, axis, true);
 
-        // Compare input == min_val
         let (mask_reg, mask_ty) = self.emit_compare("==", input, &min_reg, input_ty, &min_ty);
 
         // Create iota indices along axis
@@ -439,10 +410,8 @@ impl StableHLOEmitter {
         // Where mask is true, take iota index; else +inf
         let (masked_reg, _masked_ty) = self.emit_select(&mask_reg, &iota_reg, &inf_reg, &mask_ty, &iota_ty, input_ty);
 
-        // Reduce min along axis -> first index of minimum value
         let (result_f32, result_f32_ty) = self.emit_reduce_min(&masked_reg, input_ty, axis, false);
 
-        // Convert f32 indices to i32
         let result_i32_ty = StableHLOType::i32_tensor(result_f32_ty.shape());
         let result_i32 = self.emit_convert(&result_f32, &result_f32_ty, &result_i32_ty);
         (result_i32, result_i32_ty)

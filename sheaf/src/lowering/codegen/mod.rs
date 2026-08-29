@@ -23,7 +23,6 @@ pub(crate) use helpers::{
 };
 use std::collections::{HashMap, HashSet};
 
-/// Recursively flatten tuple types into leaf tensor types.
 pub fn flatten_param_types(param_types: &[StableHLOType]) -> Vec<StableHLOType> {
     let mut flat = Vec::new();
     for ty in param_types {
@@ -43,19 +42,14 @@ fn flatten_type(ty: &StableHLOType, out: &mut Vec<StableHLOType>) {
     }
 }
 
-/// Converts CompiledExpr to StableHLO
 pub struct CodeGenerator<'a> {
     emitter: StableHLOEmitter,
     bindings: HashMap<String, (Register, StableHLOType)>,
     weak_scalars: HashSet<Register>,
-    /// Let-bound lambdas are inlined rather than emitted as SSA values.
     lambda_bindings: HashMap<String, CompiledExpr>,
     function_registry: Option<&'a HashMap<String, crate::core::expr::FunctionDef>>,
-    /// Dict key layouts for tuple-valued bindings.
     tuple_key_layouts: HashMap<String, std::collections::BTreeMap<String, usize>>,
-    /// Reverse tuple layout lookup used while unrolling collections.
     idx_to_key: HashMap<(String, usize), String>,
-    /// Layout keys associated with registers selected from a tuple.
     layout_key_map: HashMap<Register, String>,
 }
 
@@ -88,7 +82,6 @@ impl<'a> CodeGenerator<'a> {
         }
     }
 
-    /// Binds function parameters to MLIR arguments and virtual tuples.
     pub fn with_function_params(
         registry: &'a HashMap<String, crate::core::expr::FunctionDef>,
         param_names: &[String],
@@ -115,7 +108,6 @@ impl<'a> CodeGenerator<'a> {
         }
     }
 
-    /// Installs dict key layouts before generating a function.
     pub fn set_tuple_key_layouts(
         &mut self,
         layouts: HashMap<String, std::collections::BTreeMap<String, usize>>,
@@ -127,7 +119,6 @@ impl<'a> CodeGenerator<'a> {
         self.idx_to_key = map;
     }
 
-    /// Records scalar parameters needed for shape-dependent operations.
     pub fn set_scalar_param_values(&mut self, values: &[(String, f64)]) {
         for (name, value) in values {
             if let Some(&(reg, _)) = self.bindings.get(name) {
@@ -136,12 +127,10 @@ impl<'a> CodeGenerator<'a> {
         }
     }
 
-    /// Binds a symbol to an existing SSA register.
     pub fn bind_symbol(&mut self, name: &str, reg: Register, ty: StableHLOType) {
         self.bindings.insert(name.to_string(), (reg, ty));
     }
 
-    /// Returns known binding shapes for reverse-mode autodiff.
     pub fn binding_shapes(&self) -> std::collections::HashMap<String, Vec<i64>> {
         self.bindings
             .iter()
@@ -149,7 +138,6 @@ impl<'a> CodeGenerator<'a> {
             .collect()
     }
 
-    /// Generates one let binding without changing the enclosing scope.
     pub fn generate_binding(&mut self, name: &str, value_expr: &CompiledExpr) -> SheafResult<()> {
         if matches!(value_expr, CompiledExpr::Lambda { .. }) {
             self.lambda_bindings.insert(name.to_string(), value_expr.clone());
@@ -192,7 +180,6 @@ impl<'a> CodeGenerator<'a> {
         Ok(())
     }
 
-    /// Emit a GetTupleElement operation (delegates to emitter).
     pub fn emit_get_tuple_element(
         &mut self,
         tuple_reg: &Register,
@@ -204,8 +191,6 @@ impl<'a> CodeGenerator<'a> {
             .emit_get_tuple_element(tuple_reg, tuple_ty, index, elem_ty)
     }
 
-    /// Try to evaluate an expression to a compile-time constant.
-    /// Used for constant-folding `if` conditions (e.g. `(== (ndim x) 3)`).
     fn try_const_eval(&self, expr: &CompiledExpr) -> Option<f64> {
         match expr {
             CompiledExpr::Integer(n) => Some(*n as f64),
@@ -268,7 +253,6 @@ impl<'a> CodeGenerator<'a> {
         }
     }
 
-    /// Generate StableHLO for a compiled expression
     pub fn generate(&mut self, expr: &CompiledExpr) -> SheafResult<(Register, StableHLOType)> {
         match expr {
             CompiledExpr::Integer(n) => {
@@ -290,9 +274,6 @@ impl<'a> CodeGenerator<'a> {
                         Ok((reg, ty))
                     }
                     None => {
-                        // Non-constant vector: emit as tuple (e.g. [new-p new-m new-v new-t])
-                        // Note: classify_vectors should normally have converted
-                        // these to a Tuple node; this is the fallback.
                         let mut regs = Vec::new();
                         let mut tys = Vec::new();
                         for elem in elements {
@@ -305,8 +286,6 @@ impl<'a> CodeGenerator<'a> {
                 }
             }
 
-            // Tuple after classify_vectors: heterogeneous group of values
-            // (e.g. [new-h new-c] from an LSTM cell).
             CompiledExpr::Tuple(elements) => {
                 let mut regs = Vec::new();
                 let mut tys = Vec::new();
@@ -399,7 +378,6 @@ impl<'a> CodeGenerator<'a> {
                 });
             } else if let BindingPattern::Simple(name) = pattern {
                 let (reg, ty) = self.generate(value_expr)?;
-                // Propagate sub-layout for Let-bound tuples
                 if matches!(&ty, StableHLOType::Tuple(..)) {
                     if let CompiledExpr::FunctionCall { name: fn_name, args: fn_args, .. } = value_expr {
                         if fn_name == "get"
@@ -410,8 +388,7 @@ impl<'a> CodeGenerator<'a> {
                             self.tuple_key_layouts.insert(name.clone(), sub_layout);
                         }
                     }
-                    // GetTupleElement: walk idx_to_key chain to resolve layout
-                    // (needed when inlined functions have lowered get calls)
+                    // Follow virtual tuple aliases introduced by inlining.
                     else if let CompiledExpr::GetTupleElement { param, indices } = value_expr {
                         let mut cur = param.clone();
                         let mut resolved = true;
@@ -429,7 +406,6 @@ impl<'a> CodeGenerator<'a> {
                             self.tuple_key_layouts.insert(name.clone(), sub_layout);
                         }
                     }
-                    // Symbol alias: (let [x y]) where y has a layout
                     else if let CompiledExpr::Symbol(src) = value_expr
                         && let Some(layout) = self.tuple_key_layouts.get(src).cloned()
                     {
@@ -450,9 +426,7 @@ impl<'a> CodeGenerator<'a> {
                 then_branch,
                 else_branch,
             } => {
-                // Constant-fold: if condition is compile-time known, only emit the taken branch.
-                // This avoids shape mismatches in select when branches have different types
-                // (e.g. `(if (== (ndim x) 3) (sum x :axis -2) x)` where branches differ in rank).
+                // Branches may have incompatible static shapes.
                 if let Some(const_val) = self.try_const_eval(condition) {
                     let is_true = const_val.abs() > 1e-10;
                     if is_true {
@@ -460,7 +434,6 @@ impl<'a> CodeGenerator<'a> {
                     } else if let Some(else_expr) = else_branch {
                         return self.generate(else_expr);
                     } else {
-                        // if-without-else, condition false: return scalar 0
                         let reg = self.emitter.emit_constant_f32(0.0);
                         return Ok((reg, StableHLOType::ScalarF32));
                     }
@@ -471,20 +444,17 @@ impl<'a> CodeGenerator<'a> {
 
                 if let Some(else_expr) = else_branch {
                     let (else_reg, else_ty) = self.generate(else_expr)?;
-                    // Use stablehlo.select: result = select(cond, then, else)
                     let (result_reg, result_ty) = self.emitter.emit_select(
                         &cond_reg, &then_reg, &else_reg, &cond_ty, &then_ty, &else_ty,
                     );
                     Ok((result_reg, result_ty))
                 } else {
-                    // If without else: just return then_branch
-                    // (assumes condition is always true for now)
+                    // An omitted else branch is only valid for a true condition.
                     Ok((then_reg, then_ty))
                 }
             }
 
             CompiledExpr::Do(exprs) => {
-                // Evaluate all expressions, return the last one
                 let mut last_result = None;
                 for expr in exprs {
                     last_result = Some(self.generate(expr)?);
@@ -500,8 +470,6 @@ impl<'a> CodeGenerator<'a> {
                 location: crate::core::error::SourceLocation::unknown(),
             }),
 
-            // Lambda and LambdaCall: inline at call site.
-            // A bare Lambda without a call is not directly emittable.
             CompiledExpr::Lambda { .. } => Err(SheafError::Compile {
                 message: "Cannot emit a lambda without a call site".to_string(),
                 location: crate::core::error::SourceLocation::unknown(),
@@ -523,7 +491,6 @@ impl<'a> CodeGenerator<'a> {
 
 
             CompiledExpr::Dict(pairs) => {
-                // Emit dict as a tuple, keys sorted alphabetically for deterministic layout
                 let mut sorted: Vec<_> = pairs.iter().collect();
                 sorted.sort_by(|(k1, _), (k2, _)| {
                     let key1 = match k1 {
@@ -553,7 +520,6 @@ impl<'a> CodeGenerator<'a> {
             }
 
             CompiledExpr::Quoted(val) => {
-                // Quoted values: convert to vector of constants
                 use crate::core::ast::SheafValue;
                 match val.as_ref() {
                     SheafValue::Vector(elems, _) => {
@@ -578,10 +544,6 @@ impl<'a> CodeGenerator<'a> {
         }
     }
 
-    /// Extract a static shape Vec<i64> from a Vector of Integer literals.
-    /// Returns a compile error (not panic) if any element is non-constant,
-    /// so the function can be gracefully skipped rather than crashing.
-    /// Resolves Symbol references via bindings + known_scalars.
     fn parse_shape_vec(&self, elems: &[CompiledExpr]) -> SheafResult<Vec<i64>> {
         elems.iter().map(|e| match e {
             CompiledExpr::Integer(n) => Ok(*n),
@@ -619,7 +581,6 @@ impl<'a> CodeGenerator<'a> {
         }).collect()
     }
 
-    /// Track layout key for a register via the idx_to_key chain.
     fn track_layout_key(&mut self, param: &str, indices: &[usize], reg: Register) {
         let mut cur = param.to_string();
         for &idx in indices {
@@ -635,7 +596,6 @@ impl<'a> CodeGenerator<'a> {
         }
     }
 
-    /// Emit a complete function module
     pub fn emit_function(mut self, name: &str, expr: &CompiledExpr) -> SheafResult<String> {
         let (result_reg, result_ty) = self.generate(expr)?;
         self.emitter.emit_return(&result_reg, &result_ty);
@@ -643,12 +603,6 @@ impl<'a> CodeGenerator<'a> {
         Ok(self.emitter.emit_function_body(name, &result_ty))
     }
 
-    /// Emit a function declaration from a compiled expression.
-    ///
-    /// Parameters are flattened (no tuple types at MLIR boundary).
-    /// If the result is a tuple, it is decomposed via virtual leaves into a multi-value return.
-    /// Returns (mlir_declaration, actual_return_type) where the return type
-    /// preserves the original tuple structure for runtime reconstruction.
     pub fn emit_func_declaration(
         mut self,
         name: &str,
@@ -676,12 +630,6 @@ impl<'a> CodeGenerator<'a> {
         }
     }
 
-    /// Finalize a multi-output function declaration.
-    ///
-    /// Emits a `return %r0, %r1, ...` then wraps everything in a `func.func`
-    /// with a multi-value return type `-> (t0, t1, ...)`.
-    /// Parameters are flattened (no tuple types at MLIR boundary).
-    /// Result registers are resolved through virtual tuples to collect all leaves.
     pub fn finish_multi(
         mut self,
         name: &str,

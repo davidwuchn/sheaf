@@ -6,7 +6,6 @@
 use super::{Register, StableHLOEmitter, StableHLOType};
 
 impl StableHLOEmitter {
-    /// Emit a binary operation with broadcasting support
     pub fn emit_binop(
         &mut self,
         op: &str,
@@ -28,10 +27,8 @@ impl StableHLOEmitter {
             _ => panic!("Unsupported binop: {}", op),
         };
 
-        // Determine result type (broadcast if needed)
         let result_ty = self.broadcast_types(lhs_ty, rhs_ty);
 
-        // Check if we need to broadcast operands
         let (actual_lhs, actual_rhs) =
             self.maybe_broadcast_operands(lhs, rhs, lhs_ty, rhs_ty, &result_ty);
 
@@ -45,7 +42,6 @@ impl StableHLOEmitter {
             result_ty.to_mlir()
         ));
 
-        // Propagate known scalar values through arithmetic
         if let (Some(lv), Some(rv)) = (
             self.known_scalars.get(&actual_lhs).copied(),
             self.known_scalars.get(&actual_rhs).copied(),
@@ -67,7 +63,6 @@ impl StableHLOEmitter {
         (reg, result_ty)
     }
 
-    /// Emit unary operation (relu, sigmoid, tanh, etc.)
     pub fn emit_unary(&mut self, op: &str, operand: &Register, ty: &StableHLOType) -> Register {
         let reg = self.fresh_register();
 
@@ -150,7 +145,6 @@ impl StableHLOEmitter {
         reg
     }
 
-    /// Convert a tensor from one type to another (e.g. i1->f32, f32->i32)
     pub fn emit_convert(&mut self, reg: &Register, from_ty: &StableHLOType, to_ty: &StableHLOType) -> Register {
         let result = self.fresh_register();
         self.body.push(format!(

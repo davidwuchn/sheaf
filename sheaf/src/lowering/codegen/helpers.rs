@@ -1,22 +1,18 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! Helper types and free functions for codegen.
+//! Codegen helpers.
 
 use crate::core::expr::CompiledExpr;
 use crate::lowering::stablehlo::StableHLOType;
 use std::collections::HashSet;
 
-/// A leaf of a tuple parameter: maps indices to a synthetic symbol name.
 #[derive(Debug, Clone)]
 pub(crate) struct TupleLeaf {
-    /// Tuple access indices (e.g. [0, 1] for second field of first sub-tuple)
     pub(crate) indices: Vec<usize>,
-    /// Synthetic symbol name used in the expanded body (e.g. "p__0_1")
     pub(crate) symbol: String,
 }
 
-/// Collect all unique `GetTupleElement` leaves referencing `param_name` in an expression.
 pub(crate) fn collect_tuple_type_leaves(param_name: &str, ty: &StableHLOType) -> Vec<TupleLeaf> {
     fn collect(param_name: &str, ty: &StableHLOType, indices: &mut Vec<usize>, out: &mut Vec<TupleLeaf>) {
         match ty {
@@ -43,7 +39,6 @@ pub(crate) fn collect_tuple_type_leaves(param_name: &str, ty: &StableHLOType) ->
     leaves
 }
 
-/// Collect tuple accesses needed to evaluate the forward body.
 pub(crate) fn collect_tuple_references(expr: &CompiledExpr, param_name: &str) -> Vec<TupleLeaf> {
     let mut leaves = Vec::new();
     let mut seen = HashSet::new();
@@ -67,8 +62,6 @@ pub(crate) fn collect_tuple_references(expr: &CompiledExpr, param_name: &str) ->
     leaves
 }
 
-/// Replace all `GetTupleElement { param, indices }` referencing `param_name`
-/// with `Symbol(synthetic_name)` for autodiff.
 pub(crate) fn expand_tuple_to_symbols(expr: &CompiledExpr, param_name: &str) -> CompiledExpr {
     match expr {
         CompiledExpr::GetTupleElement { param, indices } if param == param_name => {
@@ -104,17 +97,6 @@ pub(crate) fn expand_tuple_to_symbols(expr: &CompiledExpr, param_name: &str) -> 
     }
 }
 
-/// Try to flatten a `Vector` of `CompiledExpr` into a constant tensor.
-///
-/// Returns `Some((flat_data, shape))` if every leaf is a numeric literal
-/// (Float or Integer) and all sub-vectors have consistent dimensions.
-/// Returns `None` if any element is a non-literal expression, or if
-/// dimensions are inconsistent across sub-vectors.
-///
-/// Works recursively for arbitrary nesting depth:
-///   `[1.0 2.0]`                 -> `([1.0, 2.0], [2])`
-///   `[[1.0 2.0] [3.0 4.0]]`     -> `([1.0, 2.0, 3.0, 4.0], [2, 2])`
-///   `[[[1] [2]] [[3] [4]]]`     -> `([1.0, 2.0, 3.0, 4.0], [2, 2, 1])`
 pub fn try_flatten_to_constant(elements: &[CompiledExpr]) -> Option<(Vec<f64>, Vec<i64>)> {
     if elements.is_empty() {
         return Some((vec![], vec![0]));

@@ -1,9 +1,7 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! Built-in function call codegen: dispatches to specialized modules
-//! (math, tensor, reduction, collection) and handles remaining builtins
-//! (nn ops, autodiff helpers, control flow) inline.
+//! Builtin call codegen.
 
 use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::core::expr::CompiledExpr;
@@ -11,21 +9,17 @@ use crate::core::error::{SheafError, SheafResult};
 use super::CodeGenerator;
 
 impl<'a> CodeGenerator<'a> {
-    /// Generate code for a function call
     pub(super) fn generate_function_call(
         &mut self,
         name: &str,
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
-        // Check if this is a user-defined function in the registry
-        // Clone the signature to avoid borrow checker issues
         let registry = self.function_registry;
         let signature = registry
             .and_then(|registry| registry.get(name))
             .and_then(|func_def| func_def.signature.clone());
 
         if let Some(_signature) = signature {
-            // Generate code for each argument
             let mut arg_registers = Vec::new();
             let mut arg_types = Vec::new();
 
@@ -35,14 +29,9 @@ impl<'a> CodeGenerator<'a> {
                 arg_types.push(ty);
             }
 
-            // Inline user-defined functions when their body is available and
-            // the call is monomorphic (arg types are known). This avoids the
-            // problem of emitting a func.call to a function compiled with the
-            // wrong (scalar) type from inference.
             let func_def = registry.and_then(|registry| registry.get(name));
             if let Some(func_def) = func_def
                 && let Some(body) = &func_def.body_compiled {
-                    // Bind arg registers to param names in our bindings map
                     let saved_bindings = self.bindings.clone();
                     let saved_layouts = self.tuple_key_layouts.clone();
                     let saved_idx_to_key = self.idx_to_key.clone();
@@ -54,15 +43,11 @@ impl<'a> CodeGenerator<'a> {
                         self.bindings
                             .insert(param.clone(), (*reg, ty.clone()));
 
-                        // Propagate layout from caller arg to callee param name.
-                        // When inlining forward(x, p), "params" in forward's body
-                        // needs the same layout as "p" in the caller's namespace.
+                        // Preserve virtual tuple layouts across inlining.
                         if let CompiledExpr::Symbol(arg_sym) = arg_expr {
                             if let Some(layout) = self.tuple_key_layouts.get(arg_sym).cloned() {
                                 self.tuple_key_layouts.insert(param.clone(), layout);
                             }
-                            // Copy idx_to_key entries: (caller_sym, idx) -> key
-                            // becomes also (callee_param, idx) -> key
                             let entries: Vec<_> = self.idx_to_key.iter()
                                 .filter(|((name, _), _)| name == arg_sym)
                                 .map(|((_, idx), key)| (*idx, key.clone()))
@@ -80,7 +65,6 @@ impl<'a> CodeGenerator<'a> {
                     return result;
                 }
 
-            // Fallback: emit func.call (may have type issues if not monomorphic)
             let sig = registry
                 .and_then(|registry| registry.get(name))
                 .and_then(|f| f.signature.clone())
@@ -91,12 +75,10 @@ impl<'a> CodeGenerator<'a> {
             return Ok((result_reg, sig.return_type.clone()));
         }
 
-        // stop-gradient: forward is identity; only affects autodiff (gradient = 0)
         if name == "stop-gradient" && args.len() == 1 {
             return self.generate(&args[0]);
         }
 
-        // Delegate to specialized modules
         if let Some(result) = self.generate_math_builtin(name, args) {
             return result;
         }
@@ -110,7 +92,6 @@ impl<'a> CodeGenerator<'a> {
             result
         }
 
-        // einsum: (einsum "spec" lhs rhs)
         else if name == "einsum" && args.len() >= 3 {
             let spec = match &args[0] {
                 CompiledExpr::String(s) => s.clone(),
@@ -130,23 +111,18 @@ impl<'a> CodeGenerator<'a> {
                     location: crate::core::error::SourceLocation::unknown(),
                 })
         }
-        // sum_to_shape: (sum_to_shape x [M N]), used by autodiff
         else if name == "sum_to_shape" && args.len() == 2 {
             self.gen_sum_to_shape(args)
         }
-        // slice_grad: (slice_grad adj [target_shape] start), used by autodiff
         else if name == "slice_grad" && args.len() == 3 {
             self.gen_slice_grad(args)
         }
-        // reduce: (reduce fn init coll)
         else if name == "reduce" && args.len() == 3 {
             self.generate_reduce_scan(&args[0], &args[1], &args[2], false)
         }
-        // scan: (scan fn init coll)
         else if name == "scan" && args.len() == 3 {
             self.generate_reduce_scan(&args[0], &args[1], &args[2], true)
         }
-        // tree-map: (tree-map f tree1 tree2 ...)
         else if name == "tree-map" && args.len() >= 2 {
             let lambda = &args[0];
             let tree_args = &args[1..];
@@ -173,11 +149,9 @@ impl<'a> CodeGenerator<'a> {
 
             self.generate_tree_map(lambda, &tree_regs, &tree_tys)
         }
-        // __scan_vjp__: backward differentiation through scan
         else if name == "__scan_vjp__" && args.len() == 4 {
             self.generate_scan_vjp(args)
         }
-        // tree-reduce: (tree-reduce f tree init)
         else if name == "tree-reduce" && args.len() == 3 {
             let lambda = &args[0];
             let (tree_reg, tree_ty) = self.generate(&args[1])?;
@@ -205,7 +179,6 @@ impl<'a> CodeGenerator<'a> {
                 return Ok((reg, ty));
             }
 
-            // 1. Sum over leading extra dimensions
             let extra = from_shape.len().saturating_sub(target_shape.len());
             for _ in 0..extra {
                 let (r, t) = self.emitter.emit_reduce_sum(&reg, &ty, 0, false);
@@ -213,7 +186,6 @@ impl<'a> CodeGenerator<'a> {
                 ty = t;
             }
 
-            // 2. Sum over dims where target is 1 but current is > 1
             let cur_shape = ty.shape().to_vec();
             for (i, (&cur_d, &tgt_d)) in
                 cur_shape.iter().zip(target_shape.iter()).enumerate().rev()
@@ -246,8 +218,6 @@ impl<'a> CodeGenerator<'a> {
             let target_shape = self.parse_shape_vec(shape_elems)?;
             let adj_shape = adj_ty.shape().to_vec();
 
-            // Determine which axis was sliced: find the first axis where
-            // target_shape[i] != adj_shape[i]
             let axis = adj_shape
                 .iter()
                 .zip(target_shape.iter())

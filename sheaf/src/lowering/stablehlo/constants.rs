@@ -6,11 +6,9 @@
 use super::{Register, StableHLOEmitter, StableHLOType};
 
 impl StableHLOEmitter {
-    /// Emit a constant scalar
     pub fn emit_constant_f32(&mut self, value: f64) -> Register {
         let reg = self.fresh_register();
         let ty = StableHLOType::scalar_f32();
-        // Format with .0 if integer value to satisfy IREE
         let value_str = if value.fract() == 0.0 && value.is_finite() {
             format!("{:.1}", value)
         } else {
@@ -26,7 +24,6 @@ impl StableHLOEmitter {
         reg
     }
 
-    /// Emit a constant i32 scalar
     pub fn emit_constant_i32(&mut self, value: i64) -> Register {
         let reg = self.fresh_register();
         let ty = StableHLOType::typed_tensor(vec![], "i32");
@@ -40,7 +37,6 @@ impl StableHLOEmitter {
         reg
     }
 
-    /// Emit a constant integer (i64)
     pub fn emit_constant_i64(&mut self, value: i64) -> Register {
         let reg = self.fresh_register();
         let ty = StableHLOType::ScalarI64;
@@ -53,18 +49,14 @@ impl StableHLOEmitter {
         reg
     }
 
-    /// Emit a tensor constant from a nested vector
-    /// For example: [[1.0, 2.0], [3.0, 4.0]] -> tensor<2x2xf32>
     pub fn emit_tensor_constant(&mut self, values: &[Vec<f64>]) -> (Register, StableHLOType) {
         let reg = self.fresh_register();
 
-        // Infer shape from nested structure
         let rows = values.len();
         let cols = if rows > 0 { values[0].len() } else { 0 };
         let shape = vec![rows as i64, cols as i64];
         let ty = StableHLOType::f32_tensor(shape);
 
-        // Build nested structure for dense representation
         let rows_str: Vec<String> = values
             .iter()
             .map(|row| {
@@ -94,7 +86,6 @@ impl StableHLOEmitter {
         (reg, ty)
     }
 
-    /// Emit an N-dimensional tensor constant from flat data and a shape.
     pub fn emit_nd_tensor_constant(
         &mut self,
         data: &[f64],
@@ -128,7 +119,6 @@ pub(super) fn format_f64(v: f64) -> String {
     }
 }
 
-/// Recursively format flat data into MLIR dense attribute nesting.
 pub(super) fn format_dense_attr(data: &[f64], shape: &[i64], dim: usize) -> String {
     if dim == shape.len() - 1 {
         let n = shape[dim] as usize;

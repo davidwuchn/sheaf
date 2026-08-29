@@ -1,13 +1,7 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! Dict-to-Tuple lowering: converts a JSON shape config into StableHLO types
-//! and rewrites `(get p :key)` chains into `GetTupleElement` nodes.
-//!
-//! Keys are ordered alphabetically (BTreeMap) at every level for a stable,
-//! deterministic mapping between dict keys and tuple indices.
-//! The interpreter's FFI flatten pass uses the same order when packing dicts
-//! into IREE tensor lists.
+//! Dictionary layout lowering.
 
 use std::collections::BTreeMap;
 
@@ -21,20 +15,9 @@ pub type DictIndexMap = BTreeMap<Vec<String>, Vec<usize>>;
 pub type ParamIndexMap = (String, DictIndexMap);
 pub type ParamIndexMaps = Vec<ParamIndexMap>;
 
-/// Convert a JSON config dict to a `StableHLOType::Tuple` (recursive).
-///
-/// Keys are sorted alphabetically at each level (BTreeMap order).
-///
-/// JSON schema:
-/// - `{"W": [2, 8], "b": [8]}` -> `Tuple([tensor<2x8xf32>, tensor<8xf32>])`
-/// - `{"l1": {"W": [2,8], "b": [8]}, "l2": {...}}` -> `Tuple([Tuple([...]), Tuple([...])])`
-/// - scalar (empty array `[]`) -> `tensor<f32>` (0D)
-/// - float number -> `tensor<f32>` (0D scalar)
 pub fn json_to_stablehlo_type(val: &JsonValue) -> SheafResult<StableHLOType> {
     match val {
         JsonValue::Object(map) => {
-            // Sort keys alphabetically: BTreeMap preserves insertion order for serde_json,
-            // so we collect into a BTreeMap first.
             let sorted: BTreeMap<&str, &JsonValue> =
                 map.iter().map(|(k, v)| (k.as_str(), v)).collect();
             let elems: SheafResult<Vec<StableHLOType>> =
@@ -66,18 +49,6 @@ pub fn json_to_stablehlo_type(val: &JsonValue) -> SheafResult<StableHLOType> {
     }
 }
 
-/// Build a flat index map from a JSON config dict.
-///
-/// Returns `BTreeMap<Vec<String>, Vec<usize>>`:
-///   key path (e.g. `["l1", "W"]`) -> tuple indices (e.g. `[0, 0]`)
-///
-/// Example for `{"l1": {"W": [2,8], "b": [8]}, "l2": {"W": [8,1], "b": [1]}}`:
-///   `["l1"]`     -> `[0]`
-///   `["l1","W"]` -> `[0, 0]`
-///   `["l1","b"]` -> `[0, 1]`
-///   `["l2"]`     -> `[1]`
-///   `["l2","W"]` -> `[1, 0]`
-///   `["l2","b"]` -> `[1, 1]`
 pub fn build_index_map(val: &JsonValue) -> DictIndexMap {
     let mut map = BTreeMap::new();
     build_index_map_rec(val, &[], &[], &mut map);
@@ -105,19 +76,10 @@ fn build_index_map_rec(
     }
 }
 
-/// Build an index map from a `ParamLayout` (same format as `build_index_map`).
-///
-/// Converts each field's `path` and `tuple_index` into the expected mapping:
-///   `["l1", "W"]` -> `[0, 0]`, etc.
-///
-/// Also inserts prefix paths for intermediate levels:
-///   `["l1"]` -> `[0]` (inferred from children with path starting with "l1")
 pub fn layout_to_index_map(layout: &crate::core::expr::ParamLayout) -> DictIndexMap {
     let mut map = BTreeMap::new();
     for field in &layout.fields {
-        // Insert the full path
         map.insert(field.path.clone(), field.tuple_index.clone());
-        // Insert all prefix paths (for intermediate tuple access)
         for depth in 1..field.path.len() {
             let prefix: Vec<String> = field.path[..depth].to_vec();
             let idx_prefix: Vec<usize> = field.tuple_index[..depth].to_vec();
@@ -127,16 +89,6 @@ pub fn layout_to_index_map(layout: &crate::core::expr::ParamLayout) -> DictIndex
     map
 }
 
-/// Dict-to-tuple lowering pass.
-///
-/// Rewrites `FunctionCall("get", [expr, Keyword(k)])` chains rooted at `Symbol(param)`
-/// into `GetTupleElement { param, indices }` using the pre-built index map.
-///
-/// Handles arbitrary nesting depth:
-///   `(get (get p :l1) :W)` -> `GetTupleElement { param: "p", indices: [0, 0] }`
-///
-/// `param_name`: the name of the parameter that holds the dict (e.g. `"p"`)
-/// `index_map`: output of `build_index_map()`
 pub fn lower_get_calls(
     expr: &CompiledExpr,
     param_name: &str,
@@ -151,10 +103,6 @@ pub fn lower_get_calls(
     expr.map_children(|e| lower_get_calls(e, param_name, index_map))
 }
 
-/// Try to extract the tuple indices for a `(get ... :key)` chain rooted at `param_name`.
-///
-/// Returns `Some(indices)` if the chain resolves to a known path in `index_map`,
-/// `None` otherwise.
 fn try_extract_get_chain(
     expr: &CompiledExpr,
     param_name: &str,
@@ -164,16 +112,11 @@ fn try_extract_get_chain(
     index_map.get(&path).cloned()
 }
 
-/// Walk a `(get (get ... :k1) :k2)` chain and return the key path `["k1", "k2", ...]`.
-/// Also handles `(get-in x [:k1 :k2])` form.
-/// Returns `None` if the root is not `Symbol(param_name)`.
 fn extract_key_path(expr: &CompiledExpr, param_name: &str) -> Option<Vec<String>> {
     match expr {
         CompiledExpr::Symbol(name) if name == param_name => Some(vec![]),
         CompiledExpr::FunctionCall { name, args, .. } if name == "get" && args.len() >= 2 => {
-            // args[0] is the receiver: recurse
             let mut path = extract_key_path(&args[0], param_name)?;
-            // args[1..] are keyword keys: (get x :k1 :k2) -> path ["k1", "k2"]
             for arg in &args[1..] {
                 match arg {
                     CompiledExpr::Keyword(k) | CompiledExpr::String(k) => path.push(k.clone()),
@@ -182,11 +125,8 @@ fn extract_key_path(expr: &CompiledExpr, param_name: &str) -> Option<Vec<String>
             }
             Some(path)
         }
-        // (get-in params [:k1 :k2 ...]) -> key path from the vector
         CompiledExpr::FunctionCall { name, args, .. } if name == "get-in" && args.len() >= 2 => {
-            // args[0] must resolve to param_name
             let base_path = extract_key_path(&args[0], param_name)?;
-            // args[1] must be a Vector of Keywords
             let keys = match &args[1] {
                 CompiledExpr::Vector(elems) => {
                     let mut ks = Vec::new();
