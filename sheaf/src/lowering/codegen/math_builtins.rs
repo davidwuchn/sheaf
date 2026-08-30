@@ -127,10 +127,11 @@ impl<'a> CodeGenerator<'a> {
         name: &str,
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
-        let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
-        let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
-        let (result_reg, result_ty) = self.emitter.emit_binop(name, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
-        Ok((result_reg, result_ty))
+        let (lhs_reg, lhs_ty, rhs_reg, rhs_ty) =
+            self.generate_binary_operands(name, &args[0], &args[1])?;
+        Ok(self
+            .emitter
+            .emit_binop(name, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty))
     }
 
     fn gen_comparison(
@@ -148,11 +149,61 @@ impl<'a> CodeGenerator<'a> {
         &mut self,
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
-        let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
-        let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
-        let (result_reg, result_ty) =
-            self.emitter.emit_matmul(&lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
-        Ok((result_reg, result_ty))
+        let (lhs_reg, lhs_ty, rhs_reg, rhs_ty) =
+            self.generate_binary_operands("@", &args[0], &args[1])?;
+        Ok(self.emitter.emit_matmul(
+            &lhs_reg,
+            &rhs_reg,
+            &lhs_ty,
+            &rhs_ty,
+        ))
+    }
+
+    pub(super) fn generate_binary_operands(
+        &mut self,
+        name: &str,
+        lhs: &CompiledExpr,
+        rhs: &CompiledExpr,
+    ) -> SheafResult<(Register, StableHLOType, Register, StableHLOType)> {
+        let (mut lhs_reg, mut lhs_ty) = self.generate(lhs)?;
+        let (mut rhs_reg, mut rhs_ty) = self.generate(rhs)?;
+        let lhs_dtype = lhs_ty
+            .element_type()
+            .ok_or_else(|| arithmetic_type_error(name))?;
+        let rhs_dtype = rhs_ty
+            .element_type()
+            .ok_or_else(|| arithmetic_type_error(name))?;
+        let dtype = resolve_arithmetic_dtype(
+            if self.weak_scalars.contains(&lhs_reg) {
+                DtypeOperand::weak(lhs_dtype)
+            } else {
+                DtypeOperand::strong(lhs_dtype)
+            },
+            if self.weak_scalars.contains(&rhs_reg) {
+                DtypeOperand::weak(rhs_dtype)
+            } else {
+                DtypeOperand::strong(rhs_dtype)
+            },
+        )
+        .map_err(|error| SheafError::Compile {
+            message: format!("{}: {}", name, error),
+            location: crate::core::error::SourceLocation::unknown(),
+        })?;
+        if lhs_dtype != dtype {
+            let target = lhs_ty
+                .with_element_type(dtype)
+                .ok_or_else(|| arithmetic_type_error(name))?;
+            lhs_reg = self.emitter.emit_convert(&lhs_reg, &lhs_ty, &target);
+            lhs_ty = target;
+        }
+        if rhs_dtype != dtype {
+            let target = rhs_ty
+                .with_element_type(dtype)
+                .ok_or_else(|| arithmetic_type_error(name))?;
+            rhs_reg = self.emitter.emit_convert(&rhs_reg, &rhs_ty, &target);
+            rhs_ty = target;
+        }
+        Ok((lhs_reg, lhs_ty, rhs_reg, rhs_ty))
     }
 
     fn gen_boolean_binop(
@@ -172,7 +223,11 @@ impl<'a> CodeGenerator<'a> {
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
+        let operand_is_weak = self.weak_scalars.contains(&operand_reg);
         let result_reg = self.emitter.emit_unary(name, &operand_reg, &operand_ty);
+        if operand_is_weak {
+            self.weak_scalars.insert(result_reg);
+        }
         Ok((result_reg, operand_ty))
     }
 
@@ -210,11 +265,12 @@ impl<'a> CodeGenerator<'a> {
         name: &str,
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
-        let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
-        let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
+        let (lhs_reg, lhs_ty, rhs_reg, rhs_ty) =
+            self.generate_binary_operands(name, &args[0], &args[1])?;
         let op = if name == "minimum" { "min" } else { "max" };
-        let (result_reg, result_ty) = self.emitter.emit_binop(op, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
-        Ok((result_reg, result_ty))
+        Ok(self
+            .emitter
+            .emit_binop(op, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty))
     }
 }
 

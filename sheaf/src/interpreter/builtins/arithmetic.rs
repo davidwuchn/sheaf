@@ -146,7 +146,7 @@ fn builtin_exp(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_log(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    unary_op_f32(args, f32::ln)
+    unary_op(args, f32::ln)
 }
 
 fn builtin_sqrt(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
@@ -194,6 +194,7 @@ fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 2 {
         return Err(arity_error("@", 2, args.len()));
     }
+    let (dtype, _) = arithmetic_result_dtype("@", &[&args[0], &args[1]])?;
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
     let a = a.into_owned();
@@ -205,22 +206,25 @@ fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         (1, 1) => {
             let a1 = a.into_dimensionality::<ndarray::Ix1>().map_err(|e| runtime_error(e.to_string()))?;
             let b1 = b.into_dimensionality::<ndarray::Ix1>().map_err(|e| runtime_error(e.to_string()))?;
-            Ok(Value::Float(a1.dot(&b1)))
+            Ok(tensor_with_dtype(
+                ArrayD::from_elem(IxDyn(&[]), a1.dot(&b1)),
+                dtype,
+            ))
         }
         (2, 2) => {
             let a2 = a.into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
             let b2 = b.into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
-            Ok(Value::tensor_f32(a2.dot(&b2).into_dyn()))
+            Ok(tensor_with_dtype(a2.dot(&b2).into_dyn(), dtype))
         }
         (2, 1) => {
             let a2 = a.into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
             let b1 = b.into_dimensionality::<ndarray::Ix1>().map_err(|e| runtime_error(e.to_string()))?;
-            Ok(Value::tensor_f32(a2.dot(&b1).into_dyn()))
+            Ok(tensor_with_dtype(a2.dot(&b1).into_dyn(), dtype))
         }
         (1, 2) => {
             let a1 = a.into_dimensionality::<ndarray::Ix1>().map_err(|e| runtime_error(e.to_string()))?;
             let b2 = b.into_dimensionality::<ndarray::Ix2>().map_err(|e| runtime_error(e.to_string()))?;
-            Ok(Value::tensor_f32(a1.dot(&b2).into_dyn()))
+            Ok(tensor_with_dtype(a1.dot(&b2).into_dyn(), dtype))
         }
         _ if a.ndim() >= 2 && b.ndim() >= 2 => {
             let a_shape = a.shape();
@@ -279,7 +283,7 @@ fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             out_shape.push(n);
             let arr = ArrayD::from_shape_vec(IxDyn(&out_shape), result)
                 .map_err(|e| runtime_error(format!("@: output reshape: {}", e)))?;
-            Ok(Value::tensor_f32(arr))
+            Ok(tensor_with_dtype(arr, dtype))
         }
         _ => Err(runtime_error(format!(
             "@ not supported for {}D x {}D", a.ndim(), b.ndim()
@@ -544,6 +548,10 @@ fn broadcast_adj(adj: ArrayD<f32>, target_shape: &[usize]) -> ArrayD<f32> {
 
 fn builtin_matmul_grad_lhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 3 { return Err(runtime_error("@-grad-lhs requires 3 arguments: A, B, adj")); }
+    let (dtype, _) = arithmetic_result_dtype(
+        "@-grad-lhs",
+        &[&args[0], &args[1], &args[2]],
+    )?;
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
     let (adj_raw, _) = to_array(&args[2])?;
@@ -606,11 +614,15 @@ fn builtin_matmul_grad_lhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             }
         }
     };
-    Ok(Value::tensor_f32(result))
+    Ok(tensor_with_dtype(result, dtype))
 }
 
 fn builtin_matmul_grad_rhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 3 { return Err(runtime_error("@-grad-rhs requires 3 arguments: A, B, adj")); }
+    let (dtype, _) = arithmetic_result_dtype(
+        "@-grad-rhs",
+        &[&args[0], &args[1], &args[2]],
+    )?;
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
     let (adj_raw, _) = to_array(&args[2])?;
@@ -670,13 +682,14 @@ fn builtin_matmul_grad_rhs(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             }
         }
     };
-    Ok(Value::tensor_f32(result))
+    Ok(tensor_with_dtype(result, dtype))
 }
 
 fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 3 {
         return Err(runtime_error(format!("einsum: expected 3 arguments (subscript, a, b), got {}", args.len())));
     }
+    let (dtype, _) = arithmetic_result_dtype("einsum", &[&args[1], &args[2]])?;
     let subscript = match &args[0] {
         Value::String(s) => s.as_str(),
         _ => return Err(runtime_error("einsum: first argument must be a subscript string")),
@@ -735,11 +748,7 @@ fn builtin_einsum(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let arr = try_einsum_as_matmul(&idx_a, &idx_b, &idx_out, &a, &b, &sizes)
         .unwrap_or_else(|| einsum_naive(&idx_a, &idx_b, &idx_out, &a, &b, &sizes));
 
-    if arr.ndim() == 0 {
-        Ok(Value::Float(as_scalar(&arr)))
-    } else {
-        Ok(Value::tensor_f32(arr))
-    }
+    Ok(tensor_with_dtype(arr, dtype))
 }
 
 fn builtin_append_and_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {

@@ -436,35 +436,24 @@ fn infer_function_call_type(
     weak_scalars: &std::collections::HashSet<String>,
 ) -> SheafResult<StableHLOType> {
     match name {
-        "+" | "-" | "*" | "/" => {
+        "+" | "-" | "*" | "/" | "minimum" | "maximum" => {
             infer_arithmetic_type(name, args, symbol_types, weak_scalars)
         },
-        "@" => {
-            if args.len() != 2 {
-                return Ok(StableHLOType::scalar_f32());
-            }
-            let lhs_ty = infer_type_with_weak_scalars(
-                &args[0],
-                symbol_types,
-                weak_scalars,
-            )?;
-            let rhs_ty = infer_type_with_weak_scalars(
-                &args[1],
-                symbol_types,
-                weak_scalars,
-            )?;
-            let lhs_shape = lhs_ty.shape();
-            let rhs_shape = rhs_ty.shape();
-            if lhs_shape.len() == 2 && rhs_shape.len() == 2 {
-                Ok(inferred_tensor_type(
-                    vec![lhs_shape[0], rhs_shape[1]],
-                    lhs_ty.element_type().unwrap_or(ElementType::F32),
-                ))
-            } else {
-                Ok(lhs_ty)
-            }
-        }
-        "relu" | "sigmoid" | "tanh" | "sqrt" | "exp" | "log" | "softmax" => args
+        "min" | "max"
+            if args.len() >= 2
+                && !matches!(args.get(1), Some(CompiledExpr::Keyword(_))) =>
+        {
+            infer_arithmetic_type(name, args, symbol_types, weak_scalars)
+        },
+        "@" => infer_matmul_type(args, symbol_types, weak_scalars),
+        "where" if args.len() == 3 => infer_arithmetic_type(
+            "where",
+            &args[1..],
+            symbol_types,
+            weak_scalars,
+        ),
+        "relu" | "sigmoid" | "tanh" | "sqrt" | "exp" | "log" | "softmax"
+        | "abs" | "sin" | "cos" | "tan" | "round" | "ceil" | "floor" => args
             .first()
             .map(|arg| infer_type_with_weak_scalars(arg, symbol_types, weak_scalars))
             .unwrap_or_else(|| Ok(StableHLOType::scalar_f32())),
@@ -478,9 +467,75 @@ fn infer_function_call_type(
             .and_then(literal_shape)
             .map(StableHLOType::f32_tensor)
             .unwrap_or_else(StableHLOType::scalar_f32)),
-        "sum" | "mean" => infer_reduction_type(args, symbol_types, weak_scalars),
+        "sum" | "mean" | "var" | "product" | "min" | "max" => {
+            infer_reduction_type(args, symbol_types, weak_scalars)
+        },
         _ => Ok(StableHLOType::scalar_f32()),
     }
+}
+
+fn infer_matmul_type(
+    args: &[CompiledExpr],
+    symbol_types: &std::collections::HashMap<String, StableHLOType>,
+    weak_scalars: &std::collections::HashSet<String>,
+) -> SheafResult<StableHLOType> {
+    if args.len() != 2 {
+        return Ok(StableHLOType::scalar_f32());
+    }
+    let lhs = infer_type_with_weak_scalars(&args[0], symbol_types, weak_scalars)?;
+    let rhs = infer_type_with_weak_scalars(&args[1], symbol_types, weak_scalars)?;
+    let dtype = resolve_arithmetic_dtype(
+        if is_weak_scalar(&args[0], weak_scalars) {
+            DtypeOperand::weak(lhs.element_type().unwrap_or(ElementType::F32))
+        } else {
+            DtypeOperand::strong(lhs.element_type().unwrap_or(ElementType::F32))
+        },
+        if is_weak_scalar(&args[1], weak_scalars) {
+            DtypeOperand::weak(rhs.element_type().unwrap_or(ElementType::F32))
+        } else {
+            DtypeOperand::strong(rhs.element_type().unwrap_or(ElementType::F32))
+        },
+    )
+    .map_err(|error| SheafError::Compile {
+        message: format!("@: {}", error),
+        location: crate::core::error::SourceLocation::unknown(),
+    })?;
+    let lhs_shape = lhs.shape();
+    let rhs_shape = rhs.shape();
+    let shape = match (lhs_shape.len(), rhs_shape.len()) {
+        (0, _) | (_, 0) => crate::core::shape::broadcast_shapes(lhs_shape, rhs_shape)
+            .map_err(|error| SheafError::Compile {
+                message: format!(
+                    "@: cannot broadcast dimensions {} and {}",
+                    error.lhs, error.rhs,
+                ),
+                location: crate::core::error::SourceLocation::unknown(),
+            })?,
+        (1, 1) => Vec::new(),
+        (1, _) => {
+            let mut shape = rhs_shape[..rhs_shape.len() - 2].to_vec();
+            shape.push(rhs_shape[rhs_shape.len() - 1]);
+            shape
+        }
+        (_, 1) => lhs_shape[..lhs_shape.len() - 1].to_vec(),
+        _ => {
+            let mut shape = crate::core::shape::broadcast_shapes(
+                &lhs_shape[..lhs_shape.len() - 2],
+                &rhs_shape[..rhs_shape.len() - 2],
+            )
+            .map_err(|error| SheafError::Compile {
+                message: format!(
+                    "@: cannot broadcast dimensions {} and {}",
+                    error.lhs, error.rhs,
+                ),
+                location: crate::core::error::SourceLocation::unknown(),
+            })?;
+            shape.push(lhs_shape[lhs_shape.len() - 2]);
+            shape.push(rhs_shape[rhs_shape.len() - 1]);
+            shape
+        }
+    };
+    Ok(StableHLOType::tensor(shape, dtype))
 }
 
 fn infer_arithmetic_type(
@@ -547,9 +602,21 @@ fn is_weak_scalar(
         CompiledExpr::Integer(_) | CompiledExpr::Float(_) => true,
         CompiledExpr::Symbol(name) => weak_scalars.contains(name),
         CompiledExpr::FunctionCall { name, args, .. }
-            if matches!(name.as_str(), "+" | "-" | "*" | "/") =>
+            if matches!(
+                name.as_str(),
+                "+" | "-" | "*" | "/" | "min" | "max" | "minimum" | "maximum"
+            ) =>
         {
             args.iter().all(|arg| is_weak_scalar(arg, weak_scalars))
+        }
+        CompiledExpr::FunctionCall { name, args, .. }
+            if matches!(
+                name.as_str(),
+                "abs" | "sqrt" | "exp" | "log" | "sin" | "cos" | "tan" | "tanh"
+            ) =>
+        {
+            args.first()
+                .is_some_and(|arg| is_weak_scalar(arg, weak_scalars))
         }
         CompiledExpr::Do(exprs) => exprs
             .last()
@@ -588,7 +655,7 @@ fn infer_reduction_type(
     let mut axis = -1;
     let mut keepdims = false;
     let mut index = 1;
-    while index + 1 < args.len() {
+    while index < args.len() {
         match &args[index] {
             CompiledExpr::Keyword(keyword) if keyword == "axis" => {
                 if let CompiledExpr::Integer(value) = &args[index + 1] {
@@ -597,10 +664,18 @@ fn infer_reduction_type(
                 index += 2;
             }
             CompiledExpr::Keyword(keyword) if keyword == "keepdims" => {
-                if let CompiledExpr::Boolean(value) = &args[index + 1] {
-                    keepdims = *value;
-                }
-                index += 2;
+                keepdims = args
+                    .get(index + 1)
+                    .and_then(|value| match value {
+                        CompiledExpr::Boolean(value) => Some(*value),
+                        _ => None,
+                    })
+                    .unwrap_or(true);
+                index += if matches!(args.get(index + 1), Some(CompiledExpr::Boolean(_))) {
+                    2
+                } else {
+                    1
+                };
             }
             _ => index += 1,
         }
@@ -619,10 +694,12 @@ fn infer_reduction_type(
     } else {
         result_shape.remove(axis);
     }
-    Ok(inferred_tensor_type(
-        result_shape,
-        input_ty.element_type().unwrap_or(ElementType::F32),
-    ))
+    let dtype = input_ty.element_type().unwrap_or(ElementType::F32);
+    if matches!(input_ty, StableHLOType::Tensor { .. }) {
+        Ok(StableHLOType::tensor(result_shape, dtype))
+    } else {
+        Ok(inferred_tensor_type(result_shape, dtype))
+    }
 }
 
 fn inferred_tensor_type(shape: Vec<i64>, dtype: ElementType) -> StableHLOType {

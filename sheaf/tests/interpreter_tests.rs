@@ -226,6 +226,81 @@ fn test_io_safetensors_roundtrip() {
 }
 
 #[test]
+fn dot_operations_preserve_tensor_dtypes() {
+    use sheaf_compiler::core::dtype::ElementType;
+    use sheaf_compiler::interpreter::value::Value;
+
+    for dtype in [ElementType::F16, ElementType::BF16] {
+        for expression in [
+            format!(
+                "(@ (cast (tensor [[1.0 2.0]]) :{0}) (cast (tensor [[3.0] [4.0]]) :{0}))",
+                dtype.name(),
+            ),
+            format!(
+                "(einsum \"ij,jk->ik\" (cast (tensor [[1.0 2.0]]) :{0}) (cast (tensor [[3.0] [4.0]]) :{0}))",
+                dtype.name(),
+            ),
+        ] {
+            let Value::Tensor { data, dtype: result_dtype } =
+                eval_exprs(&expression).unwrap()
+            else {
+                panic!("expected a tensor");
+            };
+            assert_eq!(data.shape(), &[1, 1]);
+            assert_eq!(result_dtype, dtype);
+        }
+
+        let expression = format!(
+            "(@ (cast (tensor [1.0 2.0]) :{0}) (cast (tensor [3.0 4.0]) :{0}))",
+            dtype.name(),
+        );
+        let Value::Tensor { data, dtype: result_dtype } = eval_exprs(&expression).unwrap()
+        else {
+            panic!("expected a tensor");
+        };
+        assert!(data.shape().is_empty());
+        assert_eq!(result_dtype, dtype);
+    }
+
+    for name in ["@", "einsum"] {
+        let expression = if name == "@" {
+            "(@ (cast (tensor [[1.0]]) :f16) (cast (tensor [[1.0]]) :bf16))".to_string()
+        } else {
+            "(einsum \"ij,jk->ik\" (cast (tensor [[1.0]]) :f16) (cast (tensor [[1.0]]) :bf16))".to_string()
+        };
+        assert!(eval_exprs(&expression)
+            .unwrap_err()
+            .to_string()
+            .contains("dtype mismatch: f16 and bf16"));
+    }
+}
+
+#[test]
+fn numerical_ops_preserve_tensor_dtypes() {
+    use sheaf_compiler::core::dtype::ElementType;
+    use sheaf_compiler::interpreter::value::Value;
+
+    for dtype in [ElementType::F16, ElementType::BF16] {
+        for (expression, shape) in [
+            (format!("(sqrt (cast (tensor [1.0 4.0]) :{}))", dtype.name()), vec![2]),
+            (format!("(mean (cast (tensor [[1.0 3.0]]) :{}) :axis -1 :keepdims)", dtype.name()), vec![1, 1]),
+            (format!("(var (cast (tensor [[1.0 3.0]]) :{}) :axis -1 :keepdims)", dtype.name()), vec![1, 1]),
+            (format!("(transpose (cast (tensor [[1.0 2.0]]) :{}))", dtype.name()), vec![2, 1]),
+            (format!("(slice (cast (tensor [1.0 2.0]) :{}) 0 1)", dtype.name()), vec![1]),
+            (format!("(where (tensor [1.0 0.0]) (cast (tensor [1.0 2.0]) :{}) 0.0)", dtype.name()), vec![2]),
+        ] {
+            let Value::Tensor { data, dtype: result_dtype } =
+                eval_exprs(&expression).unwrap()
+            else {
+                panic!("expected a tensor");
+            };
+            assert_eq!(data.shape(), shape);
+            assert_eq!(result_dtype, dtype);
+        }
+    }
+}
+
+#[test]
 fn arithmetic_uses_weak_scalar_dtypes() {
     use sheaf_compiler::core::dtype::ElementType;
     use sheaf_compiler::interpreter::value::Value;

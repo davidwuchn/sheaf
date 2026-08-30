@@ -4,25 +4,16 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// Cached target backend string, set once on first IreeSession creation.
 static CACHED_BACKEND: OnceLock<String> = OnceLock::new();
 
-/// Cumulative number of attempts to construct an IREE session.
-///
-/// Incremented once for every call to `IreeSession::new()`, including calls
-/// that fail. It never decreases.
 static SESSION_CREATION_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 
-/// Number of successfully constructed IREE sessions that have not been
-/// dropped. This never underflows.
 static LIVE_SESSION_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-/// Returns the cumulative number of `IreeSession::new()` attempts.
 pub fn session_creation_attempt_count() -> usize {
     SESSION_CREATION_ATTEMPTS.load(Ordering::Relaxed)
 }
 
-/// Returns the number of successfully constructed sessions that are live.
 pub fn live_session_count() -> usize {
     LIVE_SESSION_COUNT.load(Ordering::Relaxed)
 }
@@ -44,7 +35,6 @@ fn record_session_drop() {
 static SHARED_SESSION: OnceLock<Arc<IreeSession>> = OnceLock::new();
 static SHARED_SESSION_INIT: Mutex<()> = Mutex::new(());
 
-/// Returns the lazily initialized process-wide IREE session.
 pub fn shared_session() -> Result<Arc<IreeSession>, SheafError> {
     if let Some(session) = SHARED_SESSION.get() {
         return Ok(Arc::clone(session));
@@ -64,7 +54,6 @@ pub fn shared_session() -> Result<Arc<IreeSession>, SheafError> {
     Ok(session)
 }
 
-/// Returns the shared session without initializing it.
 pub fn initialized_shared_session() -> Option<Arc<IreeSession>> {
     SHARED_SESSION.get().map(Arc::clone)
 }
@@ -80,7 +69,6 @@ use super::buffer_convert::{
 };
 use super::device_buffer::{libc_stderr, suppress_stderr, restore_stderr};
 
-// Re-export public types so external callers can still use iree_session::*
 pub use super::device_buffer::{DeviceBufferInner, IreeDeviceHandle};
 pub use super::signature::{
     args_match_signature, check_shapes_match, count_arg_tensors, count_signature_tensors,
@@ -146,17 +134,11 @@ pub struct IreeSession {
     instance: *mut iree_runtime_instance_t,
     device_handle: Arc<IreeDeviceHandle>,
     session: *mut iree_runtime_session_t,
-    /// Source buffers remain live because IREE may retain the input span after
-    /// appending a bytecode module.
+    // Retains source spans referenced by IREE.
     _vmfb_data: Mutex<Vec<Vec<u8>>>,
-    /// HAL driver name: "metal", "local-task", etc.
     driver_name: String,
-    /// Per-function buffer view cache: fn_name -> per-position cached buffer views.
-    /// Each position holds up to MAX_CACHE_ENTRIES entries to avoid thrashing when
-    /// the same function is called with different weight sets (e.g. transformer layers).
     buffer_cache: Mutex<HashMap<String, Vec<Vec<CachedBufferView>>>>,
     precompiled_modules: Mutex<PrecompiledModuleRegistry>,
-    /// Dispatch timing (nanoseconds, accumulated). Enabled by --jit-profile.
     profile: bool,
     t_flatten_ns: AtomicU64,
     t_buffers_ns: AtomicU64,
@@ -186,7 +168,6 @@ impl IreeSession {
                 return Err(iree_err("failed to create IREE instance"));
             }
 
-            // Try drivers in preference order: CUDA > Metal > Vulkan > CPU
             let device_override = crate::core::config::device_override();
             let driver_names: Vec<&str> = match device_override {
                 Some("cpu") => vec!["local-task"],
@@ -213,7 +194,6 @@ impl IreeSession {
                     "failed to create IREE device (tried: {})", tried
                 )));
             }
-            // Cache the target backend for JIT (avoids re-probing drivers)
             let backend = match chosen_driver {
                 "metal" => "metal-spirv",
                 "vulkan" => "vulkan-spirv",
@@ -240,7 +220,7 @@ impl IreeSession {
                 }
             }
 
-            // Retain the device for our Arc handle (session also holds its own ref)
+            // IreeDeviceHandle owns a retained device reference.
             iree_hal_device_retain(device);
             let device_handle = Arc::new(IreeDeviceHandle { device });
 
@@ -256,8 +236,8 @@ impl IreeSession {
                 &mut session,
             );
             if !iree_status_is_ok(status) {
-                drop(device_handle); // releases our retained ref
-                iree_hal_device_release(device); // release the original ref
+                drop(device_handle);
+                iree_hal_device_release(device);
                 iree_runtime_instance_release(instance);
                 return Err(iree_err("failed to create IREE session"));
             }
@@ -284,7 +264,6 @@ impl IreeSession {
         }
     }
 
-    /// Returns the iree-compile target backend for the active HAL driver.
     pub fn target_backend(&self) -> &str {
         match self.driver_name.as_str() {
             "metal" => "metal-spirv",
@@ -294,23 +273,18 @@ impl IreeSession {
         }
     }
 
-    /// Returns the cached target backend without creating a new session.
-    /// Available after the first IreeSession::new() call.
     pub fn cached_target_backend() -> Option<&'static str> {
         CACHED_BACKEND.get().map(|s| s.as_str())
     }
 
-    /// Returns the HAL driver name ("metal", "local-task", etc.)
     pub fn driver_name(&self) -> &str {
         &self.driver_name
     }
 
-    /// Returns a clone of the device handle for DeviceBuffer lifetime management.
     pub fn device_handle(&self) -> &Arc<IreeDeviceHandle> {
         &self.device_handle
     }
 
-    /// Returns the raw IREE device allocator pointer for memory statistics queries.
     pub fn device_allocator_ptr(&self) -> *mut crate::runtime::iree_ffi::iree_hal_allocator_t {
         unsafe { iree_runtime_session_device_allocator(self.session) }
     }
@@ -385,7 +359,6 @@ impl IreeSession {
                 self_: std::ptr::null_mut(),
                 ctl: None,
             };
-            // Suppress IREE C runtime diagnostics on stderr in non-verbose mode
             let suppress = crate::core::config::verbosity() < 2;
             let saved_stderr = if suppress { suppress_stderr() } else { None };
             let status = iree_runtime_session_append_bytecode_module_from_memory(
@@ -414,7 +387,6 @@ impl IreeSession {
 
             let t0 = if self.profile { Some(std::time::Instant::now()) } else { None };
 
-            // Flatten tuples/dicts into individual tensor leaves for IREE
             let flat_inputs = flatten_values(inputs)?;
 
             let t1 = t0.map(|_| std::time::Instant::now());
@@ -427,9 +399,6 @@ impl IreeSession {
                 return Err(iree_err("failed to create input list"));
             }
 
-            // Build input buffer views with caching.
-            // Each position holds up to 8 entries to avoid thrashing when the same
-            // function is called with different weight sets (e.g. 6 transformer layers).
             const MAX_CACHE_ENTRIES: usize = 8;
             let mut cache = self.buffer_cache.lock().unwrap();
             let cached_fn = match cache.get_mut(fn_name) {
@@ -452,7 +421,7 @@ impl IreeSession {
                     let new_bv = match value_to_buffer_view(device, device_alloc, val) {
                         Ok(view) => view,
                         Err(error) => {
-                            // The VM list owns retained references for earlier arguments.
+                            // The list releases retained arguments on failure.
                             iree_vm_list_release(input_list);
                             return Err(error);
                         }
@@ -467,7 +436,6 @@ impl IreeSession {
                     new_bv
                 };
 
-                // Create a VM ref for the input list (retains the buffer view)
                 let mut ref_ = iree_hal_buffer_view_retain_ref(bv);
                 let status = iree_vm_list_push_ref_retain(input_list, &ref_);
                 iree_vm_ref_release(&mut ref_);
@@ -477,7 +445,7 @@ impl IreeSession {
                 }
             }
 
-            // Drop cache lock before the IREE call
+            // Do not hold the cache lock during dispatch.
             drop(cache);
 
             let t2 = t0.map(|_| std::time::Instant::now());
@@ -550,8 +518,6 @@ impl IreeSession {
         }
     }
 
-    /// Call with a known return type to reconstruct nested tuple/dict structure
-    /// from IREE's flattened output buffers.
     pub fn call_typed(
         &self,
         fn_name: &str,
@@ -559,7 +525,6 @@ impl IreeSession {
         return_type: &crate::lowering::stablehlo::StableHLOType,
     ) -> Result<Value, SheafError> {
         let flat_result = self.call(fn_name, inputs)?;
-        // Unpack the flat result into the expected structure
         let flat_values = match flat_result {
             Value::Tuple(vals) => vals,
             other => vec![other],
@@ -569,8 +534,6 @@ impl IreeSession {
         Ok(structured)
     }
 
-    /// Like call(), but returns DeviceBuffer values instead of host tensors.
-    /// DeviceBuffer inputs are passed through without h2d copy.
     pub fn call_device(&self, fn_name: &str, inputs: &[Value]) -> Result<Value, SheafError> {
         unsafe {
             let alloc = system_allocator();
@@ -591,11 +554,9 @@ impl IreeSession {
                 return Err(iree_err("failed to create input list"));
             }
 
-            // Build input buffer views: DeviceBuffers pass through, others use cache.
             let all_device = flat_inputs.iter().all(|v| matches!(v, Value::DeviceBuffer(_)));
 
             if all_device {
-                // Fast path: all inputs already on device, skip cache entirely
                 for val in flat_inputs.iter() {
                     if let Value::DeviceBuffer(db) = val {
                         if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
@@ -633,7 +594,7 @@ impl IreeSession {
                                 let new_bv = match value_to_buffer_view(device, device_alloc, val) {
                                     Ok(view) => view,
                                     Err(error) => {
-                                        // The VM list owns retained references for earlier arguments.
+                                        // The list releases retained arguments on failure.
                                         iree_vm_list_release(input_list);
                                         return Err(error);
                                     }
@@ -692,7 +653,6 @@ impl IreeSession {
 
             let t3 = t0.map(|_| std::time::Instant::now());
 
-            // Wrap outputs as DeviceBuffers instead of d2h transfer
             let n_outputs = iree_vm_list_size(output_list);
             let mut results = Vec::with_capacity(n_outputs);
             for i in 0..n_outputs {
@@ -704,7 +664,6 @@ impl IreeSession {
                 }
                 let bv = ref_.ptr as *mut iree_hal_buffer_view_t;
 
-                // Read shape and dtype metadata (no data transfer)
                 let rank = iree_hal_buffer_view_shape_rank(bv);
                 let shape: Vec<usize> = (0..rank)
                     .map(|j| iree_hal_buffer_view_shape_dim(bv, j) as usize)
@@ -720,8 +679,7 @@ impl IreeSession {
                     Dtype::F32
                 };
 
-                // Eagerly transfer scalars to host. Avoids GPU sync in
-                // interpreter hot loops (e.g. nth on generate-token output).
+                // Keep scalar control flow on the host.
                 if shape.is_empty() {
                     let buf = iree_hal_buffer_view_buffer(bv);
                     let byte_len = if matches!(dtype, Dtype::F16 | Dtype::BF16) { 2u64 } else { 4u64 };
@@ -763,7 +721,7 @@ impl IreeSession {
                         shape,
                         dtype,
                     ));
-                    // Transfer ownership: nullify ptr to prevent double-free on ref release
+                    // DeviceBuffer owns the retained buffer view.
                     ref_.ptr = std::ptr::null_mut();
                     iree_vm_ref_release(&mut ref_);
 
@@ -789,7 +747,6 @@ impl IreeSession {
         }
     }
 
-    /// Like call_typed(), but returns DeviceBuffers instead of host tensors.
     pub fn call_typed_device(
         &self,
         fn_name: &str,
@@ -854,7 +811,7 @@ impl Drop for IreeSession {
             }
         }
         unsafe {
-            // Release all cached buffer views before tearing down the session
+            // Cached buffer views must not outlive the session.
             if let Ok(cache) = self.buffer_cache.lock() {
                 for positions in cache.values() {
                     for slot in positions {
@@ -867,8 +824,7 @@ impl Drop for IreeSession {
             if !self.session.is_null() {
                 iree_runtime_session_release(self.session);
             }
-            // device_handle (Arc<IreeDeviceHandle>) releases the device when
-            // the last DeviceBuffer is dropped. No explicit release here.
+            // device_handle keeps the device alive for outstanding buffers.
             if !self.instance.is_null() {
                 iree_runtime_instance_release(self.instance);
             }

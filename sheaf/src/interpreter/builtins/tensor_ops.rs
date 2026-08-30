@@ -46,11 +46,11 @@ fn builtin_reshape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_transpose(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, dtype) = to_array(&args[0])?;
     if arr.ndim() == 2 {
-        Ok(Value::tensor_f32(arr.t().to_owned()))
+        Ok(tensor_with_dtype(arr.t().to_owned(), dtype))
     } else if arr.ndim() == 1 {
-        Ok(Value::tensor_f32(arr.into_owned()))
+        Ok(tensor_with_dtype(arr.into_owned(), dtype))
     } else {
         let mut axes: Vec<usize> = (0..arr.ndim()).rev().collect();
         if args.len() > 1
@@ -67,7 +67,10 @@ fn builtin_transpose(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             }
             axes = resolved_axes;
         }
-        Ok(Value::tensor_f32(arr.into_owned().permuted_axes(IxDyn(&axes))))
+        Ok(tensor_with_dtype(
+            arr.into_owned().permuted_axes(IxDyn(&axes)),
+            dtype,
+        ))
     }
 }
 
@@ -80,12 +83,15 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if let Some(arrays) = maybe_arrays
         && (has_axis_kw || args.iter().any(|a| matches!(a, Value::Tensor { .. })))
     {
-        let all_i32 = arrays.iter().all(|(_, dt)| *dt == Dtype::I32);
-            let dtype = if all_i32 { Dtype::I32 } else { Dtype::F32 };
-            let views: Vec<ndarray::ArrayViewD<f32>> = arrays.iter().map(|(a, _)| a.view()).collect();
-            let result = ndarray::concatenate(ndarray::Axis(axis), &views)
-                .map_err(|e| runtime_error(e.to_string()))?;
-        return Ok(Value::Tensor { data: Arc::new(result), dtype });
+        let dtype = arrays[0].1;
+        if arrays.iter().any(|(_, candidate)| *candidate != dtype) {
+            return Err(runtime_error("concat: dtype mismatch"));
+        }
+        let views: Vec<ndarray::ArrayViewD<f32>> =
+            arrays.iter().map(|(array, _)| array.view()).collect();
+        let result = ndarray::concatenate(ndarray::Axis(axis), &views)
+            .map_err(|error| runtime_error(error.to_string()))?;
+        return Ok(tensor_with_dtype(result, dtype));
     }
 
     if matches!(&args[0], Value::String(_)) {
@@ -125,7 +131,7 @@ fn builtin_slice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         let end = if args.len() > 2 { args[2].to_f64().ok_or_else(|| runtime_error("slice: end must be a number"))? as usize } else { s.len() };
         return Ok(Value::String(s[start..end.min(s.len())].to_string()));
     }
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, dtype) = to_array(&args[0])?;
     if arr.ndim() == 0 {
         return Err(runtime_error("slice: cannot slice a 0-dimensional tensor"));
     }
@@ -148,11 +154,10 @@ fn builtin_slice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         )));
     }
     let sliced = arr.slice_axis(ndarray::Axis(axis), ndarray::Slice::from(start..end));
-    Ok(Value::tensor_f32(sliced.to_owned()))
+    Ok(tensor_with_dtype(sliced.to_owned(), dtype))
 }
 
 fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
-    // Materialize DeviceBuffer indices to host tensors
     if args.len() >= 2 && matches!(&args[1], Value::DeviceBuffer(_)) {
         let mut host_args = args.to_vec();
         host_args[1] = args[1].ensure_host()?;
@@ -167,7 +172,6 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             };
             match map.get(&key) {
                 Some(v) => {
-                    // Chained lookup: (get dict :k1 :k2 ...) -> nested dict access
                     if args.len() > 2 {
                         let mut cur = v.clone();
                         for extra in &args[2..] {
@@ -190,7 +194,7 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                 }
             }
         }
-        Value::Tensor { data, .. } => {
+        Value::Tensor { data, dtype } => {
             if matches!(&args[1], Value::Keyword(k) if k == "...") {
                 if args.len() < 3 { return Err(runtime_error("get: ... requires an index argument")); }
                 let last_axis = ndarray::Axis(data.ndim() - 1);
@@ -199,7 +203,7 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                         let raw = v.to_f64().unwrap();
                         let idx = resolve_idx(raw, data.shape()[data.ndim() - 1])?;
                         let sliced = data.index_axis(last_axis, idx).to_owned();
-                        Ok(Value::tensor_f32(sliced))
+                        Ok(tensor_with_dtype(sliced, *dtype))
                     }
                     Value::Tensor { data: range_t, .. } if range_t.ndim() == 1 && !range_t.is_empty() => {
                         let start = as_scalar(range_t) as usize;
@@ -209,22 +213,20 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                             return Err(runtime_error(format!("get: range end {} out of bounds for last axis with size {}", end, last_dim)));
                     }
                     let sliced = data.slice_axis(last_axis, ndarray::Slice::from(start..end));
-                    Ok(Value::tensor_f32(sliced.to_owned()))
+                    Ok(tensor_with_dtype(sliced.to_owned(), *dtype))
                 }
                     other => Err(runtime_error(format!("get: ... index must be int or range, got {}", other.type_name()))),
                 };
             }
-            // Scalar index
             if let Some(f) = args[1].to_f64() {
                 let idx = resolve_idx(f, data.shape()[0])?;
                 let sliced = data.index_axis(ndarray::Axis(0), idx).to_owned();
                 return if sliced.shape().is_empty() {
                     Ok(Value::Float(as_scalar(&sliced)))
                 } else {
-                    Ok(Value::tensor_f32(sliced))
+                    Ok(tensor_with_dtype(sliced, *dtype))
                 };
             }
-            // Tensor gather: (get table indices) -> gathers rows
             if let Value::Tensor { data: idx_data, .. } = &args[1] {
                 let row_shape = &data.shape()[1..];
                 let idx_shape = idx_data.shape();
@@ -248,7 +250,7 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
                 }
                 let arr = ArrayD::from_shape_vec(IxDyn(&out_shape), result)
                     .map_err(|e| runtime_error(format!("get: gather reshape: {}", e)))?;
-                return Ok(Value::tensor_f32(arr));
+                return Ok(tensor_with_dtype(arr, *dtype));
             }
             if let Value::List(items) = &args[1]
                 && items.iter().all(|v| matches!(v, Value::Int(_) | Value::Float(_)))
@@ -272,7 +274,6 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             Ok(Value::String(s.chars().nth(idx).unwrap().to_string()))
         }
         Value::DeviceBuffer(_) => {
-            // Materialize and retry as host tensor
             let mut host_args = args.to_vec();
             host_args[0] = args[0].ensure_host()?;
             builtin_get(&host_args, kw)
@@ -297,6 +298,7 @@ fn broadcast_shape(shapes: &[&[usize]]) -> Result<Vec<usize>, crate::core::error
 }
 
 fn builtin_where(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    let (dtype, _) = arithmetic_result_dtype("where", &[&args[1], &args[2]])?;
     let (cond, _) = to_array(&args[0])?;
     let (on_true, _) = to_array(&args[1])?;
     let (on_false, _) = to_array(&args[2])?;
@@ -312,14 +314,14 @@ fn builtin_where(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     })?.to_owned();
     let result = ndarray::Zip::from(&cond_bc).and(&true_bc).and(&false_bc)
         .map_collect(|&c, &t, &f| if c != 0.0 { t } else { f });
-    Ok(Value::tensor_f32(result))
+    Ok(tensor_with_dtype(result, dtype))
 }
 
 fn builtin_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, dtype) = to_array(&args[0])?;
     let shift = args[1].to_f64().ok_or_else(|| runtime_error("roll: shift must be a number"))? as i64;
     if arr.is_empty() {
-        return Ok(Value::tensor_f32(arr.into_owned()));
+        return Ok(tensor_with_dtype(arr.into_owned(), dtype));
     }
     let data: Vec<f32> = arr.iter().copied().collect();
     let n = data.len() as i64;
@@ -329,11 +331,14 @@ fn builtin_roll(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         let new_i = ((i as i64 + shift) % n) as usize;
         result[new_i] = v;
     }
-    Ok(Value::tensor_f32(ArrayD::from_shape_vec(arr.raw_dim(), result).unwrap()))
+    Ok(tensor_with_dtype(
+        ArrayD::from_shape_vec(arr.raw_dim(), result).unwrap(),
+        dtype,
+    ))
 }
 
 fn builtin_index_update(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    let (cow, _dt) = to_array(&args[0])?;
+    let (cow, dtype) = to_array(&args[0])?;
     let mut arr = cow.into_owned();
     let idx = args[1].to_f64().ok_or_else(|| runtime_error("index-update: index must be a number"))? as usize;
     let dim = arr.shape()[0];
@@ -353,11 +358,11 @@ fn builtin_index_update(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             arr[IxDyn(&[idx])] = v;
         }
     }
-    Ok(Value::tensor_f32(arr))
+    Ok(tensor_with_dtype(arr, dtype))
 }
 
 fn builtin_swapaxes(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, dtype) = to_array(&args[0])?;
     let ndim = arr.ndim();
     if ndim < 2 {
         return Err(runtime_error(format!("swapaxes: tensor must have at least 2 dimensions, got {}", ndim)));
@@ -373,11 +378,14 @@ fn builtin_swapaxes(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     let mut axes: Vec<usize> = (0..arr.ndim()).collect();
     axes[ax0] = ax1;
     axes[ax1] = ax0;
-    Ok(Value::tensor_f32(arr.into_owned().permuted_axes(IxDyn(&axes))))
+    Ok(tensor_with_dtype(
+        arr.into_owned().permuted_axes(IxDyn(&axes)),
+        dtype,
+    ))
 }
 
 fn builtin_tensor_split(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, dtype) = to_array(&args[0])?;
     let num = args[1].to_f64()
         .ok_or_else(|| runtime_error("tensor-split: num-sections must be a number"))? as usize;
     if num == 0 {
@@ -396,13 +404,13 @@ fn builtin_tensor_split(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         let start = i * chunk;
         let end = start + chunk;
         let sliced = arr.slice_axis(ndarray::Axis(axis), ndarray::Slice::from(start..end));
-        Value::tensor_f32(sliced.to_owned())
+        tensor_with_dtype(sliced.to_owned(), dtype)
     }).collect();
     Ok(Value::List(chunks))
 }
 
 fn builtin_dynamic_slice(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, dtype) = to_array(&args[0])?;
     if arr.ndim() == 0 {
         return Err(runtime_error("dynamic-slice: cannot slice a 0-dimensional tensor"));
     }
@@ -416,7 +424,7 @@ fn builtin_dynamic_slice(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         return Err(runtime_error(format!("dynamic-slice: end ({}) out of bounds for axis 0 with size {}", end, dim0)));
     }
     let sliced = arr.slice_axis(ndarray::Axis(0), ndarray::Slice::from(start..=end));
-    Ok(Value::tensor_i32(sliced.to_owned()))
+    Ok(tensor_with_dtype(sliced.to_owned(), dtype))
 }
 
 fn builtin_flip(args: &[Value], kw: &BTreeMap<String, Value>) -> R {

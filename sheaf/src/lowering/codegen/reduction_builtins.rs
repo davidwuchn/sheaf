@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! Reduction builtin codegen: sum, mean, product, min/max reduce, argmax/argmin, var, normalize.
+//! Reduction builtin codegen.
 
+use crate::core::dtype::ElementType;
 use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::core::expr::CompiledExpr;
 use crate::core::error::SheafResult;
@@ -347,8 +348,9 @@ impl<'a> CodeGenerator<'a> {
             None => {
                 let ndim = operand_ty.shape().len();
                 if ndim == 0 {
-                    let reg = self.emitter.emit_constant_f32(0.0);
-                    (reg, StableHLOType::scalar_f32())
+                    let dtype = operand_ty.element_type().unwrap_or(ElementType::F32);
+                    let (reg, _) = self.emitter.emit_typed_scalar_constant(0.0, dtype);
+                    (reg, operand_ty)
                 } else {
                     let mut cur_reg = operand_reg;
                     let mut cur_ty = operand_ty;

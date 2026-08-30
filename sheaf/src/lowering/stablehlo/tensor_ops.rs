@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Tensor creation, selection, and broadcast operations for StableHLO.
+//! Tensor operations.
 
 use super::{Register, StableHLOEmitter, StableHLOType};
 
@@ -63,7 +63,10 @@ impl StableHLOEmitter {
         let result_shape = broadcast_result_shape(x_shape, y_shape, cond_shape);
 
         let (actual_cond, actual_cond_ty) = if cond_shape != result_shape.as_slice() {
-            let target = StableHLOType::f32_tensor(result_shape.clone());
+            let target = StableHLOType::tensor(
+                result_shape.clone(),
+                condition_ty.element_type().unwrap(),
+            );
             let r = self.emit_broadcast(condition, condition_ty, &target);
             (r, target)
         } else {
@@ -71,7 +74,10 @@ impl StableHLOEmitter {
         };
 
         let (actual_x, actual_x_ty) = if x_shape != result_shape.as_slice() {
-            let target = StableHLOType::f32_tensor(result_shape.clone());
+            let target = StableHLOType::tensor(
+                result_shape.clone(),
+                x_ty.element_type().unwrap(),
+            );
             let r = self.emit_broadcast(x, x_ty, &target);
             (r, target)
         } else {
@@ -79,7 +85,10 @@ impl StableHLOEmitter {
         };
 
         let (actual_y, actual_y_ty) = if y_shape != result_shape.as_slice() {
-            let target = StableHLOType::f32_tensor(result_shape);
+            let target = StableHLOType::tensor(
+                result_shape,
+                y_ty.element_type().unwrap(),
+            );
             let r = self.emit_broadcast(y, y_ty, &target);
             (r, target)
         } else {
@@ -134,7 +143,6 @@ impl StableHLOEmitter {
         (reg, result_ty)
     }
 
-    // eye = select(iota(0) == iota(1), 1, 0).
     pub fn emit_eye(&mut self, n: i64, m: i64) -> (Register, StableHLOType) {
         let shape = vec![n, m];
         let result_ty = StableHLOType::f32_tensor(shape.clone());
@@ -168,7 +176,6 @@ impl StableHLOEmitter {
 
             let idx_broadcast = self.emit_broadcast(indices, indices_ty, &iota_ty);
 
-            // Compare indices == iota
             let (mask_reg, mask_ty) = self.emit_compare("==", &idx_broadcast, &class_iota, &iota_ty, &iota_ty);
 
             let one_scalar = self.emit_constant_f32(1.0);
@@ -198,7 +205,6 @@ impl StableHLOEmitter {
             ));
             let idx_broadcast = self.emit_broadcast(&idx_2d, &idx_2d_ty, &iota_ty);
 
-            // Compare indices == iota
             let (mask_reg, mask_ty) = self.emit_compare("==", &idx_broadcast, &class_iota, &iota_ty, &iota_ty);
 
             let one_scalar = self.emit_constant_f32(1.0);

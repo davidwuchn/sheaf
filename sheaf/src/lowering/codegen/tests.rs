@@ -110,6 +110,41 @@ fn test_emit_boolean_not() {
 }
 
 #[test]
+fn test_reduction_preserves_dtype() {
+    use crate::core::dtype::ElementType;
+
+    let registry = HashMap::new();
+    let param_type = StableHLOType::tensor(vec![2, 2], ElementType::F16);
+    let result_type = StableHLOType::tensor(vec![2, 1], ElementType::F16);
+    let codegen = CodeGenerator::with_function_params(
+        &registry,
+        &["x".to_string()],
+        std::slice::from_ref(&param_type),
+    );
+    let body = CompiledExpr::FunctionCall {
+        name: "mean".to_string(),
+        args: vec![
+            CompiledExpr::Symbol("x".to_string()),
+            CompiledExpr::Keyword("axis".to_string()),
+            CompiledExpr::Integer(-1),
+            CompiledExpr::Keyword("keepdims".to_string()),
+        ],
+        loc: None,
+    };
+    let (mlir, actual_type) = codegen
+        .emit_func_declaration(
+            "mean",
+            &body,
+            std::slice::from_ref(&param_type),
+            &result_type,
+        )
+        .unwrap();
+    assert!(mlir.contains("stablehlo.reduce"));
+    assert!(mlir.contains("stablehlo.constant dense<0.0> : tensor<f16>"));
+    assert_eq!(actual_type, result_type);
+}
+
+#[test]
 fn test_arithmetic_converts_weak_scalars() {
     use crate::core::dtype::ElementType;
 
@@ -161,6 +196,45 @@ fn test_arithmetic_converts_weak_scalars() {
                     assert_eq!(result_type, param_type);
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn test_dot_operations_preserve_dtypes() {
+    use crate::core::dtype::ElementType;
+
+    for name in ["@", "einsum"] {
+        for dtype in [ElementType::F16, ElementType::BF16] {
+            let registry = HashMap::new();
+            let param_types = vec![
+                StableHLOType::tensor(vec![1, 2], dtype),
+                StableHLOType::tensor(vec![2, 1], dtype),
+            ];
+            let codegen = CodeGenerator::with_function_params(
+                &registry,
+                &["x".to_string(), "y".to_string()],
+                &param_types,
+            );
+            let mut args = vec![
+                CompiledExpr::Symbol("x".to_string()),
+                CompiledExpr::Symbol("y".to_string()),
+            ];
+            if name == "einsum" {
+                args.insert(0, CompiledExpr::String("ij,jk->ik".to_string()));
+            }
+            let body = CompiledExpr::FunctionCall {
+                name: name.to_string(),
+                args,
+                loc: None,
+            };
+            let result_type = StableHLOType::tensor(vec![1, 1], dtype);
+            let (mlir, actual_type) = codegen
+                .emit_func_declaration("dot", &body, &param_types, &result_type)
+                .unwrap();
+            assert!(mlir.contains("stablehlo.dot_general"));
+            assert!(mlir.contains(&format!("tensor<1x1x{}>", dtype.to_mlir_str())));
+            assert_eq!(actual_type, result_type);
         }
     }
 }

@@ -43,7 +43,7 @@ impl<'a> CodeGenerator<'a> {
                         self.bindings
                             .insert(param.clone(), (*reg, ty.clone()));
 
-                        // Preserve virtual tuple layouts across inlining.
+                        // Preserve virtual tuple layouts.
                         if let CompiledExpr::Symbol(arg_sym) = arg_expr {
                             if let Some(layout) = self.tuple_key_layouts.get(arg_sym).cloned() {
                                 self.tuple_key_layouts.insert(param.clone(), layout);
@@ -102,8 +102,8 @@ impl<'a> CodeGenerator<'a> {
                     });
                 }
             };
-            let (lhs_reg, lhs_ty) = self.generate(&args[1])?;
-            let (rhs_reg, rhs_ty) = self.generate(&args[2])?;
+            let (lhs_reg, lhs_ty, rhs_reg, rhs_ty) =
+                self.generate_binary_operands("einsum", &args[1], &args[2])?;
             self.emitter
                 .emit_einsum(&lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty, &spec)
                 .map_err(|msg| SheafError::Compile {

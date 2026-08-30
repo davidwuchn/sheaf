@@ -91,6 +91,11 @@ pub(crate) fn as_scalar(arr: &ArrayD<f32>) -> f32 {
     arr.first().copied().unwrap()
 }
 
+fn tensor_with_dtype(data: ArrayD<f32>, dtype: Dtype) -> Value {
+    let data = data.mapv(|value| crate::core::dtype::quantize_f32(value, dtype));
+    Value::Tensor { data: Arc::new(data), dtype }
+}
+
 fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
     crate::core::shape::broadcast_shapes(a, b).ok()
 }
@@ -297,6 +302,13 @@ fn weak_scalar_result_dtype(
     a: &Value,
     b: &Value,
 ) -> Result<(Dtype, bool), SheafError> {
+    arithmetic_result_dtype(name, &[a, b])
+}
+
+fn arithmetic_result_dtype(
+    name: &str,
+    values: &[&Value],
+) -> Result<(Dtype, bool), SheafError> {
     use crate::core::dtype::{DtypeOperand, DtypeStrength, resolve_arithmetic_dtype};
 
     let operand = |value: &Value| match value {
@@ -304,19 +316,31 @@ fn weak_scalar_result_dtype(
         Value::Float(_) => Some(DtypeOperand::weak(Dtype::F32)),
         Value::Bool(_) => Some(DtypeOperand::weak(Dtype::Bool)),
         Value::Tensor { dtype, .. } => Some(DtypeOperand::strong(*dtype)),
+        Value::DeviceBuffer(buffer) => Some(DtypeOperand::strong(buffer.dtype)),
         _ => None,
     };
-    let lhs = operand(a).ok_or_else(|| {
-        runtime_error(format!("{}: expected a number, got {}", name, a.short_desc()))
+    let mut result = operand(values[0]).ok_or_else(|| {
+        runtime_error(format!(
+            "{}: expected a number, got {}",
+            name,
+            values[0].short_desc(),
+        ))
     })?;
-    let rhs = operand(b).ok_or_else(|| {
-        runtime_error(format!("{}: expected a number, got {}", name, b.short_desc()))
-    })?;
-    let dtype = resolve_arithmetic_dtype(lhs, rhs)
-        .map_err(|error| runtime_error(format!("{}: {}", name, error)))?;
-    let has_strong_operand = lhs.strength == DtypeStrength::Strong
-        || rhs.strength == DtypeStrength::Strong;
-    Ok((dtype, has_strong_operand))
+    for value in &values[1..] {
+        let rhs = operand(value).ok_or_else(|| {
+            runtime_error(format!(
+                "{}: expected a number, got {}",
+                name,
+                value.short_desc(),
+            ))
+        })?;
+        result.dtype = resolve_arithmetic_dtype(result, rhs)
+            .map_err(|error| runtime_error(format!("{}: {}", name, error)))?;
+        if rhs.strength == DtypeStrength::Strong {
+            result.strength = DtypeStrength::Strong;
+        }
+    }
+    Ok((result.dtype, result.strength == DtypeStrength::Strong))
 }
 
 fn scalar_of(v: &Value) -> Option<f32> {
@@ -340,25 +364,13 @@ fn unary_op(args: &[Value], op: fn(f32) -> f32) -> R {
     if args.is_empty() {
         return Err(runtime_error("Expected at least 1 argument, got 0"));
     }
-    let (arr, _dt) = to_array(&args[0])?;
+    let (arr, dtype) = to_array(&args[0])?;
     let result = arr.mapv(op);
-    if result.ndim() == 0 {
-        Ok(Value::Float(as_scalar(&result)))
+    if matches!(&args[0], Value::Tensor { .. } | Value::DeviceBuffer(_)) {
+        let dtype = if dtype.is_float() { dtype } else { Dtype::F32 };
+        Ok(tensor_with_dtype(result, dtype))
     } else {
-        Ok(Value::Tensor { data: Arc::new(result), dtype: Dtype::F32 })
-    }
-}
-
-fn unary_op_f32(args: &[Value], op: fn(f32) -> f32) -> R {
-    if args.is_empty() {
-        return Err(runtime_error("Expected at least 1 argument, got 0"));
-    }
-    let (arr, _dt) = to_array(&args[0])?;
-    let result = arr.mapv(op);
-    if result.ndim() == 0 {
         Ok(Value::Float(as_scalar(&result)))
-    } else {
-        Ok(Value::Tensor { data: Arc::new(result), dtype: Dtype::F32 })
     }
 }
 

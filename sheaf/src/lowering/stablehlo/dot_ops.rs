@@ -3,16 +3,12 @@
 
 //! Lowers matrix multiplication and einsum to StableHLO.
 
+use crate::core::dtype::ElementType;
+
 use super::{Register, StableHLOEmitter, StableHLOType};
 
 impl StableHLOEmitter {
-    /// Emits matrix multiplication with NumPy `@` behavior:
-    ///   [K] @ [K]               -> scalar   (dot product)
-    ///   [K] @ [K, N]            -> [N]      (vec-mat)
-    ///   [M, K] @ [K]            -> [M]      (mat-vec)
-    ///   [M, K] @ [K, N]         -> [M, N]   (matmul)
-    ///   [..., M, K] @ [K, N]    -> [..., M, N]  (batched, rhs broadcast)
-    ///   [..., M, K] @ [..., K, N] -> [..., M, N] (batched)
+    /// Emits NumPy-compatible matrix multiplication.
     pub fn emit_matmul(
         &mut self,
         lhs: &Register,
@@ -25,14 +21,12 @@ impl StableHLOEmitter {
         let lhs_rank = lhs_shape.len();
         let rhs_rank = rhs_shape.len();
 
-        // Multiplication handles scalar operands; dot_general does not.
         if lhs_rank == 0 || rhs_rank == 0 {
             return self.emit_binop("*", lhs, rhs, lhs_ty, rhs_ty);
         }
 
-        // [K] @ [K] -> scalar
         if lhs_rank == 1 && rhs_rank == 1 {
-            let result_ty = StableHLOType::f32_tensor(vec![]);
+            let result_ty = dot_result_type(lhs_ty, vec![]);
             let reg = self.fresh_register();
             self.body.push(format!(
                 "    {} = stablehlo.dot_general {}, {}, contracting_dims = [0] x [0] : ({}, {}) -> {}",
@@ -42,11 +36,10 @@ impl StableHLOEmitter {
             return (reg, result_ty);
         }
 
-        // [K] @ [K, N] -> [N]
         if lhs_rank == 1 && rhs_rank >= 2 {
             let mut result_shape: Vec<i64> = rhs_shape[..rhs_rank - 2].to_vec();
             result_shape.extend_from_slice(&rhs_shape[rhs_rank - 1..]);
-            let result_ty = StableHLOType::f32_tensor(result_shape);
+            let result_ty = dot_result_type(lhs_ty, result_shape);
             let reg = self.fresh_register();
             let rhs_contract = (rhs_rank as i64) - 2;
             self.body.push(format!(
@@ -58,10 +51,9 @@ impl StableHLOEmitter {
             return (reg, result_ty);
         }
 
-        // [..., M, K] @ [K] -> [..., M]
         if rhs_rank == 1 {
             let result_shape: Vec<i64> = lhs_shape[..lhs_rank - 1].to_vec();
-            let result_ty = StableHLOType::f32_tensor(result_shape);
+            let result_ty = dot_result_type(lhs_ty, result_shape);
             let reg = self.fresh_register();
             let lhs_contract = lhs_rank as i64 - 1;
             self.body.push(format!(
@@ -85,8 +77,6 @@ impl StableHLOEmitter {
     result_shape.extend_from_slice(&lhs_shape[n_batch..lhs_rank - 1]);
     result_shape.extend_from_slice(&rhs_shape[n_batch + 1..]);
 
-    // Remove leading batch dimensions of size one when the other operand is a
-    // matrix. IREE handles the resulting two-dimensional multiplication faster.
     let lhs_leading_1 = if lhs_rank > 2 && rhs_rank <= 2 {
         let mut n = 0;
         for &d in &lhs_shape[..lhs_rank - 2] {
@@ -111,7 +101,7 @@ impl StableHLOEmitter {
         let (lhs_flat, lhs_flat_ty) = self.emit_reshape(lhs, lhs_ty, &lhs_flat_shape);
         let flat_lhs_contract = lhs_contract - lhs_leading_1 as i64;
         let flat_result_shape: Vec<i64> = result_shape[lhs_leading_1..].to_vec();
-        let flat_result_ty = StableHLOType::f32_tensor(flat_result_shape.clone());
+        let flat_result_ty = dot_result_type(lhs_ty, flat_result_shape.clone());
         let reg = self.fresh_register();
         self.body.push(format!(
             " {} = stablehlo.dot_general {}, {}, contracting_dims = [{}] x [{}] : ({}, {}) -> {}",
@@ -119,7 +109,7 @@ impl StableHLOEmitter {
             flat_lhs_contract, rhs_contract,
             lhs_flat_ty.to_mlir(), rhs_ty.to_mlir(), flat_result_ty.to_mlir()
         ));
-        let result_ty = StableHLOType::f32_tensor(result_shape.clone());
+        let result_ty = dot_result_type(lhs_ty, result_shape.clone());
         let (result_reg, _) = self.emit_reshape(&reg, &flat_result_ty, &result_shape);
         return (result_reg, result_ty);
     }
@@ -129,7 +119,7 @@ impl StableHLOEmitter {
         let (rhs_flat, rhs_flat_ty) = self.emit_reshape(rhs, rhs_ty, &rhs_flat_shape);
         let flat_rhs_contract = rhs_contract - rhs_leading_1 as i64;
         let flat_result_shape: Vec<i64> = result_shape[rhs_leading_1..].to_vec();
-        let flat_result_ty = StableHLOType::f32_tensor(flat_result_shape.clone());
+        let flat_result_ty = dot_result_type(lhs_ty, flat_result_shape.clone());
         let reg = self.fresh_register();
         self.body.push(format!(
             " {} = stablehlo.dot_general {}, {}, contracting_dims = [{}] x [{}] : ({}, {}) -> {}",
@@ -137,12 +127,11 @@ impl StableHLOEmitter {
             lhs_contract, flat_rhs_contract,
             lhs_ty.to_mlir(), rhs_flat_ty.to_mlir(), flat_result_ty.to_mlir()
         ));
-        let result_ty = StableHLOType::f32_tensor(result_shape.clone());
+        let result_ty = dot_result_type(lhs_ty, result_shape.clone());
         let (result_reg, _) = self.emit_reshape(&reg, &flat_result_ty, &result_shape);
         return (result_reg, result_ty);
     }
 
-    // Batch dimensions of size one can use a regular matrix multiplication.
     let all_batch_are_1 = n_batch > 0
         && lhs_shape[..n_batch].iter().all(|&d| d == 1)
         && rhs_shape[..n_batch].iter().all(|&d| d == 1);
@@ -155,19 +144,18 @@ impl StableHLOEmitter {
         let m = lhs_2d_shape[0];
         let n = rhs_2d_shape[1];
         let result_2d_shape = vec![m, n];
-        let result_2d_ty = StableHLOType::f32_tensor(result_2d_shape.clone());
+        let result_2d_ty = dot_result_type(lhs_ty, result_2d_shape.clone());
         let reg = self.fresh_register();
         self.body.push(format!(
             " {} = stablehlo.dot_general {}, {}, contracting_dims = [1] x [0] : ({}, {}) -> {}",
             reg.to_mlir(), lhs_flat.to_mlir(), rhs_flat.to_mlir(),
             lhs_2d_ty.to_mlir(), rhs_2d_ty.to_mlir(), result_2d_ty.to_mlir()
         ));
-        let result_ty = StableHLOType::f32_tensor(result_shape.clone());
+        let result_ty = dot_result_type(lhs_ty, result_shape.clone());
         let (result_reg, _) = self.emit_reshape(&reg, &result_2d_ty, &result_shape);
         return (result_reg, result_ty);
     }
 
-    // Remove shared batch dimensions of size one before generating the loop.
     let n_peel = if n_batch > 0 {
         let mut n = 0;
         for i in 0..n_batch {
@@ -190,7 +178,7 @@ impl StableHLOEmitter {
         let lhs_flat_contract = lhs_contract - n_peel as i64;
         let rhs_flat_contract = rhs_contract - n_peel as i64;
         let flat_result_shape: Vec<i64> = result_shape[n_peel..].to_vec();
-        let flat_result_ty = StableHLOType::f32_tensor(flat_result_shape.clone());
+        let flat_result_ty = dot_result_type(lhs_ty, flat_result_shape.clone());
         let remaining_batch = n_batch - n_peel;
         let reg = self.fresh_register();
         if remaining_batch == 0 {
@@ -210,12 +198,12 @@ impl StableHLOEmitter {
                 lhs_flat_ty.to_mlir(), rhs_flat_ty.to_mlir(), flat_result_ty.to_mlir()
             ));
         }
-        let result_ty = StableHLOType::f32_tensor(result_shape.clone());
+        let result_ty = dot_result_type(lhs_ty, result_shape.clone());
         let (result_reg, _) = self.emit_reshape(&reg, &flat_result_ty, &result_shape);
         return (result_reg, result_ty);
     }
 
-    let result_ty = StableHLOType::f32_tensor(result_shape);
+    let result_ty = dot_result_type(lhs_ty, result_shape);
     let reg = self.fresh_register();
 
     if n_batch == 0 {
@@ -240,7 +228,7 @@ impl StableHLOEmitter {
     (reg, result_ty)
     }
 
-    /// Emits a two-input einsum using `dot_general` and, when needed, a transpose.
+    /// Emits a two-input einsum.
     pub fn emit_einsum(
         &mut self,
         lhs: &Register,
@@ -264,14 +252,12 @@ impl StableHLOEmitter {
         let lhs_str = &inputs_str[..comma_pos];
         let rhs_str = &inputs_str[comma_pos + 1..];
 
-        // Give each dimension represented by `...` a temporary label.
         let parse_labels = |s: &str, shape: &[i64]| -> Result<Vec<char>, String> {
             if let Some(pos) = s.find("...") {
                 let prefix = &s[..pos];
                 let suffix = &s[pos + 3..];
                 let n_explicit = prefix.chars().count() + suffix.chars().count();
                 let n_batch = shape.len().saturating_sub(n_explicit);
-                // Use uppercase batch labels to avoid collisions
                 let batch_labels: Vec<char> = (0..n_batch).map(|i| (b'A' + i as u8) as char).collect();
                 let mut labels: Vec<char> = prefix.chars().collect();
                 labels.extend(batch_labels);
@@ -298,7 +284,6 @@ impl StableHLOEmitter {
             ));
         }
 
-        // The left input tells us how many dimensions `...` represents.
         let n_batch_lhs = if lhs_str.contains("...") {
             let explicit_lhs = lhs_str.len() - 3;
             lhs_shape.len().saturating_sub(explicit_lhs)
@@ -330,10 +315,8 @@ impl StableHLOEmitter {
 
         let out_set: std::collections::HashSet<char> = out_labels.iter().copied().collect();
 
-        // A label present in both inputs and the output is a batch dimension.
         let mut lhs_batch_dims = Vec::new();
         let mut rhs_batch_dims = Vec::new();
-        // A label present in both inputs but not the output is summed over.
         let mut lhs_contract_dims = Vec::new();
         let mut rhs_contract_dims = Vec::new();
 
@@ -349,7 +332,6 @@ impl StableHLOEmitter {
             }
         }
 
-        // dot_general puts batch dimensions first, followed by each input's remaining dimensions.
         let mut batch_pairs: Vec<(i64, i64, char)> = lhs_batch_dims
             .iter()
             .zip(rhs_batch_dims.iter())
@@ -370,7 +352,6 @@ impl StableHLOEmitter {
             .collect();
         let batch_set: std::collections::HashSet<char> = batch_labels_sorted.iter().copied().collect();
 
-        // Keep the remaining dimensions in their original order.
         let mut lhs_remaining_labels = Vec::new();
         for &c in lhs_labels.iter() {
             if !batch_set.contains(&c) && !contract_set.contains(&c) {
@@ -403,7 +384,7 @@ impl StableHLOEmitter {
             .iter()
             .map(|c| *label_sizes.get(c).unwrap())
             .collect();
-        let dot_result_ty = StableHLOType::f32_tensor(dot_result_shape);
+        let dot_result_ty = dot_result_type(lhs_ty, dot_result_shape);
 
         let fmt_dims = |dims: &[i64]| -> String {
             dims.iter()
@@ -442,7 +423,6 @@ impl StableHLOEmitter {
             ));
         }
 
-        // Check if we need a transpose to match the desired output order
         if dot_output_labels == out_labels {
             Ok((reg, dot_result_ty))
         } else {
@@ -459,4 +439,11 @@ impl StableHLOEmitter {
             Ok((treg, tty))
         }
     }
+}
+
+fn dot_result_type(input: &StableHLOType, shape: Vec<i64>) -> StableHLOType {
+    StableHLOType::tensor(
+        shape,
+        input.element_type().unwrap_or(ElementType::F32),
+    )
 }

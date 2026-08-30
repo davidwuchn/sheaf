@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! IREE runtime dispatch for JIT-compiled functions and value-and-grad.
+//! IREE dispatch.
 
 #![cfg(iree_runtime)]
 
@@ -9,18 +9,44 @@ use crate::sheaf_msg;
 use crate::runtime::jit::JitVagOutcome;
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
-use crate::interpreter::value::Value;
+use crate::interpreter::value::{Dtype, Value};
 use std::collections::BTreeMap;
 
-/// Try to dispatch a function call to IREE.
-/// Returns `Some(result)` if IREE handled it, `None` to fall through to the interpreter.
-/// Skips IREE when the argument structure doesn't match the compiled signature
-/// (e.g. the model was compiled for 2 layers but called with 0).
+pub(super) fn validate_device_dtypes(args: &[Value]) -> Result<(), SheafError> {
+    let is_metal = crate::core::config::device_override() == Some("metal")
+        || crate::runtime::iree_session::IreeSession::cached_target_backend()
+            == Some("metal-spirv");
+    validate_backend_dtypes(is_metal, args)
+}
+
+fn validate_backend_dtypes(is_metal: bool, args: &[Value]) -> Result<(), SheafError> {
+    if is_metal && args.iter().any(contains_bf16) {
+        return Err(runtime_error(
+            "bf16 is not supported on Metal\n  = hint: use f16, or select a CUDA/CPU device",
+        ));
+    }
+    Ok(())
+}
+
+fn contains_bf16(value: &Value) -> bool {
+    match value {
+        Value::Tensor { dtype, .. } => *dtype == Dtype::BF16,
+        Value::DeviceBuffer(buffer) => buffer.dtype == Dtype::BF16,
+        Value::Dict(values) => values.values().any(contains_bf16),
+        Value::List(values) | Value::Tuple(values) => values.iter().any(contains_bf16),
+        _ => false,
+    }
+}
+
+/// Dispatches a compiled function when available.
 pub(super) fn try_iree_dispatch(
     func_def: &crate::core::expr::FunctionDef,
     args: &[Value],
     env: &mut Env,
 ) -> Option<Result<Value, SheafError>> {
+    if let Err(error) = validate_device_dtypes(args) {
+        return Some(Err(error));
+    }
     let aot_variant = match func_def.signature.as_ref() {
         Some(signature)
             if crate::runtime::iree_session::args_match_signature(args, &signature.param_types)
@@ -61,13 +87,11 @@ pub(super) fn try_iree_dispatch(
         Err(e) => return Some(Err(e)),
     };
 
-    // Reconstruct nested dicts/lists from flat tuples using arg type layouts
     let result = if !sig.arg_type_layouts.is_empty() {
         crate::core::inference::reconstruct_jit_result(result, &sig.return_type, &sig.arg_type_layouts)
     } else {
         result
     };
-    // Reconstruct top-level dict from tuple if the function originally returned a dict
     let result = match (&sig.return_dict_keys, result) {
         (Some(keys), Value::Tuple(elems)) if elems.len() == keys.len() => {
             let map = keys.iter().cloned().zip(elems).collect();
@@ -97,12 +121,15 @@ fn jit_dispatch_name(
     dispatch_name(&module.module_name, function_name)
 }
 
-/// Try to JIT-compile a value-and-grad call into a single VMFB (forward + backward).
+/// Compiles and dispatches value-and-grad.
 pub(super) fn try_jit_vag(
     func: &Value,
     params: &Value,
     env: &mut Env,
 ) -> JitVagOutcome {
+    if let Err(error) = validate_device_dtypes(std::slice::from_ref(params)) {
+        return JitVagOutcome::Success(Err(error));
+    }
     let augmented_func = match augment_closure_with_free_vars(func, env) {
         Some(f) => f,
         None => return JitVagOutcome::Unsupported,
@@ -144,7 +171,6 @@ pub(super) fn try_jit_vag(
         } else if let Some((_, val)) = closure.iter().find(|(k, _)| k == name) {
             args.push(val.clone());
         } else {
-            // Scalar capture, not passed to IREE
             continue;
         }
     }
@@ -194,8 +220,6 @@ pub(super) fn try_jit_vag(
     JitVagOutcome::Success(Ok(unpacked))
 }
 
-/// Augment a lambda's closure with free variables from the dynamic environment.
-/// Sheaf lambdas have empty closures (dynamic scoping) but the JIT needs explicit captures.
 fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
     let (fn_params, body, closure) = match func {
         Value::Function { params, body, closure, .. } => (params, body, closure),
@@ -205,16 +229,13 @@ fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
     let mut free_set = std::collections::HashSet::new();
     crate::autodiff::collect_free_vars(body, &mut free_set);
 
-    // Remove the lambda's own params
     for p in fn_params {
         free_set.remove(p.as_str());
     }
-    // Remove vars already in the closure
     for (k, _) in closure {
         free_set.remove(k.as_str());
     }
 
-    // Sort for deterministic parameter ordering (avoids MLIR hash changes -> cache misses)
     let mut free: Vec<&str> = free_set.iter().map(|s| s.as_str()).collect();
     free.sort();
 
@@ -223,7 +244,6 @@ fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
         if let Ok(val) = env.get(name) {
             augmented_closure.push((name.to_string(), val.clone()));
         }
-        // If not in env, leave it, the JIT will fail gracefully
     }
 
     Some(Value::Function {
@@ -234,7 +254,6 @@ fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
     })
 }
 
-/// Unpack a value-and-grad IREE result into [Float(loss), grad_dict_or_tensor].
 fn unpack_vag_result(result: &Value, original_params: &Value) -> Option<Value> {
     let elems = match result {
         Value::Tuple(elems) => elems,
@@ -245,7 +264,6 @@ fn unpack_vag_result(result: &Value, original_params: &Value) -> Option<Value> {
         return None;
     }
 
-    // First element: loss (scalar tensor -> Float)
     let loss = match &elems[0] {
         Value::Tensor { data, .. } if data.len() == 1 => {
             Value::Float(crate::interpreter::builtins::as_scalar(data))
@@ -260,27 +278,22 @@ fn unpack_vag_result(result: &Value, original_params: &Value) -> Option<Value> {
         _ => return None,
     };
 
-    // Second element: gradient (same structure as original params)
     let grad = if elems.len() == 2 {
         match original_params {
             Value::Dict(map) => tuple_to_dict(&elems[1], map)?,
             _ => elems[1].clone(),
         }
     } else {
-        // Multiple wrt params: pack remaining elements
         Value::Tuple(elems[1..].to_vec())
     };
 
     Some(Value::List(vec![loss, grad]))
 }
 
-/// Reconstruct a Dict from a Tuple, using the original Dict's key structure.
-/// Dict keys are sorted (BTreeMap), matching the tuple element order from codegen.
 fn tuple_to_dict(tuple_val: &Value, original: &BTreeMap<String, Value>) -> Option<Value> {
     let elems = match tuple_val {
         Value::Tuple(elems) => elems,
         _ => {
-            // Leaf value, not a dict, return as-is
             return Some(tuple_val.clone());
         }
     };
@@ -305,7 +318,6 @@ fn tuple_to_dict(tuple_val: &Value, original: &BTreeMap<String, Value>) -> Optio
     Some(Value::Dict(result))
 }
 
-/// Reconstruct a List from a Tuple, using the original List's element structure.
 fn tuple_to_list(tuple_val: &Value, original: &[Value]) -> Option<Value> {
     let elems = match tuple_val {
         Value::Tuple(elems) => elems,
@@ -336,7 +348,7 @@ fn tuple_to_list(tuple_val: &Value, original: &[Value]) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch_name, jit_dispatch_name};
+    use super::{dispatch_name, jit_dispatch_name, validate_backend_dtypes};
     use crate::core::inference::FunctionSignature;
     use crate::runtime::jit::CompiledModuleInfo;
 
@@ -348,6 +360,22 @@ mod tests {
             arg_type_layouts: Vec::new(),
             captured_scalars: std::collections::HashMap::new(),
         }
+    }
+
+    #[test]
+    fn metal_rejects_nested_bf16_values() {
+        let value = crate::interpreter::value::Value::Dict(
+            std::iter::once((
+                "weight".to_string(),
+                crate::interpreter::value::Value::tensor_bf16(
+                    ndarray::ArrayD::zeros(ndarray::IxDyn(&[2])),
+                ),
+            ))
+            .collect(),
+        );
+        let error = validate_backend_dtypes(true, std::slice::from_ref(&value)).unwrap_err();
+        assert!(error.to_string().contains("bf16 is not supported on Metal"));
+        assert!(validate_backend_dtypes(false, std::slice::from_ref(&value)).is_ok());
     }
 
     #[test]

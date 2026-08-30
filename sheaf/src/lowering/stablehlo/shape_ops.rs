@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Shape manipulation operations for StableHLO (reshape, transpose, concat, etc.).
+//! Shape operations.
 
 use super::{Register, StableHLOEmitter, StableHLOType};
 
@@ -44,8 +44,10 @@ impl StableHLOEmitter {
             .iter()
             .map(|&i| operand_shape[i as usize])
             .collect();
-
-        let result_ty = StableHLOType::f32_tensor(result_shape);
+        let result_ty = StableHLOType::tensor(
+            result_shape,
+            operand_ty.element_type().unwrap(),
+        );
 
         let perm_str = permutation
             .iter()
@@ -96,7 +98,10 @@ impl StableHLOEmitter {
             .sum();
 
         result_shape[dimension as usize] = concat_dim_size;
-        let result_ty = StableHLOType::f32_tensor(result_shape);
+        let result_ty = StableHLOType::tensor(
+            result_shape,
+            operand_types[0].element_type().unwrap(),
+        );
 
         let operands_str = operands
             .iter()

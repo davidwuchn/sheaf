@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Indexing, slicing, and gathering operations for StableHLO.
+//! Indexing operations.
 
 use super::{Register, StableHLOEmitter, StableHLOType};
 
@@ -28,7 +28,7 @@ impl StableHLOEmitter {
         let slice_reg = self.fresh_register();
         let mut slice_shape = shape.to_vec();
         slice_shape[0] = 1;
-        let slice_ty = StableHLOType::f32_tensor(slice_shape.clone());
+        let slice_ty = indexing_type(input_ty, slice_shape.clone());
         self.body.push(format!(
             "    {} = stablehlo.slice {} [{}] : ({}) -> {}",
             slice_reg.to_mlir(),
@@ -40,7 +40,7 @@ impl StableHLOEmitter {
 
         let result_shape: Vec<i64> = shape[1..].to_vec();
         if result_shape.is_empty() {
-            let result_ty = StableHLOType::scalar_f32();
+            let result_ty = indexing_type(input_ty, Vec::new());
             let result_reg = self.fresh_register();
             self.body.push(format!(
                 "    {} = stablehlo.reshape {} : ({}) -> {}",
@@ -51,7 +51,7 @@ impl StableHLOEmitter {
             ));
             (result_reg, result_ty)
         } else {
-            let result_ty = StableHLOType::f32_tensor(result_shape);
+            let result_ty = indexing_type(input_ty, result_shape);
             let result_reg = self.fresh_register();
             self.body.push(format!(
                 "    {} = stablehlo.reshape {} : ({}) -> {}",
@@ -84,7 +84,7 @@ impl StableHLOEmitter {
 
         let mut slice_shape = shape.to_vec();
         slice_shape[ndim - 1] = end - start;
-        let slice_ty = StableHLOType::f32_tensor(slice_shape.clone());
+        let slice_ty = indexing_type(input_ty, slice_shape.clone());
 
         let slice_reg = self.fresh_register();
         self.body.push(format!(
@@ -99,7 +99,7 @@ impl StableHLOEmitter {
         if end - start == 1 {
             let result_shape: Vec<i64> = shape[..ndim - 1].to_vec();
             if result_shape.is_empty() {
-                let result_ty = StableHLOType::scalar_f32();
+                let result_ty = indexing_type(input_ty, Vec::new());
                 let result_reg = self.fresh_register();
                 self.body.push(format!(
                     "    {} = stablehlo.reshape {} : ({}) -> {}",
@@ -110,7 +110,7 @@ impl StableHLOEmitter {
                 ));
                 (result_reg, result_ty)
             } else {
-                let result_ty = StableHLOType::f32_tensor(result_shape);
+                let result_ty = indexing_type(input_ty, result_shape);
                 let result_reg = self.fresh_register();
                 self.body.push(format!(
                     "    {} = stablehlo.reshape {} : ({}) -> {}",
@@ -146,7 +146,7 @@ impl StableHLOEmitter {
 
         let mut result_shape = shape.to_vec();
         result_shape[0] = end + 1 - start;
-        let result_ty = StableHLOType::f32_tensor(result_shape);
+        let result_ty = indexing_type(input_ty, result_shape);
 
         let result_reg = self.fresh_register();
         self.body.push(format!(
@@ -219,7 +219,7 @@ impl StableHLOEmitter {
         let mut update_shape = vec![1i64];
         update_shape.extend_from_slice(value_ty.shape());
         if value_ty.shape().is_empty() && ndim == 1 {
-            let update_ty = StableHLOType::f32_tensor(vec![1]);
+            let update_ty = indexing_type(input_ty, vec![1]);
             let update_reg = self.fresh_register();
             self.body.push(format!(
                 "    {} = stablehlo.reshape {} : ({}) -> {}",
@@ -245,7 +245,7 @@ impl StableHLOEmitter {
             ));
             (result_reg, input_ty.clone())
         } else {
-            let update_ty = StableHLOType::f32_tensor(update_shape);
+            let update_ty = indexing_type(input_ty, update_shape);
             let update_reg = self.fresh_register();
             self.body.push(format!(
                 "    {} = stablehlo.reshape {} : ({}) -> {}",
@@ -383,7 +383,7 @@ impl StableHLOEmitter {
         let row_shape = &operand_shape[1..];
         let mut result_shape: Vec<i64> = indices_shape.to_vec();
         result_shape.extend_from_slice(row_shape);
-        let result_ty = StableHLOType::f32_tensor(result_shape);
+        let result_ty = indexing_type(operand_ty, result_shape);
 
         let idx_rank = indices_shape.len();
         let offset_dims: Vec<i64> = (idx_rank..idx_rank + row_shape.len())
@@ -493,6 +493,10 @@ impl StableHLOEmitter {
             &[top_vals_ty, top_idxs_f32_ty],
         )
     }
+}
+
+fn indexing_type(input: &StableHLOType, shape: Vec<i64>) -> StableHLOType {
+    StableHLOType::tensor(shape, input.element_type().unwrap())
 }
 
 pub(super) fn format_slice_dims(starts: &[i64], limits: &[i64], strides: &[i64]) -> String {

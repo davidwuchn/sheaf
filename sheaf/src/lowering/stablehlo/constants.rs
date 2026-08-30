@@ -1,11 +1,30 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Constant emission: scalar and tensor constants for StableHLO.
+//! Constants.
+
+use crate::core::dtype::ElementType;
 
 use super::{Register, StableHLOEmitter, StableHLOType};
 
 impl StableHLOEmitter {
+    pub fn emit_typed_scalar_constant(
+        &mut self,
+        value: f64,
+        dtype: ElementType,
+    ) -> (Register, StableHLOType) {
+        let reg = self.fresh_register();
+        let ty = StableHLOType::tensor(Vec::new(), dtype);
+        let value = format_float_constant(value, dtype);
+        self.body.push(format!(
+            "    {} = stablehlo.constant dense<{}> : {}",
+            reg.to_mlir(),
+            value,
+            ty.to_mlir(),
+        ));
+        (reg, ty)
+    }
+
     pub fn emit_constant_f32(&mut self, value: f64) -> Register {
         let reg = self.fresh_register();
         let ty = StableHLOType::scalar_f32();
@@ -109,6 +128,24 @@ impl StableHLOEmitter {
 
         (reg, ty)
     }
+}
+
+fn format_float_constant(value: f64, dtype: ElementType) -> String {
+    if dtype.is_integer() || dtype == ElementType::Bool {
+        return (value as i64).to_string();
+    }
+    if value.is_infinite() {
+        return match (value.is_sign_negative(), dtype) {
+            (false, ElementType::F16) => "0x7C00".to_string(),
+            (true, ElementType::F16) => "0xFC00".to_string(),
+            (false, ElementType::BF16) => "0x7F80".to_string(),
+            (true, ElementType::BF16) => "0xFF80".to_string(),
+            (false, ElementType::F32) => "0x7F800000".to_string(),
+            (true, ElementType::F32) => "0xFF800000".to_string(),
+            _ => value.to_string(),
+        };
+    }
+    format_f64(value)
 }
 
 pub(super) fn format_f64(v: f64) -> String {

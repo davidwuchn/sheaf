@@ -101,7 +101,6 @@ impl<'a> CodeGenerator<'a> {
             CompiledExpr::Integer(v) => *v,
             CompiledExpr::Float(f) => *f as i64,
             _ => {
-                // Try resolving via codegen (e.g. shape(x, -1) returns a known scalar)
                 if let Ok((reg, _)) = self.generate(&args[1]) {
                     if let Some(v) = self.emitter.known_scalar_value(&reg) {
                         v as i64
@@ -217,7 +216,10 @@ impl<'a> CodeGenerator<'a> {
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
         if let CompiledExpr::Vector(shape_elems) = &args[1] {
             let target_shape = self.parse_shape_vec(shape_elems)?;
-            let target_ty = StableHLOType::f32_tensor(target_shape);
+            let target_ty = StableHLOType::tensor(
+                target_shape,
+                operand_ty.element_type().unwrap(),
+            );
             let reg = self.emitter.emit_broadcast(&operand_reg, &operand_ty, &target_ty);
             Ok((reg, target_ty))
         } else {
@@ -361,8 +363,8 @@ impl<'a> CodeGenerator<'a> {
 
     fn gen_where(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
         let (condition_reg, condition_ty) = self.generate(&args[0])?;
-        let (x_reg, x_ty) = self.generate(&args[1])?;
-        let (y_reg, y_ty) = self.generate(&args[2])?;
+        let (x_reg, x_ty, y_reg, y_ty) =
+            self.generate_binary_operands("where", &args[1], &args[2])?;
         let (reg, ty) = self.emitter.emit_where(
             &condition_reg,
             &x_reg,
