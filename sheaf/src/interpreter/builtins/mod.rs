@@ -96,16 +96,15 @@ fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum BinaryDtypePolicy {
+enum BinaryDtypePolicy<'a> {
     Legacy,
-    WeakScalars,
+    WeakScalars(&'a str),
 }
 
 fn result_dtype(a: Dtype, b: Dtype) -> Dtype {
     if a == b { return a; }
     if a == Dtype::Bool { return b; }
     if b == Dtype::Bool { return a; }
-    // Promote: any float wins over I32; F32 wins over BF16/F16
     match (a, b) {
         (Dtype::F32, _) | (_, Dtype::F32) => Dtype::F32,
         (Dtype::BF16, _) | (_, Dtype::BF16) => Dtype::BF16,
@@ -117,7 +116,6 @@ fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
     if args.len() < 2 {
         return Err(runtime_error(format!("+: expected at least 2 arguments, got {}", args.len())));
     }
-    // The common two-argument case borrows tensor storage instead of cloning it.
     if args.len() == 2 {
         return binary_op_two(&args[0], &args[1], op, BinaryDtypePolicy::Legacy);
     }
@@ -186,10 +184,15 @@ fn binary_op(args: &[Value], op: fn(f32, f32) -> f32) -> R {
     }
 }
 
-fn add_with_dtype_policy(args: &[Value]) -> R {
+fn arithmetic_with_dtype_policy(
+    name: &str,
+    args: &[Value],
+    op: fn(f32, f32) -> f32,
+) -> R {
     if args.len() < 2 {
         return Err(runtime_error(format!(
-            "+: expected at least 2 arguments, got {}",
+            "{}: expected at least 2 arguments, got {}",
+            name,
             args.len(),
         )));
     }
@@ -198,21 +201,19 @@ fn add_with_dtype_policy(args: &[Value]) -> R {
         result = binary_op_two(
             &result,
             arg,
-            |lhs, rhs| lhs + rhs,
-            BinaryDtypePolicy::WeakScalars,
+            op,
+            BinaryDtypePolicy::WeakScalars(name),
         )?;
     }
     Ok(result)
 }
 
-/// Zero-clone fast path for binary ops with 2 arguments.
 fn binary_op_two(
     a: &Value,
     b: &Value,
     op: fn(f32, f32) -> f32,
-    policy: BinaryDtypePolicy,
+    policy: BinaryDtypePolicy<'_>,
 ) -> R {
-    // Materialize DeviceBuffers to host for arithmetic
     let a_host;
     let b_host;
     let a = if matches!(a, Value::DeviceBuffer(_)) { a_host = a.ensure_host_cow()?; &*a_host } else { a };
@@ -220,7 +221,7 @@ fn binary_op_two(
 
     let (dt, has_strong_operand) = match policy {
         BinaryDtypePolicy::Legacy => (result_dtype(dtype_of(a), dtype_of(b)), false),
-        BinaryDtypePolicy::WeakScalars => weak_scalar_result_dtype(a, b)?,
+        BinaryDtypePolicy::WeakScalars(name) => weak_scalar_result_dtype(name, a, b)?,
     };
     let quantize = |value| {
         if has_strong_operand {
@@ -291,7 +292,11 @@ fn binary_op_two(
     Err(runtime_error(format!("Expected numbers, got {} and {}", a.short_desc(), b.short_desc())))
 }
 
-fn weak_scalar_result_dtype(a: &Value, b: &Value) -> Result<(Dtype, bool), SheafError> {
+fn weak_scalar_result_dtype(
+    name: &str,
+    a: &Value,
+    b: &Value,
+) -> Result<(Dtype, bool), SheafError> {
     use crate::core::dtype::{DtypeOperand, DtypeStrength, resolve_arithmetic_dtype};
 
     let operand = |value: &Value| match value {
@@ -301,12 +306,14 @@ fn weak_scalar_result_dtype(a: &Value, b: &Value) -> Result<(Dtype, bool), Sheaf
         Value::Tensor { dtype, .. } => Some(DtypeOperand::strong(*dtype)),
         _ => None,
     };
-    let lhs = operand(a)
-        .ok_or_else(|| runtime_error(format!("+: expected a number, got {}", a.short_desc())))?;
-    let rhs = operand(b)
-        .ok_or_else(|| runtime_error(format!("+: expected a number, got {}", b.short_desc())))?;
+    let lhs = operand(a).ok_or_else(|| {
+        runtime_error(format!("{}: expected a number, got {}", name, a.short_desc()))
+    })?;
+    let rhs = operand(b).ok_or_else(|| {
+        runtime_error(format!("{}: expected a number, got {}", name, b.short_desc()))
+    })?;
     let dtype = resolve_arithmetic_dtype(lhs, rhs)
-        .map_err(|error| runtime_error(format!("+: {}", error)))?;
+        .map_err(|error| runtime_error(format!("{}: {}", name, error)))?;
     let has_strong_operand = lhs.strength == DtypeStrength::Strong
         || rhs.strength == DtypeStrength::Strong;
     Ok((dtype, has_strong_operand))
@@ -363,7 +370,6 @@ fn get_axis(kw: &BTreeMap<String, Value>) -> Option<i64> {
     })
 }
 
-/// Extract dtype override from kwargs (e.g. :bf16 flag).
 fn get_dtype_kwarg(kw: &BTreeMap<String, Value>) -> Option<Dtype> {
     for key in kw.keys() {
         if let Some(dt) = Dtype::from_keyword(key) {
@@ -373,7 +379,6 @@ fn get_dtype_kwarg(kw: &BTreeMap<String, Value>) -> Option<Dtype> {
     None
 }
 
-/// Apply dtype kwarg override to a result value.
 fn with_dtype_kwarg(result: R, kw: &BTreeMap<String, Value>) -> R {
     if let Some(dt) = get_dtype_kwarg(kw) {
         match result? {

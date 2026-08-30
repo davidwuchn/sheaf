@@ -1,8 +1,7 @@
 // Copyright (c) 2025-2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Data-driven regression tests for Sheaf.
-//! Test cases are defined in tests.yaml and executed against the interpreter.
+//! Interpreter regressions.
 
 use sheaf_compiler::interpreter::eval_exprs;
 use std::path::Path;
@@ -27,13 +26,11 @@ fn parse_test_yaml(path: &Path) -> Vec<TestCase> {
     for (i, line) in content.lines().enumerate() {
         let l = line.trim();
 
-        // Skip comments and blank lines
         if l.is_empty() || l.starts_with('#') {
             continue;
         }
 
         if l.starts_with("- name:") {
-            // Save previous entry
             if !expr.is_empty() {
                 cases.push(TestCase {
                     name: name.clone(),
@@ -49,7 +46,6 @@ fn parse_test_yaml(path: &Path) -> Vec<TestCase> {
         } else if l.starts_with("test:") {
             let val = l.trim_start_matches("test:").trim();
             if val == ">" || val == "|" || val.is_empty() {
-                // Multi-line YAML scalar follows
                 expr.clear();
             } else {
                 expr = val.to_string();
@@ -58,9 +54,7 @@ fn parse_test_yaml(path: &Path) -> Vec<TestCase> {
             let val = l.trim_start_matches("expected:").trim().trim_matches('\'').trim_matches('"').to_string();
             expected = val;
         } else if !expected.is_empty() {
-            // Continuation line for expected (rare)
         } else {
-            // Continuation line for multi-line test expr
             if !expr.is_empty() {
                 expr.push(' ');
             }
@@ -68,7 +62,6 @@ fn parse_test_yaml(path: &Path) -> Vec<TestCase> {
         }
     }
 
-    // Last entry
     if !expr.is_empty() {
         cases.push(TestCase {
             name,
@@ -89,7 +82,6 @@ fn eval(src: &str) -> String {
 }
 
 fn normalize(s: &str) -> String {
-    // Unescape \n from YAML, collapse whitespace, trim bracket padding
     let s = s.replace("\\n", " ");
     let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
     s.replace("[ ", "[").replace(" ]", "]")
@@ -102,12 +94,10 @@ fn compare(actual: &str, expected: &str, name: &str) -> bool {
     if normalize(actual) == normalize(expected) {
         return true;
     }
-    // gensym: non-deterministic, check prefix only
     if name.contains("gensym") {
         let prefix = expected.split(|c: char| c.is_ascii_hexdigit()).next().unwrap_or(expected);
         return actual.starts_with(prefix);
     }
-    // Scalar numeric tolerance (f32)
     if let (Ok(a), Ok(e)) = (actual.parse::<f64>(), expected.parse::<f64>()) {
         return (a - e).abs() < 1e-4;
     }
@@ -134,7 +124,7 @@ fn test_all_yaml() {
         let actual = eval(&case.expr);
         if !compare(&actual, &case.expected, &case.name) {
             failures.push(format!(
-                "  [line {}] {} — expr: {}\n    expected: {}\n    got:      {}",
+                "  [line {}] {}: expr: {}\n    expected: {}\n    got:      {}",
                 case.line, case.name, case.expr, case.expected, actual
             ));
         }
@@ -163,42 +153,33 @@ fn test_guard_no_nan() {
 
     let check = GuardCheck::NoNan;
 
-    // Clean scalar: should pass
     assert!(apply_guard_check(&check, &Value::Float(1.0)).is_ok());
 
-    // NaN scalar: should fail
     assert!(apply_guard_check(&check, &Value::Float(f32::NAN)).is_err());
 
-    // Inf scalar: should fail
     assert!(apply_guard_check(&check, &Value::Float(f32::INFINITY)).is_err());
 
-    // Clean tensor: should pass
     let clean = Value::Tensor {
         data: Arc::new(ArrayD::from_shape_vec(IxDyn(&[3]), vec![1.0, 2.0, 3.0]).unwrap()),
         dtype: sheaf_compiler::interpreter::value::Dtype::F32,
     };
     assert!(apply_guard_check(&check, &clean).is_ok());
 
-    // NaN tensor: should fail
     let nan_tensor = Value::Tensor {
         data: Arc::new(ArrayD::from_shape_vec(IxDyn(&[3]), vec![1.0, f32::NAN, 3.0]).unwrap()),
         dtype: sheaf_compiler::interpreter::value::Dtype::F32,
     };
     assert!(apply_guard_check(&check, &nan_tensor).is_err());
 
-    // Dict with NaN nested inside: should fail
     let mut map = BTreeMap::new();
     map.insert("clean".to_string(), Value::Float(1.0));
     map.insert("bad".to_string(), Value::Float(f32::NAN));
     assert!(apply_guard_check(&check, &Value::Dict(map)).is_err());
 
-    // List with NaN: should fail
     let list = Value::List(vec![Value::Float(1.0), Value::Float(f32::NAN)]);
     assert!(apply_guard_check(&check, &list).is_err());
 }
 
-/// Check that a generated nested pytree can be saved and loaded correctly
-/// as safetensors.
 #[test]
 fn test_io_safetensors_roundtrip() {
     use sheaf_compiler::interpreter::value::Value;
@@ -245,7 +226,7 @@ fn test_io_safetensors_roundtrip() {
 }
 
 #[test]
-fn addition_uses_weak_scalar_dtypes() {
+fn arithmetic_uses_weak_scalar_dtypes() {
     use sheaf_compiler::core::dtype::ElementType;
     use sheaf_compiler::interpreter::value::Value;
 
@@ -268,19 +249,40 @@ fn addition_uses_weak_scalar_dtypes() {
         }
     }
 
-    let value = eval_exprs(
-        "(+ (reshape (cast (tensor [1.0]) :f16) (quote [])) 1.0)",
-    )
-    .unwrap();
-    let Value::Tensor { data, dtype } = value else {
-        panic!("expected a tensor");
-    };
-    assert!(data.shape().is_empty());
-    assert_eq!(dtype, ElementType::F16);
+    for name in ["-", "*", "/"] {
+        for dtype in [ElementType::F16, ElementType::BF16] {
+            for scalar_first in [false, true] {
+                let expression = if scalar_first {
+                    format!("({name} 1.5 (cast (tensor [2.0]) :{}))", dtype.name())
+                } else {
+                    format!("({name} (cast (tensor [2.0]) :{}) 1.5)", dtype.name())
+                };
+                let Value::Tensor { dtype: result_dtype, .. } =
+                    eval_exprs(&expression).unwrap()
+                else {
+                    panic!("expected a tensor");
+                };
+                assert_eq!(result_dtype, dtype);
+            }
+        }
+    }
 
-    let error = eval_exprs(
-        "(+ (cast (tensor [1.0]) :f16) (cast (tensor [1.0]) :bf16))",
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("dtype mismatch: f16 and bf16"));
+    for expression in [
+        "(+ (reshape (cast (tensor [1.0]) :f16) (quote [])) 1.0)",
+        "(- (reshape (cast (tensor [1.0]) :f16) (quote [])))",
+    ] {
+        let Value::Tensor { data, dtype } = eval_exprs(expression).unwrap() else {
+            panic!("expected a tensor");
+        };
+        assert!(data.shape().is_empty());
+        assert_eq!(dtype, ElementType::F16);
+    }
+
+    for name in ["+", "-", "*", "/"] {
+        let expression = format!(
+            "({name} (cast (tensor [1.0]) :f16) (cast (tensor [1.0]) :bf16))",
+        );
+        let error = eval_exprs(&expression).unwrap_err();
+        assert!(error.to_string().contains("dtype mismatch: f16 and bf16"));
+    }
 }

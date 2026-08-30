@@ -15,10 +15,7 @@ impl<'a> CodeGenerator<'a> {
         name: &str,
         args: &[CompiledExpr],
     ) -> Option<SheafResult<(Register, StableHLOType)>> {
-        if name == "+" && args.len() >= 2 {
-            Some(self.gen_add(args))
-        }
-        else if matches!(name, "-" | "*" | "/") && args.len() >= 2 {
+        if matches!(name, "+" | "-" | "*" | "/") && args.len() >= 2 {
             Some(self.gen_arithmetic(name, args))
         }
         else if matches!(name, "**" | "//" | "%" | "mod") && args.len() == 2 {
@@ -59,8 +56,9 @@ impl<'a> CodeGenerator<'a> {
         }
     }
 
-    fn gen_add(
+    fn gen_arithmetic(
         &mut self,
+        name: &str,
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
         let (mut acc_reg, mut acc_ty) = self.generate(&args[0])?;
@@ -69,8 +67,8 @@ impl<'a> CodeGenerator<'a> {
         for arg in &args[1..] {
             let (mut rhs_reg, mut rhs_ty) = self.generate(arg)?;
             let rhs_is_weak = self.weak_scalars.contains(&rhs_reg);
-            let lhs_dtype = acc_ty.element_type().ok_or_else(add_type_error)?;
-            let rhs_dtype = rhs_ty.element_type().ok_or_else(add_type_error)?;
+            let lhs_dtype = acc_ty.element_type().ok_or_else(|| arithmetic_type_error(name))?;
+            let rhs_dtype = rhs_ty.element_type().ok_or_else(|| arithmetic_type_error(name))?;
             let dtype = resolve_arithmetic_dtype(
                 if acc_is_weak {
                     DtypeOperand::weak(lhs_dtype)
@@ -84,40 +82,31 @@ impl<'a> CodeGenerator<'a> {
                 },
             )
             .map_err(|error| SheafError::Compile {
-                message: format!("+: {}", error),
+                message: format!("{}: {}", name, error),
                 location: crate::core::error::SourceLocation::unknown(),
             })?;
 
             if lhs_dtype != dtype {
-                let target = acc_ty.with_element_type(dtype).ok_or_else(add_type_error)?;
+                let target = acc_ty
+                    .with_element_type(dtype)
+                    .ok_or_else(|| arithmetic_type_error(name))?;
                 acc_reg = self.emitter.emit_convert(&acc_reg, &acc_ty, &target);
                 acc_ty = target;
             }
             if rhs_dtype != dtype {
-                let target = rhs_ty.with_element_type(dtype).ok_or_else(add_type_error)?;
+                let target = rhs_ty
+                    .with_element_type(dtype)
+                    .ok_or_else(|| arithmetic_type_error(name))?;
                 rhs_reg = self.emitter.emit_convert(&rhs_reg, &rhs_ty, &target);
                 rhs_ty = target;
             }
 
             (acc_reg, acc_ty) =
-                self.emitter.emit_binop("+", &acc_reg, &rhs_reg, &acc_ty, &rhs_ty);
+                self.emitter.emit_binop(name, &acc_reg, &rhs_reg, &acc_ty, &rhs_ty);
             acc_is_weak &= rhs_is_weak;
             if acc_is_weak {
                 self.weak_scalars.insert(acc_reg);
             }
-        }
-        Ok((acc_reg, acc_ty))
-    }
-
-    fn gen_arithmetic(
-        &mut self,
-        name: &str,
-        args: &[CompiledExpr],
-    ) -> SheafResult<(Register, StableHLOType)> {
-        let (mut acc_reg, mut acc_ty) = self.generate(&args[0])?;
-        for arg in &args[1..] {
-            let (rhs_reg, rhs_ty) = self.generate(arg)?;
-            (acc_reg, acc_ty) = self.emitter.emit_binop(name, &acc_reg, &rhs_reg, &acc_ty, &rhs_ty);
         }
         Ok((acc_reg, acc_ty))
     }
@@ -188,7 +177,7 @@ impl<'a> CodeGenerator<'a> {
     }
 
     fn gen_tan(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
-        // stablehlo.tangent is not supported by IREE 3.10, so emit tan = sin / cos.
+        // IREE does not support stablehlo.tangent.
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
         let sin_reg = self.emitter.emit_unary("sin", &operand_reg, &operand_ty);
         let cos_reg = self.emitter.emit_unary("cos", &operand_reg, &operand_ty);
@@ -229,9 +218,9 @@ impl<'a> CodeGenerator<'a> {
     }
 }
 
-fn add_type_error() -> SheafError {
+fn arithmetic_type_error(name: &str) -> SheafError {
     SheafError::Compile {
-        message: "+: expected tensor or scalar operands".to_string(),
+        message: format!("{}: expected tensor or scalar operands", name),
         location: crate::core::error::SourceLocation::unknown(),
     }
 }

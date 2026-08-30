@@ -32,32 +32,45 @@ fn builtin_add(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if args.len() == 1 {
         return Ok(args[0].clone());
     }
-    with_dtype_kwarg(add_with_dtype_policy(args), kw)
+    with_dtype_kwarg(
+        arithmetic_with_dtype_policy("+", args, |lhs, rhs| lhs + rhs),
+        kw,
+    )
 }
 
 fn builtin_sub(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if args.len() == 1 {
         let (arr, dt) = to_array(&args[0])?;
         let result = arr.mapv(|x| -x);
-        if result.ndim() == 0 {
-            let x = as_scalar(&result);
-            if dt == Dtype::I32 { return Ok(Value::Int(x as i64)); }
-            return Ok(Value::Float(x));
+        if matches!(&args[0], Value::Tensor { .. }) {
+            return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
         }
-        return Ok(Value::Tensor { data: Arc::new(result), dtype: dt });
+        let x = as_scalar(&result);
+        if dt == Dtype::I32 {
+            return Ok(Value::Int(x as i64));
+        }
+        return Ok(Value::Float(x));
     }
-    with_dtype_kwarg(binary_op(args, |a, b| a - b), kw)
+    with_dtype_kwarg(
+        arithmetic_with_dtype_policy("-", args, |lhs, rhs| lhs - rhs),
+        kw,
+    )
 }
 
 fn builtin_mul(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
-    with_dtype_kwarg(binary_op(args, |a, b| a * b), kw)
+    with_dtype_kwarg(
+        arithmetic_with_dtype_policy("*", args, |lhs, rhs| lhs * rhs),
+        kw,
+    )
 }
 
 fn builtin_div(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
-    let result = binary_op(args, |a, b| a / b)?;
+    let result = arithmetic_with_dtype_policy("/", args, |lhs, rhs| lhs / rhs)?;
     let result = match result {
-        Value::Int(n) => Ok(Value::Float(n as f32)),
-        Value::Tensor { data, .. } => Ok(Value::Tensor { data, dtype: Dtype::F32 }),
+        Value::Int(value) => Ok(Value::Float(value as f32)),
+        Value::Tensor { data, dtype: Dtype::I32 } => {
+            Ok(Value::Tensor { data, dtype: Dtype::F32 })
+        }
         other => Ok(other),
     };
     with_dtype_kwarg(result, kw)
@@ -72,7 +85,6 @@ fn builtin_mod(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_pow(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    // Use multiplication for small integer exponents.
     if args.len() == 2 {
         let exp_int = match &args[1] {
             Value::Int(n) => Some(*n),
@@ -211,7 +223,6 @@ fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             Ok(Value::tensor_f32(a1.dot(&b2).into_dyn()))
         }
         _ if a.ndim() >= 2 && b.ndim() >= 2 => {
-            // [..., M, K] @ [..., K, N] -> [..., M, N]
             let a_shape = a.shape();
             let b_shape = b.shape();
             let m = a_shape[a.ndim() - 2];
@@ -235,7 +246,6 @@ fn builtin_matmul(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
                     .map_err(|e| runtime_error(e.to_string()))?)
             } else { None };
 
-            // Make batched inputs contiguous before reshaping.
             let a_flat = if a.ndim() > 2 {
                 Some(a.as_standard_layout().into_owned().into_shape_with_order((batch_size, m, k))
                     .map_err(|e| runtime_error(format!("@: reshape a: {}", e)))?)

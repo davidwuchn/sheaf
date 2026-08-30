@@ -119,11 +119,21 @@ sheaf_program_test(
     name = "regression_runtime_dtypes",
     expression = """
 (defn sixteen-bit-roundtrip [x] (reshape x (quote [1])))
+(defn sixteen-bit-arithmetic [x]
+  {:sub (- x 1.0) :mul (* x 2.0) :div (/ x 2.0)})
 (let [f16 (sixteen-bit-roundtrip (cast (tensor [1.0006]) :f16))
-      bf16 (sixteen-bit-roundtrip (cast (tensor [1.005]) :bf16))]
+      bf16 (sixteen-bit-roundtrip (cast (tensor [1.005]) :bf16))
+      f16-arithmetic (sixteen-bit-arithmetic (cast (tensor [2.0]) :f16))
+      bf16-arithmetic (sixteen-bit-arithmetic (cast (tensor [2.0]) :bf16))]
   (do
     (guard :range [1.0009 1.0011] f16)
     (guard :range [1.007 1.009] bf16)
+    (guard :range [0.99 1.01] (get f16-arithmetic :sub))
+    (guard :range [3.99 4.01] (get f16-arithmetic :mul))
+    (guard :range [0.99 1.01] (get f16-arithmetic :div))
+    (guard :range [0.99 1.01] (get bf16-arithmetic :sub))
+    (guard :range [3.99 4.01] (get bf16-arithmetic :mul))
+    (guard :range [0.99 1.01] (get bf16-arithmetic :div))
     true))
 """,
     size = "small",

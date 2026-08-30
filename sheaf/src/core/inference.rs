@@ -436,11 +436,9 @@ fn infer_function_call_type(
     weak_scalars: &std::collections::HashSet<String>,
 ) -> SheafResult<StableHLOType> {
     match name {
-        "+" => infer_add_type(args, symbol_types, weak_scalars),
-        "-" | "*" | "/" => args
-            .first()
-            .map(|arg| infer_type_with_weak_scalars(arg, symbol_types, weak_scalars))
-            .unwrap_or_else(|| Ok(StableHLOType::scalar_f32())),
+        "+" | "-" | "*" | "/" => {
+            infer_arithmetic_type(name, args, symbol_types, weak_scalars)
+        },
         "@" => {
             if args.len() != 2 {
                 return Ok(StableHLOType::scalar_f32());
@@ -485,7 +483,8 @@ fn infer_function_call_type(
     }
 }
 
-fn infer_add_type(
+fn infer_arithmetic_type(
+    name: &str,
     args: &[CompiledExpr],
     symbol_types: &std::collections::HashMap<String, StableHLOType>,
     weak_scalars: &std::collections::HashSet<String>,
@@ -514,13 +513,14 @@ fn infer_add_type(
             },
         )
         .map_err(|error| SheafError::Compile {
-            message: format!("+: {}", error),
+            message: format!("{}: {}", name, error),
             location: crate::core::error::SourceLocation::unknown(),
         })?;
         let shape = crate::core::shape::broadcast_shapes(result.shape(), rhs.shape())
             .map_err(|error| SheafError::Compile {
                 message: format!(
-                    "+: cannot broadcast dimensions {} and {}",
+                    "{}: cannot broadcast dimensions {} and {}",
+                    name,
                     error.lhs,
                     error.rhs,
                 ),
@@ -546,7 +546,9 @@ fn is_weak_scalar(
     match expr {
         CompiledExpr::Integer(_) | CompiledExpr::Float(_) => true,
         CompiledExpr::Symbol(name) => weak_scalars.contains(name),
-        CompiledExpr::FunctionCall { name, args, .. } if name == "+" => {
+        CompiledExpr::FunctionCall { name, args, .. }
+            if matches!(name.as_str(), "+" | "-" | "*" | "/") =>
+        {
             args.iter().all(|arg| is_weak_scalar(arg, weak_scalars))
         }
         CompiledExpr::Do(exprs) => exprs
@@ -728,33 +730,35 @@ mod tests {
     }
 
     #[test]
-    fn addition_uses_tensor_dtype_for_weak_scalars() {
+    fn arithmetic_uses_tensor_dtype_for_weak_scalars() {
         let mut symbols = std::collections::HashMap::new();
         symbols.insert(
             "x".to_string(),
             StableHLOType::f16_tensor(vec![2]),
         );
-        let expr = CompiledExpr::Let {
-            bindings: vec![(
-                BindingPattern::Simple("one".to_string()),
-                make_compiled_float(1.0),
-            )],
-            body: Box::new(make_compiled_call(
-                "+",
-                vec![
-                    CompiledExpr::Symbol("x".to_string()),
-                    CompiledExpr::Symbol("one".to_string()),
-                ],
-            )),
-        };
-        assert_eq!(
-            infer_type_with_context(&expr, &symbols).unwrap(),
-            StableHLOType::f16_tensor(vec![2]),
-        );
+        for name in ["+", "-", "*", "/"] {
+            let expr = CompiledExpr::Let {
+                bindings: vec![(
+                    BindingPattern::Simple("one".to_string()),
+                    make_compiled_float(1.0),
+                )],
+                body: Box::new(make_compiled_call(
+                    name,
+                    vec![
+                        CompiledExpr::Symbol("x".to_string()),
+                        CompiledExpr::Symbol("one".to_string()),
+                    ],
+                )),
+            };
+            assert_eq!(
+                infer_type_with_context(&expr, &symbols).unwrap(),
+                StableHLOType::f16_tensor(vec![2]),
+            );
+        }
     }
 
     #[test]
-    fn addition_rejects_strong_dtype_mismatches() {
+    fn arithmetic_rejects_strong_dtype_mismatches() {
         let mut symbols = std::collections::HashMap::new();
         symbols.insert(
             "x".to_string(),
@@ -764,14 +768,16 @@ mod tests {
             "y".to_string(),
             StableHLOType::bf16_tensor(vec![2]),
         );
-        let expr = make_compiled_call(
-            "+",
-            vec![
-                CompiledExpr::Symbol("x".to_string()),
-                CompiledExpr::Symbol("y".to_string()),
-            ],
-        );
-        assert!(infer_type_with_context(&expr, &symbols).is_err());
+        for name in ["+", "-", "*", "/"] {
+            let expr = make_compiled_call(
+                name,
+                vec![
+                    CompiledExpr::Symbol("x".to_string()),
+                    CompiledExpr::Symbol("y".to_string()),
+                ],
+            );
+            assert!(infer_type_with_context(&expr, &symbols).is_err());
+        }
     }
 
     #[test]
