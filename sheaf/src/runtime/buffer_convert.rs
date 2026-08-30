@@ -101,7 +101,7 @@ pub(super) unsafe fn value_to_buffer_view(
                 value_to_buffer_view(device, allocator, &tensor)
             }
             Value::DeviceBuffer(db) => {
-                // The caller owns the returned reference and may cache it.
+                // Return a retained reference.
                 iree_hal_buffer_view_retain(db.buffer_view());
                 Ok(db.buffer_view())
             }
@@ -198,10 +198,6 @@ pub(super) unsafe fn buffer_view_to_value(
     }
 }
 
-/// Flatten a list of values into individual tensor leaf references.
-/// Dicts are sorted by key (matching codegen convention), then recursed.
-/// Tuples are recursed. Scalars/tensors pass through.
-/// Returns references to avoid cloning tensor data.
 pub(super) fn flatten_values(inputs: &[Value]) -> Result<Vec<&Value>, SheafError> {
     let mut flat = Vec::new();
     for val in inputs {
@@ -213,7 +209,6 @@ pub(super) fn flatten_values(inputs: &[Value]) -> Result<Vec<&Value>, SheafError
 fn flatten_value<'a>(val: &'a Value, out: &mut Vec<&'a Value>) -> Result<(), SheafError> {
     match val {
         Value::Dict(map) => {
-            // Keys are already sorted (BTreeMap)
             for v in map.values() {
                 flatten_value(v, out)?;
             }
@@ -237,8 +232,6 @@ fn flatten_value<'a>(val: &'a Value, out: &mut Vec<&'a Value>) -> Result<(), She
     }
 }
 
-/// Reconstruct a nested Value from a flat list of tensor Values,
-/// guided by a StableHLOType structure.
 pub(super) fn unflatten_value(
     ty: &crate::lowering::stablehlo::StableHLOType,
     flat: &[Value],
@@ -263,13 +256,30 @@ pub(super) fn unflatten_value(
             }
         }
         _ => {
-            if *cursor < flat.len() {
-                let val = flat[*cursor].clone();
-                *cursor += 1;
-                Ok(val)
-            } else {
-                Err(iree_err("not enough IREE outputs to reconstruct tuple structure"))
+            if *cursor >= flat.len() {
+                return Err(iree_err(
+                    "not enough IREE outputs to reconstruct tuple structure",
+                ));
             }
+            let value = flat[*cursor].clone();
+            *cursor += 1;
+            if let StableHLOType::Tensor { shape, dtype } = ty
+                && shape.is_empty()
+            {
+                let scalar = match &value {
+                    Value::Float(value) => Some(*value),
+                    Value::Int(value) => Some(*value as f32),
+                    Value::Bool(value) => Some(if *value { 1.0 } else { 0.0 }),
+                    _ => None,
+                };
+                if let Some(scalar) = scalar {
+                    return Ok(Value::Tensor {
+                        data: Arc::new(ArrayD::from_elem(Vec::new(), scalar)),
+                        dtype: *dtype,
+                    });
+                }
+            }
+            Ok(value)
         }
     }
 }
@@ -283,8 +293,9 @@ pub(crate) fn iree_err(msg: &str) -> SheafError {
 
 #[cfg(test)]
 mod tests {
-    use super::value_to_buffer_view;
+    use super::{unflatten_value, value_to_buffer_view};
     use crate::interpreter::value::{Dtype, Value};
+    use crate::lowering::stablehlo::StableHLOType;
     use ndarray::{ArrayD, IxDyn};
     use std::sync::Arc;
 
@@ -299,6 +310,33 @@ mod tests {
         };
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn preserves_rank_zero_tensor_results() {
+        let mut cursor = 0;
+        let value = unflatten_value(
+            &StableHLOType::tensor(Vec::new(), Dtype::F16),
+            &[Value::Float(2.0)],
+            &mut cursor,
+        )
+        .unwrap();
+        let Value::Tensor { data, dtype } = value else {
+            panic!("expected a tensor");
+        };
+        assert!(data.shape().is_empty());
+        assert_eq!(dtype, Dtype::F16);
+
+        let mut cursor = 0;
+        assert!(matches!(
+            unflatten_value(
+                &StableHLOType::ScalarF16,
+                &[Value::Float(2.0)],
+                &mut cursor,
+            )
+            .unwrap(),
+            Value::Float(2.0),
+        ));
     }
 
     #[test]
