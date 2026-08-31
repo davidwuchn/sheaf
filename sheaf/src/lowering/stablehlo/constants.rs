@@ -25,6 +25,27 @@ impl StableHLOEmitter {
         (reg, ty)
     }
 
+    pub fn emit_typed_splat_constant(
+        &mut self,
+        value: f64,
+        shape: &[i64],
+        dtype: ElementType,
+    ) -> (Register, StableHLOType) {
+        let reg = self.fresh_register();
+        let ty = StableHLOType::tensor(shape.to_vec(), dtype);
+        let value_str = format_float_constant(value, dtype);
+        self.body.push(format!(
+            "    {} = stablehlo.constant dense<{}> : {}",
+            reg.to_mlir(),
+            value_str,
+            ty.to_mlir(),
+        ));
+        if shape.is_empty() {
+            self.known_scalars.insert(reg, value);
+        }
+        (reg, ty)
+    }
+
     pub fn emit_constant_f32(&mut self, value: f64) -> Register {
         let reg = self.fresh_register();
         let ty = StableHLOType::scalar_f32();

@@ -1,15 +1,10 @@
 // Copyright (c) 2026 Damien Boureille
 // Licensed under the MIT License.
 
-//! Reverse-mode autodiff on Administrative Normal Form (ANF).
+//! Reverse-mode autodiff on Administrative Normal Form.
 //!
-//! Two passes:
-//! 1. `to_anf`: flatten function calls and `let` bindings. Vectors stay inline
-//!    because codegen needs to inspect them.
-//!
-//! 2. `reverse_grad`: walk the ANF bindings in reverse, emitting backward
-//!    bindings that compute adjoint contributions.  Each adjoint is itself a
-//!    named binding, so the backward expression is also flat.
+//! The forward pass gives every intermediate a name. The backward pass then
+//! walks those intermediates in reverse order to build their gradients.
 
 use crate::autodiff::replace_symbol;
 use crate::core::error::{SheafError, SheafResult};
@@ -44,11 +39,9 @@ fn is_trivial(expr: &CompiledExpr) -> bool {
     )
 }
 
-/// Flatten function calls and `let` bindings.
+/// Convert an expression to ANF.
 ///
-/// Vectors stay inline because codegen needs to inspect them. Other unsupported
-/// expressions are assigned a name but are not flattened recursively. Reverse
-/// mode reports an error if a gradient depends on one of them.
+/// Vectors stay inline because codegen reads them directly as shapes.
 pub fn to_anf(expr: &CompiledExpr) -> CompiledExpr {
     let mut bindings = Vec::new();
     let mut names = AnfNameGenerator::default();
@@ -63,7 +56,6 @@ pub fn to_anf(expr: &CompiledExpr) -> CompiledExpr {
     }
 }
 
-/// Flatten `expr`, add its bindings to `out`, and return its value.
 fn anf_rec(
     expr: &CompiledExpr,
     out: &mut Vec<(BindingPattern, CompiledExpr)>,
@@ -72,7 +64,6 @@ fn anf_rec(
     match expr {
         _ if is_trivial(expr) => expr.clone(),
 
-        // FunctionCall: ANF-ify all args, then bind the call
         CompiledExpr::FunctionCall { name, args, loc } => {
             let anf_args: Vec<CompiledExpr> =
                 args.iter().map(|arg| anf_rec(arg, out, names)).collect();
@@ -86,14 +77,10 @@ fn anf_rec(
             CompiledExpr::Symbol(sym)
         }
 
-        // Let: flatten bindings with alpha-renaming to avoid shadowing.
-        // Each binding name gets a fresh __anf_N name. Using a HashMap
-        // ensures that when a name is rebound (e.g. `as->` threading),
-        // only the LATEST rename is applied to subsequent values and body.
+        // Give each let binding a unique name so shadowed variables keep the right value.
         CompiledExpr::Let { bindings, body } => {
             let mut rename_map: HashMap<String, String> = HashMap::new();
             for (name, value) in bindings {
-                // Apply accumulated renames to this binding's value
                 let mut val = value.clone();
                 for (old, new_name) in &rename_map {
                     val = replace_symbol(&val, old, &CompiledExpr::Symbol(new_name.clone()));
@@ -102,11 +89,7 @@ fn anf_rec(
                 let anf_val = anf_rec(&val, out, names);
                 let fresh = names.fresh();
                 out.push((BindingPattern::Simple(fresh.clone()), anf_val));
-                // HashMap::insert overwrites previous entry for same name,
-                // so body/subsequent values always see the LATEST binding.
-                // Per the destructuring elim contract, the binding should be
-                // desugared before reaching here, so a Destructure would be a
-                // bug. debug_assert catches it loudly during development.
+                // Destructured bindings should already have been replaced with simple names.
                 debug_assert!(
                     matches!(name, BindingPattern::Simple(_)),
                     "ANF: expected Simple binding pattern (destructure should be desugared), got {:?}",
@@ -118,7 +101,6 @@ fn anf_rec(
                 };
                 rename_map.insert(simple_name, fresh);
             }
-            // Apply renames to body
             let mut renamed_body = body.as_ref().clone();
             for (old, new_name) in &rename_map {
                 renamed_body = replace_symbol(&renamed_body, old, &CompiledExpr::Symbol(new_name.clone()));
@@ -126,7 +108,6 @@ fn anf_rec(
             anf_rec(&renamed_body, out, names)
         }
 
-        // Do: process all expressions, return the last
         CompiledExpr::Do(exprs) => {
             let mut last = CompiledExpr::Nil;
             for e in exprs {
@@ -135,16 +116,12 @@ fn anf_rec(
             last
         }
 
-        // Vector: ANF-ify elements but keep the Vector inline (not bound).
-        // Vectors are structural (shape specs, etc.), not computational.
-        // Binding them to symbols breaks pattern matching in codegen (e.g. reshape).
         CompiledExpr::Vector(elems) => {
             let anf_elems: Vec<CompiledExpr> =
                 elems.iter().map(|elem| anf_rec(elem, out, names)).collect();
             CompiledExpr::Vector(anf_elems)
         }
 
-        // Anything else: bind directly
         other => {
             let sym = names.fresh();
             out.push((BindingPattern::Simple(sym.clone()), other.clone()));
@@ -153,38 +130,32 @@ fn anf_rec(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Reverse-mode AD on ANF bindings
-// ---------------------------------------------------------------------------
-
 fn fresh_grad_name(bindings: &[(String, CompiledExpr)]) -> String {
     format!("__grad_{}", bindings.len())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GradientOutput {
-    /// Name of the materialized adjoint binding.
+    /// Binding that contains the computed gradient.
     Computed(String),
-    /// No VJP path reaches the symbol with a nonzero contribution.
+    /// No gradient reaches this parameter.
     ProvenZero,
 }
 
 #[derive(Debug)]
 pub struct ReverseGradResult {
-    /// Flat let bindings computing all adjoint intermediates.
+    /// Bindings that compute the gradients.
     pub backward_bindings: Vec<(String, CompiledExpr)>,
-    /// Contains exactly one explicit outcome for every requested `wrt` symbol.
+    /// Result for each requested parameter.
     pub gradients: HashMap<String, GradientOutput>,
 }
 
 impl ReverseGradResult {
-    /// Return the output for a requested symbol.
     pub fn gradient_output(&self, symbol: &str) -> SheafResult<&GradientOutput> {
         gradient_output(&self.gradients, symbol)
     }
 }
 
-/// Return a gradient output, rejecting an incomplete result map.
 pub fn gradient_output<'a>(
     gradients: &'a HashMap<String, GradientOutput>,
     symbol: &str,
@@ -201,11 +172,9 @@ struct AdjointState {
     zero_contributions: HashSet<String>,
 }
 
-/// Compute reverse-mode gradients of an ANF expression with respect to a set
-/// of parameter names.
+/// Differentiate an ANF expression with respect to `wrt`.
 ///
-/// The backward bindings reference the forward ANF bindings by name.
-/// The caller must emit both forward and backward bindings in a single scope.
+/// The caller must emit the forward and backward bindings in the same scope.
 pub fn reverse_grad(
     anf_bindings: &[(String, CompiledExpr)],
     anf_body: &CompiledExpr,
@@ -218,11 +187,13 @@ pub fn reverse_grad(
 
     if let CompiledExpr::Symbol(s) = anf_body {
         let seed_name = fresh_grad_name(&backward_bindings);
-        backward_bindings.push((seed_name.clone(), CompiledExpr::Float(1.0)));
+        backward_bindings.push((
+            seed_name.clone(),
+            call("__ones-like", vec![anf_body.clone()]),
+        ));
         adj_names.names.insert(s.clone(), seed_name);
     }
 
-    // Walk bindings in reverse
     for (name, value) in anf_bindings.iter().rev() {
         let adj_sym = match adj_names.names.get(name) {
             Some(s) => CompiledExpr::Symbol(s.clone()),
@@ -243,7 +214,7 @@ pub fn reverse_grad(
         )?;
     }
 
-    // VJP reachability is recorded before zero contributions are discarded.
+    // A gradient path still exists when its contribution simplifies to zero.
     let grad_map: HashMap<String, GradientOutput> = wrt
         .iter()
         .map(|param| {
@@ -265,10 +236,10 @@ pub fn reverse_grad(
     })
 }
 
-/// Determine which ANF bindings transitively depend on differentiated inputs.
+/// Mark every binding that depends on a parameter being differentiated.
 ///
-/// Unknown ANF forms are conservatively dependent, so they cannot turn a
-/// missing reverse rule into a plausible zero gradient.
+/// If an expression is not understood here, assume it depends on the parameter.
+/// This reports a missing derivative instead of silently returning zero.
 fn analyze_anf_dependencies(
     anf_bindings: &[(String, CompiledExpr)],
     wrt: &[String],
@@ -324,10 +295,6 @@ fn anf_expr_depends_on_wrt(expr: &CompiledExpr, dependencies: &HashMap<String, b
     }
 }
 
-/// Add a contribution to the adjoint of `var_name`, emitting a new binding.
-///
-/// If `var_name` already has an adjoint, emit `new_adj = old_adj + contribution`.
-/// Otherwise, the contribution IS the adjoint.
 fn accumulate_named(
     var_name: &str,
     contribution: CompiledExpr,
@@ -396,8 +363,6 @@ fn shape_vec(shape: &[i64]) -> CompiledExpr {
     )
 }
 
-/// Wrap `adj` with a `sum_to_shape` call if the adjoint shape differs from
-/// the target operand shape (i.e. when the forward op involved broadcasting).
 fn maybe_unbroadcast(
     adj: CompiledExpr,
     target_arg: &CompiledExpr,
@@ -405,10 +370,7 @@ fn maybe_unbroadcast(
     bindings: &mut Vec<(String, CompiledExpr)>,
 ) -> CompiledExpr {
     if let Some(target_shape) = arg_shape(target_arg, shapes) {
-        // We don't know the adj shape directly, but if we can look up the
-        // result shape (shape of the binding that produced the forward
-        // value), we can compare.  For now, always emit sum_to_shape and
-        // let the codegen handle the identity case (same shape -> no-op).
+        // Codegen drops this reduction when the shapes already match.
         let reduced = emit_binding(
             bindings,
             call("sum_to_shape", vec![adj, shape_vec(&target_shape)]),
@@ -470,10 +432,6 @@ struct ReverseContext<'a> {
     dependencies: &'a HashMap<String, bool>,
 }
 
-/// Distribute the adjoint `adj_sym` (a Symbol) to the operands of `expr`.
-///
-/// All emitted expressions reference `adj_sym` by Symbol, never clone the
-/// underlying expression: this guarantees O(1) per distribution step.
 fn distribute_adjoint_named(
     expr: &CompiledExpr,
     adj_sym: &CompiledExpr,
@@ -523,7 +481,6 @@ fn distribute_fn_adjoint_named(
     let fwd_name = context.fwd_name;
     let dependencies = context.dependencies;
     match name {
-        // stop-gradient: forward is identity, but no gradient flows backward.
         "stop-gradient" => {}
 
         "+" => {
@@ -642,9 +599,7 @@ fn distribute_fn_adjoint_named(
         }
 
         "einsum" => {
-            // einsum("lhs_sub,rhs_sub->out_sub", A, B)
-            // dL/dA = einsum("out_sub,rhs_sub->lhs_sub", adj, B)
-            // dL/dB = einsum("lhs_sub,out_sub->rhs_sub", A, adj)
+            // Build each operand's gradient from the output gradient and the other operand.
             let Some(CompiledExpr::String(sub)) = args.first() else {
                 return reject_missing_rule_if_dependent("einsum", fwd_name, dependencies, location);
             };
@@ -684,8 +639,15 @@ fn distribute_fn_adjoint_named(
             acc_arg(&args[0], sym(&dt), adj_names, bindings);
         }
 
+        "__cast-like" if args.len() == 2 => {
+            let cast = emit_binding(
+                bindings,
+                call("__cast-like", vec![adj.clone(), args[0].clone()]),
+            );
+            acc_arg(&args[0], sym(&cast), adj_names, bindings);
+        }
+
         "reshape" => {
-            // d_input = reshape(adj, input_shape)
             if let Some(input_shape) = arg_shape(&args[0], shapes) {
                 let shape_vec = CompiledExpr::Vector(
                     input_shape.iter().map(|&d| CompiledExpr::Integer(d)).collect()
@@ -693,52 +655,40 @@ fn distribute_fn_adjoint_named(
                 let dr = emit_binding(bindings, call("reshape", vec![adj.clone(), shape_vec]));
                 acc_arg(&args[0], sym(&dr), adj_names, bindings);
             } else {
-                // Fallback: pass through (may produce shape errors)
                 acc_arg(&args[0], adj.clone(), adj_names, bindings);
             }
         }
 
         "swapaxes" if args.len() == 3 => {
-            // swapaxes is self-inverse: d_input = swapaxes(adj, axis1, axis2)
             let dr = emit_binding(bindings, call("swapaxes", vec![adj.clone(), args[1].clone(), args[2].clone()]));
             acc_arg(&args[0], sym(&dr), adj_names, bindings);
         }
 
         "relu" => {
-            // d_input = adj * (x > 0)
             let cond = emit_binding(bindings, call(">", vec![args[0].clone(), float(0.0)]));
             let dr = emit_binding(bindings, call("where", vec![sym(&cond), adj.clone(), float(0.0)]));
             acc_arg(&args[0], sym(&dr), adj_names, bindings);
         }
 
         "gelu" => {
-            // VJP for the tanh approximation used by the forward GELU.
-            // gelu(x) = 0.5 * x * (1 + tanh(k)),  k = sqrt(2/pi) * (x + 0.044715 * x^3)
-            // gelu'(x) = 0.5 * (1 + tanh(k)) + 0.5 * x * sech²(k) * k'
-            // k' = sqrt(2/pi) * (1 + 3 * 0.044715 * x^2),  sech²(k) = 1 - tanh²(k)
+            // This must match the tanh approximation used by the forward GELU.
             let x = &args[0];
             let x2 = emit_binding(bindings, call("*", vec![x.clone(), x.clone()]));
             let x3 = emit_binding(bindings, call("*", vec![sym(&x2), x.clone()]));
-            // k = 0.7978846 * (x + 0.044715 * x^3)
             let coeff_x3 = emit_binding(bindings, call("*", vec![float(0.044715), sym(&x3)]));
             let inner = emit_binding(bindings, call("+", vec![x.clone(), sym(&coeff_x3)]));
             let k = emit_binding(bindings, call("*", vec![float(0.7978845608), sym(&inner)]));
             let tanh_k = emit_binding(bindings, call("tanh", vec![sym(&k)]));
-            // 0.5 * (1 + tanh(k))
             let one_plus_tanh = emit_binding(bindings, call("+", vec![float(1.0), sym(&tanh_k)]));
             let half_term1 = emit_binding(bindings, call("*", vec![float(0.5), sym(&one_plus_tanh)]));
-            // sech^2(k) = 1 - tanh^2(k)
             let tanh_sq = emit_binding(bindings, call("*", vec![sym(&tanh_k), sym(&tanh_k)]));
             let sech2 = emit_binding(bindings, call("-", vec![float(1.0), sym(&tanh_sq)]));
-            // k' = 0.7978846 * (1 + 3 * 0.044715 * x^2) = 0.7978846 * (1 + 0.134145 * x^2)
             let coeff_x2 = emit_binding(bindings, call("*", vec![float(0.134145), sym(&x2)]));
             let kp_inner = emit_binding(bindings, call("+", vec![float(1.0), sym(&coeff_x2)]));
             let kp = emit_binding(bindings, call("*", vec![float(0.7978845608), sym(&kp_inner)]));
-            // term2 = 0.5 * x * sech^2(k) * k'
             let x_sech2 = emit_binding(bindings, call("*", vec![x.clone(), sym(&sech2)]));
             let x_sech2_kp = emit_binding(bindings, call("*", vec![sym(&x_sech2), sym(&kp)]));
             let half_term2 = emit_binding(bindings, call("*", vec![float(0.5), sym(&x_sech2_kp)]));
-            // gelu'(x) = term1 + term2
             let gelu_grad = emit_binding(bindings, call("+", vec![sym(&half_term1), sym(&half_term2)]));
             let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&gelu_grad)]));
             acc_arg(&args[0], sym(&contrib), adj_names, bindings);
@@ -761,7 +711,6 @@ fn distribute_fn_adjoint_named(
         }
 
         "log-softmax" => {
-            // d_input = adj - exp(log_softmax(x)) * sum(adj, axis=-1, keepdims=true)
             let axis = parse_keyword_int(args, "axis").unwrap_or(-1);
             let fwd_args: Vec<CompiledExpr> = args.to_vec();
             let lsm = emit_binding(bindings, call("log-softmax", fwd_args));
@@ -779,7 +728,6 @@ fn distribute_fn_adjoint_named(
         }
 
         "sum" => {
-            // d_input = broadcast adj back to input shape
             if let Some(input_shape) = arg_shape(&args[0], shapes) {
                 let sv = shape_vec(&input_shape);
                 let dr = emit_binding(bindings, call("broadcast", vec![adj.clone(), sv]));
@@ -790,8 +738,6 @@ fn distribute_fn_adjoint_named(
         }
 
         "mean" => {
-            // d_input = broadcast(adj / n, input_shape)
-            // n = product of reduced axes (or all if no axis specified)
             if let Some(input_shape) = arg_shape(&args[0], shapes) {
                 let axis = parse_keyword_int(args, "axis");
                 let n: i64 = if let Some(ax) = axis {
@@ -811,7 +757,6 @@ fn distribute_fn_adjoint_named(
         }
 
         "var" => {
-            // d_input = adj * 2 * (x - mean(x, axis)) / n
             if let Some(input_shape) = arg_shape(&args[0], shapes) {
                 let axis = parse_keyword_int(args, "axis");
                 let mut mean_args = vec![args[0].clone()];
@@ -840,8 +785,7 @@ fn distribute_fn_adjoint_named(
         }
 
         "max" | "min" => {
-            // d_input = adj * (x == max/min(x, axis, keepdims=true))
-            // Gradient is 1 where x equals the max/min, 0 elsewhere.
+            // Every matching maximum or minimum receives the full gradient.
             let axis = parse_keyword_int(args, "axis");
             let mut fwd_args = vec![args[0].clone()];
             if let Some(ax) = axis {
@@ -900,14 +844,12 @@ fn distribute_fn_adjoint_named(
         }
 
         "sin" => {
-            // d/dx sin(x) = cos(x)
             let c = emit_binding(bindings, call("cos", vec![args[0].clone()]));
             let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&c)]));
             acc_arg(&args[0], sym(&contrib), adj_names, bindings);
         }
 
         "cos" => {
-            // d/dx cos(x) = -sin(x)
             let s = emit_binding(bindings, call("sin", vec![args[0].clone()]));
             let neg = emit_binding(bindings, call("*", vec![float(-1.0), sym(&s)]));
             let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&neg)]));
@@ -915,7 +857,6 @@ fn distribute_fn_adjoint_named(
         }
 
         "tan" => {
-            // d/dx tan(x) = 1 + tan(x)^2
             let t = fwd_name.to_string();
             let t2 = emit_binding(bindings, call("*", vec![sym(&t), sym(&t)]));
             let local = emit_binding(bindings, call("+", vec![float(1.0), sym(&t2)]));
@@ -924,8 +865,6 @@ fn distribute_fn_adjoint_named(
         }
 
         "maximum" if args.len() == 2 => {
-            // d/da maximum(a, b) = adj * (a >= b)
-            // d/db maximum(a, b) = adj * (a < b)
             let cond = emit_binding(bindings, call(">=", vec![args[0].clone(), args[1].clone()]));
             let da = emit_binding(bindings, call("where", vec![sym(&cond), adj.clone(), float(0.0)]));
             let db = emit_binding(bindings, call("where", vec![sym(&cond), float(0.0), adj.clone()]));
@@ -934,8 +873,6 @@ fn distribute_fn_adjoint_named(
         }
 
         "minimum" if args.len() == 2 => {
-            // d/da minimum(a, b) = adj * (a <= b)
-            // d/db minimum(a, b) = adj * (a > b)
             let cond = emit_binding(bindings, call("<=", vec![args[0].clone(), args[1].clone()]));
             let da = emit_binding(bindings, call("where", vec![sym(&cond), adj.clone(), float(0.0)]));
             let db = emit_binding(bindings, call("where", vec![sym(&cond), float(0.0), adj.clone()]));
@@ -951,12 +888,8 @@ fn distribute_fn_adjoint_named(
         }
 
         "slice" if args.len() >= 3 => {
-            // d_input = pad(adj, input_shape, start_offset)
-            // The slice extracts [start..end] along the last axis.
-            // Gradient pads adj with zeros to restore the original shape.
             if let Some(input_shape) = arg_shape(&args[0], shapes) {
                 let target_vec = shape_vec(&input_shape);
-                // args[1] is the start offset (Integer)
                 let dr = emit_binding(
                     bindings,
                     call("slice_grad", vec![adj.clone(), target_vec, args[1].clone()]),
@@ -974,7 +907,14 @@ fn distribute_fn_adjoint_named(
 
         "abs" => {
             let cond = emit_binding(bindings, call(">=", vec![args[0].clone(), float(0.0)]));
-            let sign = emit_binding(bindings, call("where", vec![sym(&cond), float(1.0), float(-1.0)]));
+            let sign_f32 = emit_binding(
+                bindings,
+                call("where", vec![sym(&cond), float(1.0), float(-1.0)]),
+            );
+            let sign = emit_binding(
+                bindings,
+                call("__cast-like", vec![sym(&sign_f32), adj.clone()]),
+            );
             let contrib = emit_binding(bindings, call("*", vec![adj.clone(), sym(&sign)]));
             acc_arg(&args[0], sym(&contrib), adj_names, bindings);
         }
@@ -991,7 +931,6 @@ fn distribute_fn_adjoint_named(
             acc_arg(&args[0], sym(&contrib), adj_names, bindings);
         }
 
-        // first(x) extracts element 0.  Adjoint passes through to arg.
         "first" if args.len() == 1 => {
             acc_arg(&args[0], adj.clone(), adj_names, bindings);
         }
@@ -1000,15 +939,7 @@ fn distribute_fn_adjoint_named(
             acc_arg(&args[0], adj.clone(), adj_names, bindings);
         }
 
-        // scan(lambda, init, coll): emit a __scan_vjp__ call that the codegen compiles.
-        // The adjoint flows to init and coll via the backward scan.
-        // get(table, indices): embedding lookup / gather on axis 0.
-        // Backward: scatter-add the adjoint into a zeros table.
-        // For tensor indices: transpose(one-hot(indices, V)) @ adj
-        // For scalar index: reshape(one-hot(idx, V), [V,1]) @ reshape(adj, [1,D])
-        //
-        // Dict-access get (e.g. get(dict, :key)) is not tensor indexing:
-        // just pass the adjoint through to the dict argument.
+        // A field lookup only selects a value, so its gradient passes through unchanged.
         "get" if args.len() == 2 && matches!(&args[1], CompiledExpr::Keyword(_)) => {
             acc_arg(&args[0], adj.clone(), adj_names, bindings);
         }
@@ -1016,12 +947,15 @@ fn distribute_fn_adjoint_named(
             let is_scalar_index = matches!(&args[1],
                 CompiledExpr::Integer(_) | CompiledExpr::Float(_)
             ) || matches!(&args[1], CompiledExpr::Symbol(s) if {
-                // Check if the symbol's shape in the shape map is scalar
                 shapes.get(s.as_str()).is_some_and(|sh| sh.is_empty() || sh == &[1])
             });
 
             let v = emit_binding(bindings, call("shape", vec![args[0].clone(), CompiledExpr::Integer(0)]));
-            let oh = emit_binding(bindings, call("one-hot", vec![args[1].clone(), sym(&v)]));
+            let oh_f32 = emit_binding(bindings, call("one-hot", vec![args[1].clone(), sym(&v)]));
+            let oh = emit_binding(
+                bindings,
+                call("__cast-like", vec![sym(&oh_f32), adj.clone()]),
+            );
 
             if is_scalar_index {
                 let oh_col = emit_binding(bindings, call("reshape", vec![
@@ -1043,12 +977,11 @@ fn distribute_fn_adjoint_named(
 
         "scan" if args.len() == 3 => {
             let vjp_result = emit_binding(bindings, call("__scan_vjp__", vec![
-                args[0].clone(),  // lambda
-                args[1].clone(),  // init
-                args[2].clone(),  // coll
-                adj.clone(),      // adj of scan result (carry adjoint)
+                args[0].clone(),
+                args[1].clone(),
+                args[2].clone(),
+                adj.clone(),
             ]));
-            // __scan_vjp__ returns [adj_init, adj_coll]: extract with first/second
             let adj_init = emit_binding(bindings, call("first", vec![sym(&vjp_result)]));
             let adj_coll = emit_binding(bindings, call("second", vec![sym(&vjp_result)]));
             acc_arg(&args[1], sym(&adj_init), adj_names, bindings);
@@ -1057,12 +990,11 @@ fn distribute_fn_adjoint_named(
 
         "reduce" if args.len() == 3 => {
             let vjp_result = emit_binding(bindings, call("__scan_vjp__", vec![
-                args[0].clone(),  // lambda
-                args[1].clone(),  // init
-                args[2].clone(),  // coll
-                adj.clone(),      // adj of reduce result (final carry adjoint)
+                args[0].clone(),
+                args[1].clone(),
+                args[2].clone(),
+                adj.clone(),
             ]));
-            // __scan_vjp__ returns [adj_init, adj_coll]: extract with first/second
             let adj_init = emit_binding(bindings, call("first", vec![sym(&vjp_result)]));
             let adj_coll = emit_binding(bindings, call("second", vec![sym(&vjp_result)]));
             acc_arg(&args[1], sym(&adj_init), adj_names, bindings);
@@ -1074,9 +1006,6 @@ fn distribute_fn_adjoint_named(
     Ok(())
 }
 
-/// Look up the shape of an argument (must be a Symbol to resolve).
-/// Parse a keyword argument from a function call's args list.
-/// E.g. for args [x, Keyword("axis"), Integer(-1)], returns Some(-1).
 fn parse_keyword_int(args: &[CompiledExpr], key: &str) -> Option<i64> {
     for (i, arg) in args.iter().enumerate() {
         if let CompiledExpr::Keyword(k) = arg
@@ -1095,7 +1024,6 @@ fn arg_shape(arg: &CompiledExpr, shapes: &HashMap<String, Vec<i64>>) -> Option<V
     }
 }
 
-/// Emit a new named binding and return its name.
 fn emit_binding(
     bindings: &mut Vec<(String, CompiledExpr)>,
     value: CompiledExpr,
@@ -1105,7 +1033,6 @@ fn emit_binding(
     name
 }
 
-/// Accumulate adjoint for the Symbol inside `arg`.
 fn acc_arg(
     arg: &CompiledExpr,
     contribution: CompiledExpr,

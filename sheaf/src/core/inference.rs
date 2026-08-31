@@ -436,7 +436,7 @@ fn infer_function_call_type(
     weak_scalars: &std::collections::HashSet<String>,
 ) -> SheafResult<StableHLOType> {
     match name {
-        "+" | "-" | "*" | "/" | "minimum" | "maximum" => {
+        "+" | "-" | "*" | "/" | "**" | "//" | "%" | "mod" | "minimum" | "maximum" => {
             infer_arithmetic_type(name, args, symbol_types, weak_scalars)
         },
         "min" | "max"
@@ -446,14 +446,27 @@ fn infer_function_call_type(
             infer_arithmetic_type(name, args, symbol_types, weak_scalars)
         },
         "@" => infer_matmul_type(args, symbol_types, weak_scalars),
+        "__cast-like" if args.len() == 2 => {
+            let source = infer_type_with_weak_scalars(&args[0], symbol_types, weak_scalars)?;
+            let target = infer_type_with_weak_scalars(&args[1], symbol_types, weak_scalars)?;
+            let dtype = target.element_type().ok_or_else(|| SheafError::Compile {
+                message: "__cast-like expects a tensor target".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            })?;
+            source.with_element_type(dtype).ok_or_else(|| SheafError::Compile {
+                message: "__cast-like expects a tensor source".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            })
+        },
         "where" if args.len() == 3 => infer_arithmetic_type(
             "where",
             &args[1..],
             symbol_types,
             weak_scalars,
         ),
-        "relu" | "sigmoid" | "tanh" | "sqrt" | "exp" | "log" | "softmax"
-        | "abs" | "sin" | "cos" | "tan" | "round" | "ceil" | "floor" => args
+        "relu" | "gelu" | "sigmoid" | "tanh" | "sqrt" | "exp" | "log" | "softmax"
+        | "abs" | "sin" | "cos" | "tan" | "round" | "ceil" | "floor"
+        | "stop-gradient" => args
             .first()
             .map(|arg| infer_type_with_weak_scalars(arg, symbol_types, weak_scalars))
             .unwrap_or_else(|| Ok(StableHLOType::scalar_f32())),
@@ -604,7 +617,8 @@ fn is_weak_scalar(
         CompiledExpr::FunctionCall { name, args, .. }
             if matches!(
                 name.as_str(),
-                "+" | "-" | "*" | "/" | "min" | "max" | "minimum" | "maximum"
+                "+" | "-" | "*" | "/" | "**" | "//" | "%" | "mod" | "min" | "max"
+                    | "minimum" | "maximum"
             ) =>
         {
             args.iter().all(|arg| is_weak_scalar(arg, weak_scalars))
@@ -612,7 +626,8 @@ fn is_weak_scalar(
         CompiledExpr::FunctionCall { name, args, .. }
             if matches!(
                 name.as_str(),
-                "abs" | "sqrt" | "exp" | "log" | "sin" | "cos" | "tan" | "tanh"
+                "abs" | "relu" | "gelu" | "sigmoid" | "sqrt" | "exp" | "log" | "sin"
+                    | "cos" | "tan" | "tanh" | "stop-gradient"
             ) =>
         {
             args.first()
@@ -854,6 +869,25 @@ mod tests {
                 ],
             );
             assert!(infer_type_with_context(&expr, &symbols).is_err());
+        }
+    }
+
+    #[test]
+    fn unary_operations_preserve_element_types() {
+        let mut symbols = std::collections::HashMap::new();
+        symbols.insert(
+            "x".to_string(),
+            StableHLOType::f16_tensor(vec![2]),
+        );
+        for name in ["relu", "gelu", "sigmoid", "tanh", "stop-gradient"] {
+            let expr = make_compiled_call(
+                name,
+                vec![CompiledExpr::Symbol("x".to_string())],
+            );
+            assert_eq!(
+                infer_type_with_context(&expr, &symbols).unwrap(),
+                StableHLOType::f16_tensor(vec![2]),
+            );
         }
     }
 

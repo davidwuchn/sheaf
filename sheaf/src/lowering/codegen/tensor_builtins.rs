@@ -25,6 +25,8 @@ impl<'a> CodeGenerator<'a> {
                 Some(self.gen_transpose(args)),
             "broadcast" if args.len() == 2 => Some(self.gen_broadcast(args)),
             "cast" if args.len() == 2 => Some(self.gen_cast(args)),
+            "__ones-like" if args.len() == 1 => Some(self.gen_ones_like(args)),
+            "__cast-like" if args.len() == 2 => Some(self.gen_cast_like(args)),
             "arange" | "range" if args.len() == 1 || args.len() == 2 =>
                 Some(self.gen_arange(name, args)),
             "concat" if args.len() == 2 => Some(self.gen_concat(args)),
@@ -227,6 +229,50 @@ impl<'a> CodeGenerator<'a> {
                 message: "broadcast expects a vector shape argument".to_string(),
                 location: crate::core::error::SourceLocation::unknown(),
             })
+        }
+    }
+
+    fn gen_ones_like(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let (_, operand_ty) = self.generate(&args[0])?;
+        let dtype = operand_ty.element_type().ok_or_else(|| SheafError::Compile {
+            message: "__ones-like expects a tensor".to_string(),
+            location: crate::core::error::SourceLocation::unknown(),
+        })?;
+        if !dtype.is_float() {
+            return Err(SheafError::Compile {
+                message: "value-and-grad requires a floating-point result".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            });
+        }
+        Ok(self.emitter.emit_typed_splat_constant(
+            1.0,
+            operand_ty.shape(),
+            dtype,
+        ))
+    }
+
+    fn gen_cast_like(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let (source_reg, source_ty) = self.generate(&args[0])?;
+        let (_, target_ty) = self.generate(&args[1])?;
+        let dtype = target_ty.element_type().ok_or_else(|| SheafError::Compile {
+            message: "__cast-like expects a tensor target".to_string(),
+            location: crate::core::error::SourceLocation::unknown(),
+        })?;
+        let result_ty = source_ty.with_element_type(dtype).ok_or_else(|| SheafError::Compile {
+            message: "__cast-like expects a tensor source".to_string(),
+            location: crate::core::error::SourceLocation::unknown(),
+        })?;
+        if source_ty == result_ty {
+            Ok((source_reg, source_ty))
+        } else {
+            let reg = self.emitter.emit_convert(&source_reg, &source_ty, &result_ty);
+            Ok((reg, result_ty))
         }
     }
 

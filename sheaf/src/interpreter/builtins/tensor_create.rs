@@ -10,6 +10,7 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("tensor", builtin_tensor);
     env.set_builtin("range", builtin_range);
     env.set_builtin("cast", builtin_cast);
+    env.set_builtin("__cast-like", builtin_cast_like);
 }
 
 fn builtin_zeros(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
@@ -152,30 +153,11 @@ fn builtin_range(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     builtin_arange(args, kw)
 }
 
-/// (cast expr :bf16) or (cast expr :f32) -- convert tensor dtype
-fn builtin_cast(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    use crate::interpreter::value::Dtype;
-    if args.len() != 2 {
-        return Err(runtime_error(format!(
-            "cast expects 2 arguments (cast tensor :dtype), got {}",
-            args.len()
-        )));
-    }
-    let target = match &args[1] {
-        Value::Keyword(k) => Dtype::from_keyword(k).ok_or_else(|| {
-            runtime_error(format!(
-                "cast: unknown dtype :{k}. Valid dtypes: :f32, :f16, :bf16, :i32"
-            ))
-        })?,
-        other => return Err(runtime_error(format!(
-            "cast expects a dtype keyword as 2nd argument, got {}. Example: (cast x :f32)",
-            other.type_name()
-        ))),
-    };
-    match &args[0] {
+fn cast_value(value: &Value, target: Dtype) -> R {
+    match value {
         Value::Tensor { data, dtype } => {
             if *dtype == target {
-                return Ok(args[0].clone());
+                return Ok(value.clone());
             }
             Ok(Value::Tensor { data: data.clone(), dtype: target })
         }
@@ -200,4 +182,43 @@ fn builtin_cast(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             other.type_name()
         ))),
     }
+}
+
+fn builtin_cast(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    use crate::interpreter::value::Dtype;
+    if args.len() != 2 {
+        return Err(runtime_error(format!(
+            "cast expects 2 arguments (cast tensor :dtype), got {}",
+            args.len()
+        )));
+    }
+    let target = match &args[1] {
+        Value::Keyword(k) => Dtype::from_keyword(k).ok_or_else(|| {
+            runtime_error(format!(
+                "cast: unknown dtype :{k}. Valid dtypes: :f32, :f16, :bf16, :i32"
+            ))
+        })?,
+        other => return Err(runtime_error(format!(
+            "cast expects a dtype keyword as 2nd argument, got {}. Example: (cast x :f32)",
+            other.type_name()
+        ))),
+    };
+    cast_value(&args[0], target)
+}
+
+fn builtin_cast_like(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    if args.len() != 2 {
+        return Err(runtime_error("__cast-like expects two arguments"));
+    }
+    let target = match &args[1] {
+        Value::Tensor { dtype, .. } => *dtype,
+        Value::DeviceBuffer(buffer) => buffer.dtype,
+        Value::Float(_) => Dtype::F32,
+        Value::Int(_) => Dtype::I32,
+        other => return Err(runtime_error(format!(
+            "__cast-like expects a numeric reference, got {}",
+            other.type_name()
+        ))),
+    };
+    cast_value(&args[0], target)
 }

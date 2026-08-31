@@ -1,10 +1,6 @@
 ;; -*- mode: clojure -*-
-;; Sheaf Standard Macro Library
 
-
-;; defmodel - Model definition macro for neural networks
-;; Layer spec: [linear :name activation?]
-;; activation is optional; if present, wraps the linear expression
+;; Each defmodel layer is [linear :name] or [linear :name activation].
 (defn transform-layer [spec]
   (let [layer-name (nth spec 1)
         activation (if (>= (count spec) 3)
@@ -21,33 +17,20 @@
        ~@(map transform-layer layers))))
 
 
-;; defbatch: Define a function that auto-vectorizes over batch dimension
-;; The axes spec shows which args are batched (0) vs shared (nil)
-;; Example:
-;;   (defbatch linear-layer [x w b] [0 nil nil]
-;;     (+ (@ x w) b))
-;; Expands to:
-;;   (defn linear-layer [x w b]
-;;     ((vmap (lambda [x] (+ (@ x w) b)) [0 nil nil]) x w b))
+;; In defbatch axes, 0 marks batched arguments and nil marks shared arguments.
 (defmacro defbatch [name params axes & body]
   (let [inner-fn `(lambda ~params ~@body)]
     `(defn ~name ~params
        ((vmap ~inner-fn ~axes) ~@params))))
 
 
-;; when: Execute body when condition is true, otherwise return nil
-;; Example: (when (> x 0) (print "positive"))
 (defmacro when [cond body]
   `(if ~cond ~body nil))
 
 
-;; unless: Execute body when condition is false, otherwise return nil
-;; Example: (unless (> x 0) (print "not positive"))
 (defmacro unless [cond body]
   `(if ~cond nil ~body))
 
 
-;; comment: allows to comment an entire function or code block
-;; Example: (comment (print "This won't execute") (+ 1 2))
 (defmacro comment [& body]
   nil)

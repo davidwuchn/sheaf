@@ -230,8 +230,13 @@ impl<'a> CodeGenerator<'a> {
             let pad_low = start_val;
             let pad_high = total - end_val;
 
-            let zero_reg = self.emitter.emit_constant_f32(0.0);
-            let result_ty = StableHLOType::f32_tensor(target_shape);
+            let dtype = adj_ty.element_type().ok_or_else(|| SheafError::Compile {
+                message: "slice_grad expects a tensor adjoint".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            })?;
+            let (zero_reg, zero_ty) =
+                self.emitter.emit_typed_splat_constant(0.0, &[], dtype);
+            let result_ty = StableHLOType::tensor(target_shape, dtype);
             let result_reg = self.emitter.fresh_register();
 
             let ndim = adj_shape.len();
@@ -252,7 +257,7 @@ impl<'a> CodeGenerator<'a> {
                 high.join(", "),
                 interior.join(", "),
                 adj_ty.to_mlir(),
-                StableHLOType::scalar_f32().to_mlir(),
+                zero_ty.to_mlir(),
                 result_ty.to_mlir(),
             ));
 

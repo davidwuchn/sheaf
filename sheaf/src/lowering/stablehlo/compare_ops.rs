@@ -6,12 +6,6 @@
 use super::{Register, StableHLOEmitter, StableHLOType};
 
 impl StableHLOEmitter {
-    /// Emit a comparison operation using pure f32 arithmetic.
-    /// Returns f32 tensor (0.0/1.0). Zero i1 types: avoids IREE SPIRV crash.
-    ///
-    /// GE: clamp(0, sign(a-b) + 1, 1)    GT: clamp(0, sign(a-b), 1)
-    /// LE: clamp(0, sign(b-a) + 1, 1)    LT: clamp(0, sign(b-a), 1)
-    /// EQ: 1 - min(abs(a-b), 1)           NE: min(abs(a-b), 1)
     pub fn emit_compare(
         &mut self,
         op: &str,
@@ -24,15 +18,14 @@ impl StableHLOEmitter {
         let (a, b) = self.maybe_broadcast_operands(lhs, rhs, lhs_ty, rhs_ty, &operand_ty);
         let ty = &operand_ty;
 
-        let zero = self.emit_constant_f32(0.0);
-        let zero_ty = StableHLOType::ScalarF32;
-        let zero_bc = self.emit_broadcast(&zero, &zero_ty, ty);
-        let one = self.emit_constant_f32(1.0);
-        let one_bc = self.emit_broadcast(&one, &zero_ty, ty);
+        let dtype = ty.element_type().expect("comparison operand must have a dtype");
+        let (zero, scalar_ty) = self.emit_typed_splat_constant(0.0, &[], dtype);
+        let zero_bc = self.emit_broadcast(&zero, &scalar_ty, ty);
+        let (one, scalar_ty) = self.emit_typed_splat_constant(1.0, &[], dtype);
+        let one_bc = self.emit_broadcast(&one, &scalar_ty, ty);
 
         let result = match op {
             ">=" | ">" | "<=" | "<" => {
-                // diff = first - second (swap for LE/LT)
                 let (first, second) = match op {
                     ">=" | ">" => (&a, &b),
                     _ => (&b, &a),
@@ -51,7 +44,6 @@ impl StableHLOEmitter {
                 let needs_plus_one = matches!(op, ">=" | "<=");
 
                 if needs_plus_one {
-                    // clamp(0, sign(diff) + 1, 1)
                     let shifted = self.fresh_register();
                     self.body.push(format!(
                         "    {} = stablehlo.add {}, {} : {}",
@@ -64,7 +56,6 @@ impl StableHLOEmitter {
                     ));
                     c
                 } else {
-                    // clamp(0, sign(diff), 1)
                     let c = self.fresh_register();
                     self.body.push(format!(
                         "    {} = stablehlo.clamp {}, {}, {} : {}",
@@ -122,12 +113,6 @@ impl StableHLOEmitter {
         (result, operand_ty)
     }
 
-    /// Emit select using native stablehlo.select with i1 predicate.
-    /// Pred is f32 (0.0/1.0), converted to i1 via compare NE 0.0.
-    ///
-    /// Previous f32 arithmetic emulation (pred*a + (1-pred)*b) was buggy
-    /// on IREE Metal SPIRV when broadcast dims=[2,3] combined with multiply
-    /// corrupted values for tensors with batch dims > 1 (e.g. 1x6x256x256).
     pub fn emit_select(
         &mut self,
         pred: &Register,
@@ -139,9 +124,8 @@ impl StableHLOEmitter {
     ) -> (Register, StableHLOType) {
         let result_ty = on_true_ty.clone();
 
-        // Convert f32 pred (0.0/1.0) to i1: compare NE pred, 0.0
-        let zero = self.emit_constant_f32(0.0);
-        let zero_ty = StableHLOType::ScalarF32;
+        let dtype = pred_ty.element_type().expect("predicate must have a dtype");
+        let (zero, zero_ty) = self.emit_typed_splat_constant(0.0, &[], dtype);
         let zero_bc = self.emit_broadcast(&zero, &zero_ty, pred_ty);
 
         let pred_i1_ty = StableHLOType::i1_tensor(pred_ty.shape().to_vec());
@@ -156,7 +140,6 @@ impl StableHLOEmitter {
             pred_i1_ty.to_mlir(),
         ));
 
-        // Native select
         let reg = self.fresh_register();
         self.body.push(format!(
             "    {} = stablehlo.select {}, {}, {} : {}, {}",
@@ -171,8 +154,6 @@ impl StableHLOEmitter {
         (reg, result_ty)
     }
 
-    /// Emit boolean binary operation (and, or)
-    /// Operands are f32 (0.0/1.0): AND = multiply, OR = maximum.
     pub fn emit_bool_binop(
         &mut self,
         op: &str,
@@ -181,7 +162,6 @@ impl StableHLOEmitter {
         lhs_ty: &StableHLOType,
         rhs_ty: &StableHLOType,
     ) -> (Register, StableHLOType) {
-        // f32 boolean ops: AND = multiply, OR = maximum
         let stablehlo_op = match op {
             "and" => "stablehlo.multiply",
             "or" => "stablehlo.maximum",

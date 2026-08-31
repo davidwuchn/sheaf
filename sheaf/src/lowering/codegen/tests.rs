@@ -153,6 +153,7 @@ fn test_arithmetic_converts_weak_scalars() {
         ("-", "subtract"),
         ("*", "multiply"),
         ("/", "divide"),
+        ("**", "power"),
     ] {
         for dtype in [ElementType::F16, ElementType::BF16] {
             for shape in [vec![2], Vec::new()] {
@@ -198,6 +199,144 @@ fn test_arithmetic_converts_weak_scalars() {
             }
         }
     }
+}
+
+fn call(name: &str, args: Vec<CompiledExpr>) -> CompiledExpr {
+    CompiledExpr::FunctionCall {
+        name: name.to_string(),
+        args,
+        loc: None,
+    }
+}
+
+fn vag_call(loss: CompiledExpr, argument: &str) -> CompiledExpr {
+    CompiledExpr::LambdaCall {
+        callee: Box::new(call(
+            "__value-and-grad-hof__",
+            vec![CompiledExpr::Lambda {
+                params: vec!["p".to_string()],
+                body: Box::new(loss),
+            }],
+        )),
+        args: vec![CompiledExpr::Symbol(argument.to_string())],
+    }
+}
+
+#[test]
+fn test_f16_value_and_grad_preserves_seed_dtype() {
+    use crate::core::dtype::ElementType;
+
+    let registry = HashMap::new();
+    let param_type = StableHLOType::tensor(vec![4], ElementType::F16);
+    let codegen = CodeGenerator::with_function_params(
+        &registry,
+        &["x".to_string()],
+        std::slice::from_ref(&param_type),
+    );
+    let p = CompiledExpr::Symbol("p".to_string());
+    let vag = vag_call(call("mean", vec![call("*", vec![p.clone(), p])]), "x");
+    let result_type = StableHLOType::Tuple(
+        vec![StableHLOType::f16_tensor(Vec::new()), param_type.clone()],
+        None,
+    );
+    let (mlir, actual_type) = codegen
+        .emit_func_declaration(
+            "f16_vag",
+            &vag,
+            std::slice::from_ref(&param_type),
+            &result_type,
+        )
+        .unwrap();
+
+    assert!(mlir.contains("stablehlo.constant dense<1.0> : tensor<f16>"));
+    assert!(mlir.contains("-> (tensor<f16>, tensor<4xf16>)"));
+    assert_eq!(actual_type, result_type);
+}
+
+#[test]
+fn test_f16_embedding_gradient_casts_one_hot() {
+    use crate::core::dtype::ElementType;
+
+    let registry = HashMap::new();
+    let param_types = vec![
+        StableHLOType::tensor(vec![4, 2], ElementType::F16),
+        StableHLOType::f32_tensor(vec![1]),
+    ];
+    let codegen = CodeGenerator::with_function_params(
+        &registry,
+        &["table".to_string(), "index".to_string()],
+        &param_types,
+    );
+    let lookup = call("get", vec![
+        CompiledExpr::Symbol("p".to_string()),
+        CompiledExpr::Symbol("index".to_string()),
+    ]);
+    let vag = vag_call(call("mean", vec![lookup]), "table");
+    let result_type = StableHLOType::Tuple(
+        vec![StableHLOType::f16_tensor(Vec::new()), param_types[0].clone()],
+        None,
+    );
+    let (mlir, actual_type) = codegen
+        .emit_func_declaration("f16_embedding_vag", &vag, &param_types, &result_type)
+        .unwrap();
+
+    assert!(mlir.contains("stablehlo.convert"));
+    assert!(mlir.contains("tensor<4x2xf16>"));
+    assert_eq!(actual_type, result_type);
+}
+
+#[test]
+fn test_f16_comparison_and_slice_gradient_use_typed_constants() {
+    use crate::core::dtype::ElementType;
+
+    let registry = HashMap::new();
+    let input_type = StableHLOType::tensor(vec![2, 2], ElementType::F16);
+    let codegen = CodeGenerator::with_function_params(
+        &registry,
+        &["x".to_string()],
+        std::slice::from_ref(&input_type),
+    );
+    let comparison = call("==", vec![
+        CompiledExpr::Symbol("x".to_string()),
+        CompiledExpr::Float(0.0),
+    ]);
+    let (mlir, actual_type) = codegen
+        .emit_func_declaration(
+            "f16_comparison",
+            &comparison,
+            std::slice::from_ref(&input_type),
+            &input_type,
+        )
+        .unwrap();
+    assert!(mlir.contains("stablehlo.constant dense<0.0> : tensor<f16>"));
+    assert!(mlir.contains("stablehlo.constant dense<1.0> : tensor<f16>"));
+    assert_eq!(actual_type, input_type);
+
+    let adjoint_type = StableHLOType::tensor(vec![2, 2], ElementType::F16);
+    let result_type = StableHLOType::tensor(vec![6, 2], ElementType::F16);
+    let codegen = CodeGenerator::with_function_params(
+        &registry,
+        &["adjoint".to_string()],
+        std::slice::from_ref(&adjoint_type),
+    );
+    let slice_grad = call("slice_grad", vec![
+        CompiledExpr::Symbol("adjoint".to_string()),
+        CompiledExpr::Vector(vec![
+            CompiledExpr::Integer(6),
+            CompiledExpr::Integer(2),
+        ]),
+        CompiledExpr::Integer(2),
+    ]);
+    let (mlir, actual_type) = codegen
+        .emit_func_declaration(
+            "f16_slice_grad",
+            &slice_grad,
+            std::slice::from_ref(&adjoint_type),
+            &result_type,
+        )
+        .unwrap();
+    assert!(mlir.contains("tensor<f16>) -> tensor<6x2xf16>"));
+    assert_eq!(actual_type, result_type);
 }
 
 #[test]

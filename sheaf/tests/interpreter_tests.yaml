@@ -749,6 +749,23 @@
 - name: random-uniform-grad
   test: (let [f (fn [x] (sum (where (> (random-uniform (random-key 0) (shape x)) -1.0) x 0.0))) [v g] ((value-and-grad f) [5.0 7.0])] [v g])
   expected: "[12.0, [1. 1.]]"
+- name: f16-cross-entropy-grad
+  test: >
+    (let [targets (tensor [0 2])
+          logits (cast (tensor [[1.0 0.0 -1.0] [0.5 -0.5 1.0]]) :f16)
+          [loss grad] ((value-and-grad (fn [p] (cross-entropy-loss p targets))) logits)]
+      [(> loss 0.5) (< loss 0.51) (> (sum (abs grad)) 0.0)])
+  expected: "[true, true, true]"
+- name: f16-clipped-sgd-step
+  test: >
+    (let [params {:W (cast (tensor [[1.0 -2.0] [0.5 -0.25]]) :f16)}
+          loss-fn (fn [p] (mean (** (get p :W) 2.0)))
+          [loss grads] ((value-and-grad loss-fn) params)
+          clipped (clip-by-global-norm grads 1.0)
+          updated (sgd-step params clipped (cast 1e-3 :f16))
+          [new-loss _] ((value-and-grad loss-fn) updated)]
+      (< new-loss loss))
+  expected: "true"
 
 # VAG on dict params (MLP-style)
 - name: vag-mlp-loss

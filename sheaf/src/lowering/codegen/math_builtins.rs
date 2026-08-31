@@ -116,9 +116,10 @@ impl<'a> CodeGenerator<'a> {
         name: &str,
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
-        let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
-        let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
-        let (result_reg, result_ty) = self.emitter.emit_binop(name, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
+        let (lhs_reg, lhs_ty, rhs_reg, rhs_ty) =
+            self.generate_binary_operands(name, &args[0], &args[1])?;
+        let (result_reg, result_ty) =
+            self.emitter.emit_binop(name, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
         Ok((result_reg, result_ty))
     }
 
@@ -139,9 +140,10 @@ impl<'a> CodeGenerator<'a> {
         name: &str,
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
-        let (lhs_reg, lhs_ty) = self.generate(&args[0])?;
-        let (rhs_reg, rhs_ty) = self.generate(&args[1])?;
-        let (result_reg, result_ty) = self.emitter.emit_compare(name, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
+        let (lhs_reg, lhs_ty, rhs_reg, rhs_ty) =
+            self.generate_binary_operands(name, &args[0], &args[1])?;
+        let (result_reg, result_ty) =
+            self.emitter.emit_compare(name, &lhs_reg, &rhs_reg, &lhs_ty, &rhs_ty);
         Ok((result_reg, result_ty))
     }
 

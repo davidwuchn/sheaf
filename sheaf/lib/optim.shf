@@ -1,26 +1,9 @@
-;; Optimizer library for Sheaf
-
 (defn sgd-step [params grads lr]
-  ;; Stochastic gradient descent: p := p - lr * g
   (tree-map (fn [p g] (- p (* lr g))) params grads))
 
 
 (defn adam-step [params grads m v t lr b1 b2 eps]
-  ;; Adam optimizer step with bias correction
-  ;;
-  ;; Args:
-  ;;   params: Parameter tree
-  ;;   grads: Gradient tree (same structure as params)
-  ;;   m: First moment estimates (same structure as params)
-  ;;   v: Second moment estimates (same structure as params)
-  ;;   t: Timestep (integer)
-  ;;   lr: Learning rate
-  ;;   b1: First moment decay (typically 0.9)
-  ;;   b2: Second moment decay (typically 0.999)
-  ;;   eps: Numerical stability constant (typically 1e-8)
-  ;;
-  ;; Returns: [new-params new-m new-v new-t]
-
+  ;; Returns [new-params new-m new-v new-t].
   (let [new-t (+ t 1)
         new-m (tree-map (fn [md gd] (+ (* b1 md) (* (- 1 b1) gd))) m grads)
         new-v (tree-map (fn [vd gd] (+ (* b2 vd) (* (- 1 b2) (* gd gd)))) v grads)
@@ -34,16 +17,8 @@
 
 
 (defn adamw-step [params grads m v t lr b1 b2 eps wd]
-  ;; AdamW optimizer step with decoupled weight decay (Loshchilov & Hutter, 2019).
-  ;; Same moment estimates and bias correction as adam-step, but the weight
-  ;; decay term is decoupled from the gradient-based update:
-  ;;   p <- p - lr * (wd * p + m_hat / (sqrt(v_hat) + eps))
-  ;; Pass wd = 0.0 to recover plain Adam. Returns [new-params new-m new-v new-t]
-  ;; so it is a drop-in replacement for adam-step.
-  ;;
-  ;; Args:
-  ;;   params, grads, m, v, t, lr, b1, b2, eps: as in adam-step
-  ;;   wd: Weight decay coefficient (e.g. 0.1 for GPT-2 / nanoGPT)
+  ;; AdamW applies weight decay separately from the gradient update.
+  ;; Returns [new-params new-m new-v new-t].
   (let [new-t (+ t 1)
         new-m (tree-map (fn [md gd] (+ (* b1 md) (* (- 1 b1) gd))) m grads)
         new-v (tree-map (fn [vd gd] (+ (* b2 vd) (* (- 1 b2) (* gd gd)))) v grads)
@@ -58,50 +33,32 @@
 
 
 (defn sgd-momentum-step [params grads buf momentum lr]
-  ;; SGD with momentum (heavy-ball / Polyak).
-  ;;   buf_t   = momentum * buf_{t-1} + grad
-  ;;   params  = params - lr * buf_t
-  ;; Initialize buf with (tree-map-zeros params). Nesterov is not included;
-  ;; for that variant modify the update to use (grad + momentum * buf_t).
-  ;; Returns [new-params new-buf].
+  ;; Initialize buf with (tree-map-zeros params). Returns [new-params new-buf].
   (let [new-buf (tree-map (fn [b g] (+ (* momentum b) g)) buf grads)
         new-p (tree-map (fn [p b] (- p (* lr b))) params new-buf)]
     [new-p new-buf]))
 
 
 (defn global-norm [pytree]
-  ;; Compute global L2 norm of all leaves in a pytree
-  (sqrt (tree-reduce + (tree-map (fn [g] (sum (** g 2))) pytree) 0.0)))
+  (sqrt (tree-reduce +
+                     (tree-map (fn [g] (__cast-like (sum (** g 2)) 0.0)) pytree)
+                     0.0)))
 
 
 (defn clip-by-global-norm [pytree max-norm]
-  ;; Clip gradients by global L2 norm
-  ;; If norm exceeds max-norm, scale all gradients proportionally
   (let [g-norm (global-norm pytree)
         clip-factor (minimum 1.0 (/ max-norm (+ g-norm 1e-8)))]
-    (tree-map (fn [g] (* g clip-factor)) pytree)))
+    (tree-map (fn [g] (* g (__cast-like clip-factor g))) pytree)))
 
 
 ;; Learning-rate schedules
-;;
-;; Pure scalar functions of the current step count (0-based). Call them in the
-;; training loop to compute the learning rate passed to the optimizer step.
-;; Cosine schedules are not provided (no trig builtins); use inverse-sqrt-warmup
-;; or exponential-decay for Transformer-style decay.
 
 (defn linear-warmup [lr step warmup-steps]
-  ;; Linearly ramps lr from 0 to `lr` over `warmup-steps`, then holds constant.
-  ;;   step 0            -> 0
-  ;;   step = warmup     -> lr
-  ;;   step > warmup     -> lr
   (let [ratio (/ step warmup-steps)]
     (* lr (minimum 1.0 ratio))))
 
 (defn inverse-sqrt-warmup [lr step warmup-steps]
-  ;; Noam / "Attention is all you need" schedule.
-  ;;   lr * warmup^(-1/2) * min(step^(-1/2), step * warmup^(-3/2))
-  ;; Rises linearly during warmup, peaks at step = warmup-steps (value
-  ;; lr / warmup-steps), then decays as 1/sqrt(step). `lr` is the scale.
+  ;; Linear warmup followed by inverse-square-root decay.
   (let [s (float step)
         w (float warmup-steps)]
     (* lr
@@ -109,20 +66,13 @@
        (minimum (** s -0.5) (* s (** w -1.5))))))
 
 (defn exponential-decay [lr step decay-steps decay-rate]
-  ;; lr * decay_rate^(step / decay_steps). Use decay-rate < 1 to decay; 1.0 is
-  ;; constant. At step = decay-steps the lr is multiplied by decay-rate once.
   (* lr (** decay-rate (/ step decay-steps))))
 
 (defn step-decay [lr step step-size decay-rate]
-  ;; Multiplies lr by decay-rate every step-size steps (floor division).
-  ;;   step in [0, step-size)             -> lr
-  ;;   step in [step-size, 2*step-size)   -> lr * decay-rate
   (* lr (** decay-rate (// step step-size))))
 
 (defn cosine-decay [lr step warmup-steps total-steps]
-  ;; Linear warmup over `warmup-steps`, then cosine decay from `lr` down to 0
-  ;; over the remaining steps (reaches 0 at `total-steps`). step is 0-based.
-  ;; The standard schedule for GPT-2 / nanoGPT training.
+  ;; Linear warmup followed by cosine decay to zero at total-steps.
   (let [s        (float step)
         warmup   (float warmup-steps)
         total    (float total-steps)
