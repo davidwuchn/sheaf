@@ -698,6 +698,21 @@
 - name: float
   test: (float [1 2 3] :i32)
   expected: "[1. 2. 3.]"
+- name: float-extracts-rank-zero-tensor
+  test: (tensor [(float (reshape (cast (tensor [1.5]) :f16) '[]))])
+  expected: "[1.5]"
+- name: float-extracts-jit-rank-zero-tensor
+  test: >
+    (defn add-one-rank-zero [x] (+ x 1.0))
+    (tensor [(float (add-one-rank-zero
+                      (reshape (cast (tensor [1.0]) :f16) '[])))])
+  expected: "[2.]"
+- name: float-converts-device-buffer
+  test: >
+    (defn add-zero-vector [x] (+ x 0.0))
+    (+ (float (add-zero-vector (cast (tensor [1.0 2.0]) :f16)))
+       (tensor [1.0 1.0]))
+  expected: "[2. 3.]"
 - name: filter
   test: (filter (fn [x] (> x 2)) '[1 2 3 4 5])
   expected: "[3, 4, 5]"

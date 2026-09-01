@@ -208,7 +208,21 @@ fn builtin_float(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::Float(f) => Ok(Value::Float(*f)),
         Value::Bool(b) => Ok(Value::Float(if *b { 1.0 } else { 0.0 })),
         Value::Tensor { data, .. } => {
-            Ok(Value::Tensor { data: data.clone(), dtype: Dtype::F32 })
+            if data.ndim() == 0 {
+                Ok(Value::Float(as_scalar(data)))
+            } else {
+                Ok(Value::Tensor { data: data.clone(), dtype: Dtype::F32 })
+            }
+        }
+        Value::DeviceBuffer(db) => {
+            let data = db
+                .to_host()
+                .map_err(|e| runtime_error(format!("float: {}", e)))?;
+            if data.ndim() == 0 {
+                Ok(Value::Float(as_scalar(&data)))
+            } else {
+                Ok(Value::tensor_f32(data))
+            }
         }
         _ => Err(runtime_error(format!(
             "float expects a scalar or tensor, got {}. Use (sum x) to reduce a tensor to a scalar.",
