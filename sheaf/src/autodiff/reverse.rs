@@ -483,20 +483,11 @@ fn distribute_fn_adjoint_named(
     match name {
         "stop-gradient" => {}
 
-        "+" => {
-            // da += unbroadcast(adj, shape_a), db += unbroadcast(adj, shape_b)
-            let adj_a = maybe_unbroadcast(adj.clone(), &args[0], shapes, bindings);
-            acc_arg(&args[0], adj_a, adj_names, bindings);
-            let adj_b = maybe_unbroadcast(adj.clone(), &args[1], shapes, bindings);
-            acc_arg(&args[1], adj_b, adj_names, bindings);
-        }
-
-        "-" if args.len() == 2 => {
-            let adj_a = maybe_unbroadcast(adj.clone(), &args[0], shapes, bindings);
-            acc_arg(&args[0], adj_a, adj_names, bindings);
-            let neg = emit_binding(bindings, call("*", vec![float(-1.0), adj.clone()]));
-            let adj_b = maybe_unbroadcast(sym(&neg), &args[1], shapes, bindings);
-            acc_arg(&args[1], adj_b, adj_names, bindings);
+        "+" if !args.is_empty() => {
+            for arg in args {
+                let contribution = maybe_unbroadcast(adj.clone(), arg, shapes, bindings);
+                acc_arg(arg, contribution, adj_names, bindings);
+            }
         }
 
         "-" if args.len() == 1 => {
@@ -504,40 +495,128 @@ fn distribute_fn_adjoint_named(
             acc_arg(&args[0], sym(&neg), adj_names, bindings);
         }
 
-        "*" => {
-            let da = emit_binding(bindings, call("*", vec![adj.clone(), args[1].clone()]));
-            let da_ub = maybe_unbroadcast(sym(&da), &args[0], shapes, bindings);
-            acc_arg(&args[0], da_ub, adj_names, bindings);
-            let db = emit_binding(bindings, call("*", vec![adj.clone(), args[0].clone()]));
-            let db_ub = maybe_unbroadcast(sym(&db), &args[1], shapes, bindings);
-            acc_arg(&args[1], db_ub, adj_names, bindings);
+        "-" if args.len() >= 2 => {
+            let first = maybe_unbroadcast(adj.clone(), &args[0], shapes, bindings);
+            acc_arg(&args[0], first, adj_names, bindings);
+            let neg = emit_binding(bindings, call("*", vec![float(-1.0), adj.clone()]));
+            for arg in &args[1..] {
+                let contribution = maybe_unbroadcast(sym(&neg), arg, shapes, bindings);
+                acc_arg(arg, contribution, adj_names, bindings);
+            }
         }
 
-        "/" if args.len() == 2 => {
-            let da = emit_binding(bindings, call("/", vec![adj.clone(), args[1].clone()]));
-            let da_ub = maybe_unbroadcast(sym(&da), &args[0], shapes, bindings);
-            acc_arg(&args[0], da_ub, adj_names, bindings);
-            let b_sq = emit_binding(bindings, call("*", vec![args[1].clone(), args[1].clone()]));
-            let a_over_b2 = emit_binding(bindings, call("/", vec![args[0].clone(), sym(&b_sq)]));
-            let neg = emit_binding(bindings, call("*", vec![float(-1.0), sym(&a_over_b2)]));
-            let db = emit_binding(bindings, call("*", vec![adj.clone(), sym(&neg)]));
-            let db_ub = maybe_unbroadcast(sym(&db), &args[1], shapes, bindings);
-            acc_arg(&args[1], db_ub, adj_names, bindings);
+        "*" if args.len() >= 2 => {
+            let mut prefixes = vec![args[0].clone()];
+            for arg in &args[1..args.len() - 1] {
+                let product = emit_binding(
+                    bindings,
+                    call("*", vec![prefixes.last().unwrap().clone(), arg.clone()]),
+                );
+                prefixes.push(sym(&product));
+            }
+
+            let mut suffixes = vec![None; args.len()];
+            suffixes[args.len() - 1] = Some(args[args.len() - 1].clone());
+            for i in (1..args.len() - 1).rev() {
+                let product = emit_binding(
+                    bindings,
+                    call("*", vec![args[i].clone(), suffixes[i + 1].clone().unwrap()]),
+                );
+                suffixes[i] = Some(sym(&product));
+            }
+
+            for (i, arg) in args.iter().enumerate() {
+                let other_factors = if i == 0 {
+                    suffixes[1].clone().unwrap()
+                } else if i + 1 == args.len() {
+                    prefixes[i - 1].clone()
+                } else {
+                    let product = emit_binding(
+                        bindings,
+                        call("*", vec![
+                            prefixes[i - 1].clone(),
+                            suffixes[i + 1].clone().unwrap(),
+                        ]),
+                    );
+                    sym(&product)
+                };
+                let contribution = emit_binding(
+                    bindings,
+                    call("*", vec![adj.clone(), other_factors]),
+                );
+                let contribution =
+                    maybe_unbroadcast(sym(&contribution), arg, shapes, bindings);
+                acc_arg(arg, contribution, adj_names, bindings);
+            }
+        }
+
+        "/" if args.len() >= 2 => {
+            let denominator = if args.len() == 2 {
+                args[1].clone()
+            } else {
+                let product = emit_binding(bindings, call("*", args[1..].to_vec()));
+                sym(&product)
+            };
+            let numerator_grad = emit_binding(
+                bindings,
+                call("/", vec![adj.clone(), denominator]),
+            );
+            let numerator_grad =
+                maybe_unbroadcast(sym(&numerator_grad), &args[0], shapes, bindings);
+            acc_arg(&args[0], numerator_grad, adj_names, bindings);
+
+            for arg in &args[1..] {
+                let scaled = emit_binding(
+                    bindings,
+                    call("*", vec![adj.clone(), sym(fwd_name)]),
+                );
+                let divided = emit_binding(
+                    bindings,
+                    call("/", vec![sym(&scaled), arg.clone()]),
+                );
+                let negated = emit_binding(
+                    bindings,
+                    call("*", vec![float(-1.0), sym(&divided)]),
+                );
+                let contribution =
+                    maybe_unbroadcast(sym(&negated), arg, shapes, bindings);
+                acc_arg(arg, contribution, adj_names, bindings);
+            }
         }
 
         "@" => {
             let a_ndim = arg_shape(&args[0], shapes).map(|s| s.len()).unwrap_or(2);
             let b_ndim = arg_shape(&args[1], shapes).map(|s| s.len()).unwrap_or(2);
 
-            // dL/dA = G @ B^T
             if b_ndim == 1 {
-                // B is 1D [n], adj is scalar or matching: dL/dA = adj * B (broadcast)
-                let da = emit_binding(bindings, call("*", vec![adj.clone(), args[1].clone()]));
-                let da_ub = maybe_unbroadcast(sym(&da), &args[0], shapes, bindings);
-                acc_arg(&args[0], da_ub, adj_names, bindings);
+                if a_ndim == 1 {
+                    let da = emit_binding(
+                        bindings,
+                        call("*", vec![adj.clone(), args[1].clone()]),
+                    );
+                    acc_arg(&args[0], sym(&da), adj_names, bindings);
+                } else if let Some(a_shape) = arg_shape(&args[0], shapes) {
+                    let mut expanded_shape = a_shape[..a_shape.len() - 1].to_vec();
+                    expanded_shape.push(1);
+                    let expanded_adj = emit_binding(
+                        bindings,
+                        call("reshape", vec![adj.clone(), shape_vec(&expanded_shape)]),
+                    );
+                    let da = emit_binding(
+                        bindings,
+                        call("*", vec![sym(&expanded_adj), args[1].clone()]),
+                    );
+                    acc_arg(&args[0], sym(&da), adj_names, bindings);
+                } else {
+                    let da = emit_binding(
+                        bindings,
+                        call("*", vec![adj.clone(), args[1].clone()]),
+                    );
+                    let da = maybe_unbroadcast(sym(&da), &args[0], shapes, bindings);
+                    acc_arg(&args[0], da, adj_names, bindings);
+                }
             } else if a_ndim == 1 {
-                // A is 1D [m], B is 2D [m, n], result is 1D [n], adj is 1D [n]
-                // dL/dA = adj @ B^T but adj is 1D: reshape to [1, n], matmul, reshape back to [m]
+                // Reshape the incoming gradient to [1, n] before the matrix multiplication.
                 if let Some(b_shape) = arg_shape(&args[1], shapes) {
                     let n = b_shape[b_shape.len() - 1];
                     let adj_row = emit_binding(bindings, call("reshape", vec![
@@ -565,10 +644,14 @@ fn distribute_fn_adjoint_named(
                 acc_arg(&args[0], da_ub, adj_names, bindings);
             }
 
-            // dL/dB = A^T @ G
-            if a_ndim == 1 {
-                // A is 1D [m], G may be 1D [n] -> outer product -> [m, n]
-                // reshape(A,[m,1]) @ reshape(G,[1,n])
+            if a_ndim == 1 && b_ndim == 1 {
+                let db = emit_binding(
+                    bindings,
+                    call("*", vec![adj.clone(), args[0].clone()]),
+                );
+                acc_arg(&args[1], sym(&db), adj_names, bindings);
+            } else if a_ndim == 1 {
+                // Reshape both vectors so matmul computes their outer product.
                 if let (Some(a_shape), Some(b_shape)) = (arg_shape(&args[0], shapes), arg_shape(&args[1], shapes)) {
                     let m = a_shape[0];
                     let n = b_shape[b_shape.len() - 1];
@@ -584,7 +667,6 @@ fn distribute_fn_adjoint_named(
                     let db_ub = maybe_unbroadcast(sym(&db), &args[1], shapes, bindings);
                     acc_arg(&args[1], db_ub, adj_names, bindings);
                 } else {
-                    // Fallback: emit A^T @ G (may fail for 1D, but no shape info)
                     let at = emit_binding(bindings, call("transpose", vec![args[0].clone()]));
                     let db = emit_binding(bindings, call("@", vec![sym(&at), adj.clone()]));
                     let db_ub = maybe_unbroadcast(sym(&db), &args[1], shapes, bindings);

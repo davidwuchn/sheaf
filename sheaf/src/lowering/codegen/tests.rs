@@ -60,8 +60,9 @@ fn test_emit_compare() {
     let mlir = codegen.emit_function("test_eq", &expr);
     assert!(mlir.is_ok());
     let mlir_str = mlir.unwrap();
+    assert!(mlir_str.contains("stablehlo.sign"));
     assert!(mlir_str.contains("stablehlo.abs"));
-    assert!(mlir_str.contains("stablehlo.minimum"));
+    assert!(!mlir_str.contains("stablehlo.minimum"));
 }
 
 #[test]

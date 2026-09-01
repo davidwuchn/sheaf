@@ -749,6 +749,22 @@
 - name: random-uniform-grad
   test: (let [f (fn [x] (sum (where (> (random-uniform (random-key 0) (shape x)) -1.0) x 0.0))) [v g] ((value-and-grad f) [5.0 7.0])] [v g])
   expected: "[12.0, [1. 1.]]"
+- name: f16-variadic-arithmetic-grad
+  test: >
+    (let [p (cast (tensor [2.0 2.0 2.0 2.0]) :f16)
+          loss-fn (fn [x] (+ (mean (+ x x x))
+                             (mean (* x x x))
+                             (mean (- x (* 2.0 x) (* 3.0 x)))
+                             (mean (/ x x x))))
+          [loss grad] ((value-and-grad loss-fn) p)]
+      [loss grad])
+  expected: "[6.5, [2.6875 2.6875 2.6875 2.6875]]"
+- name: f16-max-grad-uses-exact-equality
+  test: >
+    (let [p (cast (tensor [-0.75 -0.25 0.25 0.75]) :f16)
+          [loss grad] ((value-and-grad (fn [x] (max x))) p)]
+      [loss grad])
+  expected: "[0.75, [0. 0. 0. 1.]]"
 - name: f16-cross-entropy-grad
   test: >
     (let [targets (tensor [0 2])
@@ -766,6 +782,22 @@
           [new-loss _] ((value-and-grad loss-fn) updated)]
       (< new-loss loss))
   expected: "true"
+- name: f16-matrix-vector-grad
+  test: >
+    (let [matrix (cast (tensor [[0.5 -1.0] [2.0 0.25]]) :f16)
+          vector (cast (tensor [0.5 -1.0]) :f16)]
+      ((value-and-grad (fn [p] (mean (@ p vector)))) matrix))
+  expected: "[1.0,\n [[0.25 -0.5]\n  [0.25 -0.5]]]"
+- name: f16-scan-grad
+  test: >
+    (let [values (cast (tensor [0.5 -1.0 2.0]) :f16)]
+      ((value-and-grad
+         (fn [p]
+           (first (scan (fn [acc x]
+                          (let [next (+ acc (* x x))] [next next]))
+                        0.0 p))))
+       values))
+  expected: "[5.25, [ 1. -2.  4.]]"
 
 # VAG on dict params (MLP-style)
 - name: vag-mlp-loss

@@ -64,48 +64,32 @@ impl StableHLOEmitter {
                     c
                 }
             }
-            "=" | "==" => {
-                // 1 - min(abs(a-b), 1)
+            "=" | "==" | "!=" => {
                 let diff = self.fresh_register();
                 self.body.push(format!(
                     "    {} = stablehlo.subtract {}, {} : {}",
                     diff.to_mlir(), a.to_mlir(), b.to_mlir(), ty.to_mlir()
                 ));
-                let adiff = self.fresh_register();
+                let sign = self.fresh_register();
+                self.body.push(format!(
+                    "    {} = stablehlo.sign {} : {}",
+                    sign.to_mlir(), diff.to_mlir(), ty.to_mlir()
+                ));
+                let different = self.fresh_register();
                 self.body.push(format!(
                     "    {} = stablehlo.abs {} : {}",
-                    adiff.to_mlir(), diff.to_mlir(), ty.to_mlir()
+                    different.to_mlir(), sign.to_mlir(), ty.to_mlir()
                 ));
-                let capped = self.fresh_register();
-                self.body.push(format!(
-                    "    {} = stablehlo.minimum {}, {} : {}",
-                    capped.to_mlir(), adiff.to_mlir(), one_bc.to_mlir(), ty.to_mlir()
-                ));
-                let result = self.fresh_register();
-                self.body.push(format!(
-                    "    {} = stablehlo.subtract {}, {} : {}",
-                    result.to_mlir(), one_bc.to_mlir(), capped.to_mlir(), ty.to_mlir()
-                ));
-                result
-            }
-            "!=" => {
-                // min(abs(a-b), 1)
-                let diff = self.fresh_register();
-                self.body.push(format!(
-                    "    {} = stablehlo.subtract {}, {} : {}",
-                    diff.to_mlir(), a.to_mlir(), b.to_mlir(), ty.to_mlir()
-                ));
-                let adiff = self.fresh_register();
-                self.body.push(format!(
-                    "    {} = stablehlo.abs {} : {}",
-                    adiff.to_mlir(), diff.to_mlir(), ty.to_mlir()
-                ));
-                let capped = self.fresh_register();
-                self.body.push(format!(
-                    "    {} = stablehlo.minimum {}, {} : {}",
-                    capped.to_mlir(), adiff.to_mlir(), one_bc.to_mlir(), ty.to_mlir()
-                ));
-                capped
+                if op == "!=" {
+                    different
+                } else {
+                    let result = self.fresh_register();
+                    self.body.push(format!(
+                        "    {} = stablehlo.subtract {}, {} : {}",
+                        result.to_mlir(), one_bc.to_mlir(), different.to_mlir(), ty.to_mlir()
+                    ));
+                    result
+                }
             }
             _ => panic!("Unsupported comparison: {}", op),
         };

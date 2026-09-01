@@ -761,9 +761,12 @@ impl JitCompiler {
         if backend == "metal-spirv" {
             cmd.arg("--iree-metal-compile-to-metallib=false");
         }
-        if backend == "cuda" && let Some(target) = detect_cuda_target()
-        {
-            cmd.arg(format!("--iree-cuda-target={}", target));
+        if backend == "cuda" {
+            // IREE const-eval fails when a CUDA container has no visible CPU queue.
+            cmd.arg("--iree-opt-const-eval=false");
+            if let Some(target) = detect_cuda_target() {
+                cmd.arg(format!("--iree-cuda-target={}", target));
+            }
         }
         if backend == "llvm-cpu" {
             cmd.arg("--iree-llvmcpu-target-cpu=host");
