@@ -70,6 +70,7 @@ sheaf_program_test(
     data = [
         "//:examples/clevr/data.shf",
         "//:examples/clevr/model.shf",
+        "//:examples/clevr/params.pkl",
         "//:examples/clevr/utils.shf",
     ],
     size = "small",

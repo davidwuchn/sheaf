@@ -5,6 +5,7 @@ exports_files([
     "cargo-bazel-lock.json",
     "examples/clevr/data.shf",
     "examples/clevr/model.shf",
+    "examples/clevr/params.pkl",
     "examples/clevr/utils.shf",
     "examples/hydra/hydra.shf",
     "examples/mlp/mlp.shf",
