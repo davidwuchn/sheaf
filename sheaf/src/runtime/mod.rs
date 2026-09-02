@@ -21,3 +21,8 @@ pub mod jit;
 pub mod toolchain;
 #[cfg(iree_runtime)]
 pub mod vmfb_loader;
+
+pub fn report_jit_profile() {
+    #[cfg(iree_runtime)]
+    iree_session::report_shared_session_profile();
+}

@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 static CACHED_BACKEND: OnceLock<String> = OnceLock::new();
@@ -56,6 +56,12 @@ pub fn shared_session() -> Result<Arc<IreeSession>, SheafError> {
 
 pub fn initialized_shared_session() -> Option<Arc<IreeSession>> {
     SHARED_SESSION.get().map(Arc::clone)
+}
+
+pub fn report_shared_session_profile() {
+    if let Some(session) = SHARED_SESSION.get() {
+        session.report_profile();
+    }
 }
 
 use crate::core::error::SheafError;
@@ -140,6 +146,7 @@ pub struct IreeSession {
     buffer_cache: Mutex<HashMap<String, Vec<Vec<CachedBufferView>>>>,
     precompiled_modules: Mutex<PrecompiledModuleRegistry>,
     profile: bool,
+    profile_reported: AtomicBool,
     t_flatten_ns: AtomicU64,
     t_buffers_ns: AtomicU64,
     t_call_ns: AtomicU64,
@@ -251,6 +258,7 @@ impl IreeSession {
                 buffer_cache: Mutex::new(HashMap::new()),
                 precompiled_modules: Mutex::new(PrecompiledModuleRegistry::default()),
                 profile: crate::core::config::jit_profile(),
+                profile_reported: AtomicBool::new(false),
                 t_flatten_ns: AtomicU64::new(0),
                 t_buffers_ns: AtomicU64::new(0),
                 t_call_ns: AtomicU64::new(0),
@@ -279,6 +287,47 @@ impl IreeSession {
 
     pub fn driver_name(&self) -> &str {
         &self.driver_name
+    }
+
+    fn report_profile(&self) {
+        if !self.profile {
+            return;
+        }
+        let n = self.n_calls.load(Ordering::Relaxed);
+        if n == 0 || self.profile_reported.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        let flatten = self.t_flatten_ns.load(Ordering::Relaxed) as f64 / 1e6;
+        let buffers = self.t_buffers_ns.load(Ordering::Relaxed) as f64 / 1e6;
+        let call = self.t_call_ns.load(Ordering::Relaxed) as f64 / 1e6;
+        let output = self.t_output_ns.load(Ordering::Relaxed) as f64 / 1e6;
+        let total = flatten + buffers + call + output;
+        let hits = self.n_cache_hits.load(Ordering::Relaxed);
+        let misses = self.n_cache_misses.load(Ordering::Relaxed);
+        sheaf_msg!(
+            "\njit: dispatch profile ({} calls, {:.1}ms total):",
+            n,
+            total
+        );
+        sheaf_msg!(
+            "  flatten:  {:7.1}ms ({:4.1}%)",
+            flatten,
+            flatten / total * 100.0
+        );
+        sheaf_msg!(
+            "  buffers:  {:7.1}ms ({:4.1}%)  [hits: {}, misses: {}]",
+            buffers,
+            buffers / total * 100.0,
+            hits,
+            misses
+        );
+        sheaf_msg!("  call:     {:7.1}ms ({:4.1}%)", call, call / total * 100.0);
+        sheaf_msg!(
+            "  output:   {:7.1}ms ({:4.1}%)",
+            output,
+            output / total * 100.0
+        );
     }
 
     pub fn device_handle(&self) -> &Arc<IreeDeviceHandle> {
@@ -775,41 +824,7 @@ fn precompiled_registry_error() -> SheafError {
 impl Drop for IreeSession {
     fn drop(&mut self) {
         record_session_drop();
-        if self.profile {
-            let n = self.n_calls.load(Ordering::Relaxed);
-            if n > 0 {
-                let flatten = self.t_flatten_ns.load(Ordering::Relaxed) as f64 / 1e6;
-                let buffers = self.t_buffers_ns.load(Ordering::Relaxed) as f64 / 1e6;
-                let call = self.t_call_ns.load(Ordering::Relaxed) as f64 / 1e6;
-                let output = self.t_output_ns.load(Ordering::Relaxed) as f64 / 1e6;
-                let total = flatten + buffers + call + output;
-                let hits = self.n_cache_hits.load(Ordering::Relaxed);
-                let misses = self.n_cache_misses.load(Ordering::Relaxed);
-                sheaf_msg!(
-                    "\njit: dispatch profile ({} calls, {:.1}ms total):",
-                    n,
-                    total
-                );
-                sheaf_msg!(
-                    "  flatten:  {:7.1}ms ({:4.1}%)",
-                    flatten,
-                    flatten / total * 100.0
-                );
-                sheaf_msg!(
-                    "  buffers:  {:7.1}ms ({:4.1}%)  [hits: {}, misses: {}]",
-                    buffers,
-                    buffers / total * 100.0,
-                    hits,
-                    misses
-                );
-                sheaf_msg!("  call:     {:7.1}ms ({:4.1}%)", call, call / total * 100.0);
-                sheaf_msg!(
-                    "  output:   {:7.1}ms ({:4.1}%)",
-                    output,
-                    output / total * 100.0
-                );
-            }
-        }
+        self.report_profile();
         unsafe {
             // Cached buffer views must not outlive the session.
             if let Ok(cache) = self.buffer_cache.lock() {

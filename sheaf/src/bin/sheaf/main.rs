@@ -1,12 +1,7 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
-//! Sheaf CLI
-//!
-//! Usage:
-//!   sheaf                               Launch interactive REPL
-//!   sheaf file.shf                      Interpret a Sheaf file
-//!   sheaf -c '(+ 1 2)'                 Evaluate an expression
+//! Sheaf command-line entry point.
 
 mod doc;
 mod pretty;
@@ -19,7 +14,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let tail = &args[1..];
 
-    // Handle early-exit flags anywhere in args
+    // Help and version take precedence over all other arguments.
     if tail.iter().any(|a| a == "--help" || a == "-h") {
         print_help();
         return;
@@ -29,7 +24,6 @@ fn main() {
         return;
     }
 
-    // Parse global flags and strip them from args
     let mut verbosity: u8 = 0;
     let mut device: Option<String> = None;
     let mut jit_profile = false;
@@ -78,12 +72,15 @@ fn main() {
         }
         i += 1;
     }
+    if jit_profile && trace_enabled {
+        sheaf_msg!("sheaf: --jit-profile and --trace are mutually exclusive");
+        exit(1);
+    }
+
     sheaf_compiler::core::config::init(verbosity, device, jit_profile);
 
-    // Find the first positional argument (not starting with '-')
     let first_positional = remaining.iter().position(|a| !a.starts_with('-'));
 
-    // Parse guard specs
     let cli_guards: Vec<_> = guard_specs.iter().map(|spec| {
         match parse_guard_spec(spec) {
             Ok(guard) => guard,
@@ -96,8 +93,6 @@ fn main() {
 
     match first_positional.map(|i| remaining[i].as_str()) {
         Some("init-ai") => run_init_ai(),
-
-        Some("-c") => unreachable!(), // -c starts with '-', won't match
 
         Some(file) if file.ends_with(".shf") || std::path::Path::new(file).exists() => {
             let pos = first_positional.unwrap();
@@ -132,6 +127,8 @@ fn main() {
             }
         }
     }
+
+    sheaf_compiler::runtime::report_jit_profile();
 }
 
 fn print_help() {
@@ -177,7 +174,6 @@ fn is_silent_result(val: &sheaf_compiler::interpreter::value::Value) -> bool {
     }
 }
 
-/// Print a result value (or exit on error).
 fn print_result(result: Result<sheaf_compiler::interpreter::value::Value, sheaf_compiler::core::error::SheafError>) {
     match result {
         Ok(val) => {
@@ -344,8 +340,7 @@ fn run_file_v2(
     }
 }
 
-/// Parse a guard spec: `[scope:]check[:args]`
-/// Examples: `no-nan`, `loss:no-nan`, `range:0:10`, `forward:range:-1:1`
+/// Parses `[scope:]check[:args]`, for example `loss:no-nan` or `range:0:10`.
 fn parse_guard_spec(spec: &str) -> Result<sheaf_compiler::interpreter::tracer::CliGuard, String> {
     use sheaf_compiler::core::expr::GuardCheck;
     use sheaf_compiler::interpreter::tracer::CliGuard;

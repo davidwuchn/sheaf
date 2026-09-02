@@ -91,18 +91,23 @@ impl Profiler {
         entry.self_ns += self_ns;
     }
 
-    pub fn report(&self) {
+    pub fn report(&self, tracing_mode: bool) {
         let wall_ns = self.wall_start.elapsed().as_nanos() as u64;
-        sheaf_msg!("\nProfiler: {} wall\n", format_duration(wall_ns));
+        sheaf_msg!("\nProfiler: {} wall", format_duration(wall_ns));
+        if tracing_mode {
+            sheaf_msg!("Warning: tracing mode disables JIT; report shows interpreted execution time\n");
+        } else {
+            sheaf_msg!("");
+        }
 
         let mut entries: Vec<(&String, &ProfileEntry)> = self.stats.iter().collect();
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.1.self_ns));
 
-        eprintln!(
+        sheaf_msg!(
             "  {:<30} {:>8} {:>10} {:>10} {:>10}",
             "Function", "Calls", "Total", "Self", "Avg/call"
         );
-        eprintln!("  {}", "-".repeat(72));
+        sheaf_msg!("  {}", "-".repeat(72));
 
         let threshold = wall_ns / 1000; // 0.1% of wall time
         let mut others_calls: u64 = 0;
@@ -120,7 +125,7 @@ impl Profiler {
                 continue;
             }
             let avg_ns = entry.total_ns / entry.calls;
-            eprintln!(
+            sheaf_msg!(
                 "  {:<30} {:>8} {:>10} {:>10} {:>10}",
                 truncate(name, 30),
                 entry.calls,
@@ -130,7 +135,7 @@ impl Profiler {
             );
         }
         if others_count > 0 {
-            eprintln!(
+            sheaf_msg!(
                 "  {:<30} {:>8} {:>10} {:>10}",
                 format!("... {} others", others_count),
                 others_calls,
@@ -138,12 +143,12 @@ impl Profiler {
                 format_duration(others_self_ns),
             );
         }
-        eprintln!();
+        sheaf_msg!("");
         self.report_tree();
     }
 
     fn report_tree(&self) {
-        eprintln!("  Call tree:\n");
+        sheaf_msg!("  Call tree:\n");
         let mut expanded = HashSet::new();
         if let Some(top_children) = self.call_tree.get("<top>") {
             let wall_ns = self.wall_start.elapsed().as_nanos() as u64;
@@ -174,7 +179,7 @@ impl Profiler {
                 let connector = if is_last { "└── " } else { "├── " };
                 let continuation = if is_last { "    " } else { "│   " };
                 let calls_str = if edge.calls == 1 { "call" } else { "calls" };
-                eprintln!(
+                sheaf_msg!(
                     "  {}{} ({}, {} {})",
                     connector, name, format_duration(edge.total_ns), edge.calls, calls_str
                 );
@@ -189,7 +194,7 @@ impl Profiler {
             }
 
             if has_others {
-                eprintln!(
+                sheaf_msg!(
                     "  └── ... {} {} ({}, {} calls)",
                     others_count,
                     if others_count == 1 { "other" } else { "others" },
@@ -197,7 +202,7 @@ impl Profiler {
                 );
             }
         }
-        eprintln!();
+        sheaf_msg!("");
     }
 
     fn print_subtree(
@@ -238,19 +243,19 @@ impl Profiler {
                 let calls_str = if edge.calls == 1 { "call" } else { "calls" };
 
                 if ancestors.iter().any(|a| a == *child_name) {
-                    eprintln!(
+                    sheaf_msg!(
                         "{}{}{} ({}, {} {}) [recursive]",
                         indent, connector, child_name,
                         format_duration(edge.total_ns), edge.calls, calls_str
                     );
                 } else if expanded.contains(child_name.as_str()) {
-                    eprintln!(
+                    sheaf_msg!(
                         "{}{}{} ({}, {} {}) [see above]",
                         indent, connector, child_name,
                         format_duration(edge.total_ns), edge.calls, calls_str
                     );
                 } else {
-                    eprintln!(
+                    sheaf_msg!(
                         "{}{}{} ({}, {} {})",
                         indent, connector, child_name,
                         format_duration(edge.total_ns), edge.calls, calls_str
@@ -269,7 +274,7 @@ impl Profiler {
             }
 
             if has_others {
-                eprintln!(
+                sheaf_msg!(
                     "{}└── ... {} {} ({}, {} calls)",
                     indent, others_count,
                     if others_count == 1 { "other" } else { "others" },

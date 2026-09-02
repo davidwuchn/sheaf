@@ -187,13 +187,14 @@ fn eval_source_with_blame_internal(
     {
         mp.sample_iree(&session);
     }
+    let tracing_mode = env.tracer.as_ref().is_some_and(|tracer| tracer.enabled);
     if blame_report
         && let Some(ref profiler) = env.profiler
     {
-        profiler.report();
+        profiler.report(tracing_mode);
     }
 
-    // Dropping the environment first includes IREE teardown in the peak measurement.
+    // Release interpreter-owned values before collecting the final memory report.
     let mp = env.mem_profiler.take();
     drop(env);
 
