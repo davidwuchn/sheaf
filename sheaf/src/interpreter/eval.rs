@@ -242,7 +242,9 @@ impl Interpreter {
     }
 
     pub fn registry_names(&self) -> Vec<String> {
-        self.compiler.registry.keys().cloned().collect()
+        let mut names: Vec<String> = self.compiler.registry.keys().cloned().collect();
+        names.sort_unstable();
+        names
     }
 
     /// Returns a stdlib or user-defined function for REPL source display.
