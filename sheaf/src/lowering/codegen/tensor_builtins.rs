@@ -35,9 +35,10 @@ impl<'a> CodeGenerator<'a> {
             "where" if args.len() == 3 => Some(self.gen_where(args)),
             "slice" if args.len() >= 2 => Some(self.gen_slice(args)),
             "dynamic-slice" if args.len() == 3 => Some(self.gen_dynamic_slice(args)),
+            "dynamic-update-slice" if args.len() == 3 => Some(self.gen_dynamic_update_slice(args)),
             "tensor-split" if args.len() == 2 => Some(self.gen_tensor_split(args)),
             "roll" if args.len() == 2 => Some(self.gen_roll(args)),
-        "flip" if args.len() == 1 => Some(self.gen_flip(args)),
+            "flip" if args.len() == 1 => Some(self.gen_flip(args)),
             "index-update" if args.len() == 3 => Some(self.gen_index_update(args)),
             "append-and-roll" if args.len() == 2 => Some(self.gen_append_and_roll(args)),
             "random-key" if args.len() == 1 => Some(self.gen_random_key(args)),
@@ -471,28 +472,154 @@ impl<'a> CodeGenerator<'a> {
         Ok((reg, ty))
     }
 
-    fn gen_dynamic_slice(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
+    fn gen_dynamic_slice(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
-        let start = match &args[1] {
-            CompiledExpr::Integer(n) => *n,
-            _ => {
-                return Err(SheafError::Compile {
-                    message: "dynamic-slice: start must be integer".to_string(),
-                    location: crate::core::error::SourceLocation::unknown(),
-                });
-            }
-        };
-        let end = match &args[2] {
-            CompiledExpr::Integer(n) => *n,
-            _ => {
-                return Err(SheafError::Compile {
-                    message: "dynamic-slice: end must be integer".to_string(),
-                    location: crate::core::error::SourceLocation::unknown(),
-                });
-            }
-        };
-        let (reg, ty) = self.emitter.emit_slice_range(&operand_reg, &operand_ty, start, end);
+        let sizes = self.parse_static_shape_arg(&args[2], "dynamic-slice")?;
+        let operand_shape = operand_ty.shape();
+        let rank = operand_shape.len();
+        if rank == 0
+            || sizes.len() != rank
+            || sizes
+                .iter()
+                .zip(operand_shape)
+                .any(|(&size, &dimension)| size < 0 || size > dimension)
+        {
+            return Err(SheafError::Compile {
+                message: format!(
+                    "dynamic-slice: sizes must contain {} non-negative dimensions bounded by the operand shape",
+                    rank
+                ),
+                location: crate::core::error::SourceLocation::unknown(),
+            });
+        }
+        let starts = self.generate_dynamic_starts(&args[1], rank, "dynamic-slice")?;
+        let (reg, ty) = self.emitter.emit_dynamic_slice(
+            &operand_reg,
+            &operand_ty,
+            &starts,
+            &sizes,
+        );
         Ok((reg, ty))
+    }
+
+    fn gen_dynamic_update_slice(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let (operand_reg, operand_ty) = self.generate(&args[0])?;
+        let (update_reg, update_ty) = self.generate(&args[1])?;
+        let rank = operand_ty.shape().len();
+        if rank == 0
+            || update_ty.shape().len() != rank
+            || update_ty
+                .shape()
+                .iter()
+                .zip(operand_ty.shape())
+                .any(|(&update_size, &operand_size)| update_size > operand_size)
+        {
+            return Err(SheafError::Compile {
+                message: "dynamic-update-slice: update must have the same non-zero rank as operand and fit within it".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            });
+        }
+        if operand_ty.element_type() != update_ty.element_type() {
+            return Err(SheafError::Compile {
+                message: "dynamic-update-slice: operand and update dtypes must match".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            });
+        }
+        let starts = self.generate_dynamic_starts(
+            &args[2],
+            rank,
+            "dynamic-update-slice",
+        )?;
+        let (reg, ty) = self.emitter.emit_dynamic_update_slice(
+            &operand_reg,
+            &operand_ty,
+            &update_reg,
+            &update_ty,
+            &starts,
+        );
+        Ok((reg, ty))
+    }
+
+    fn generate_dynamic_starts(
+        &mut self,
+        expr: &CompiledExpr,
+        rank: usize,
+        operation: &str,
+    ) -> SheafResult<Vec<Register>> {
+        let (starts_reg, starts_ty) = self.generate(expr)?;
+        if starts_ty.shape() != [rank as i64]
+            || !starts_ty
+                .element_type()
+                .is_some_and(|dtype| dtype.is_integer() || dtype.is_float())
+        {
+            return Err(SheafError::Compile {
+                message: format!(
+                    "{}: starts must be a numeric vector of length {}",
+                    operation, rank
+                ),
+                location: crate::core::error::SourceLocation::unknown(),
+            });
+        }
+        let scalar_ty = StableHLOType::i32_tensor(Vec::new());
+        let mut starts = Vec::with_capacity(rank);
+        for index in 0..rank {
+            let index_ty = StableHLOType::typed_tensor(vec![], starts_ty.dtype());
+            let (index_reg, _) = self.emitter.emit_index_axis0(
+                &starts_reg,
+                &starts_ty,
+                index as i64,
+            );
+            let index_reg = if index_ty == scalar_ty {
+                index_reg
+            } else {
+                self.emitter.emit_convert(&index_reg, &index_ty, &scalar_ty)
+            };
+            starts.push(index_reg);
+        }
+        Ok(starts)
+    }
+
+    fn parse_static_shape_arg(
+        &self,
+        expr: &CompiledExpr,
+        operation: &str,
+    ) -> SheafResult<Vec<i64>> {
+        let invalid_element = || SheafError::Compile {
+            message: format!("{}: sizes must contain only integer literals", operation),
+            location: crate::core::error::SourceLocation::unknown(),
+        };
+        match expr {
+            CompiledExpr::Vector(elements) => elements
+                .iter()
+                .map(|element| match element {
+                    CompiledExpr::Integer(value) => Ok(*value),
+                    _ => Err(invalid_element()),
+                })
+                .collect(),
+            CompiledExpr::Quoted(value) => match value.as_ref() {
+                SheafValue::Vector(elements, _) => elements
+                    .iter()
+                    .map(|element| match element {
+                        SheafValue::Integer(value, _) => Ok(*value),
+                        _ => Err(invalid_element()),
+                    })
+                    .collect(),
+                _ => Err(SheafError::Compile {
+                    message: format!("{}: sizes must be a vector", operation),
+                    location: crate::core::error::SourceLocation::unknown(),
+                }),
+            },
+            _ => Err(SheafError::Compile {
+                message: format!("{}: sizes must be a vector", operation),
+                location: crate::core::error::SourceLocation::unknown(),
+            }),
+        }
     }
 
     fn gen_tensor_split(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
@@ -681,5 +808,94 @@ impl<'a> CodeGenerator<'a> {
                 location: crate::core::error::SourceLocation::unknown(),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn call(name: &str, args: Vec<CompiledExpr>) -> CompiledExpr {
+        CompiledExpr::FunctionCall {
+            name: name.to_string(),
+            args,
+            loc: None,
+        }
+    }
+
+    #[test]
+    fn dynamic_slice_lowers_runtime_starts() {
+        let registry = HashMap::new();
+        let param_types = vec![
+            StableHLOType::f32_tensor(vec![3, 3]),
+            StableHLOType::f32_tensor(vec![2]),
+        ];
+        let codegen = CodeGenerator::with_function_params(
+            &registry,
+            &["x".to_string(), "starts".to_string()],
+            &param_types,
+        );
+        let expression = call(
+            "dynamic-slice",
+            vec![
+                CompiledExpr::Symbol("x".to_string()),
+                CompiledExpr::Symbol("starts".to_string()),
+                CompiledExpr::Vector(vec![
+                    CompiledExpr::Integer(2),
+                    CompiledExpr::Integer(2),
+                ]),
+            ],
+        );
+        let result_type = StableHLOType::f32_tensor(vec![2, 2]);
+        let (mlir, actual_type) = codegen
+            .emit_func_declaration(
+                "dynamic_slice",
+                &expression,
+                &param_types,
+                &result_type,
+            )
+            .unwrap();
+
+        assert!(mlir.contains("stablehlo.dynamic_slice"));
+        assert!(mlir.contains("(tensor<f32>) -> tensor<i32>"));
+        assert_eq!(actual_type, result_type);
+    }
+
+    #[test]
+    fn dynamic_update_slice_lowers_runtime_starts() {
+        let registry = HashMap::new();
+        let param_types = vec![
+            StableHLOType::f32_tensor(vec![3, 4]),
+            StableHLOType::f32_tensor(vec![2, 2]),
+            StableHLOType::f32_tensor(vec![2]),
+        ];
+        let codegen = CodeGenerator::with_function_params(
+            &registry,
+            &["x".to_string(), "update".to_string(), "starts".to_string()],
+            &param_types,
+        );
+        let expression = call(
+            "dynamic-update-slice",
+            vec![
+                CompiledExpr::Symbol("x".to_string()),
+                CompiledExpr::Symbol("update".to_string()),
+                CompiledExpr::Symbol("starts".to_string()),
+            ],
+        );
+        let result_type = param_types[0].clone();
+        let (mlir, actual_type) = codegen
+            .emit_func_declaration(
+                "dynamic_update_slice",
+                &expression,
+                &param_types,
+                &result_type,
+            )
+            .unwrap();
+
+        assert!(mlir.contains("stablehlo.dynamic_update_slice"));
+        assert!(mlir.contains("(tensor<f32>) -> tensor<i32>"));
+        assert_eq!(actual_type, result_type);
     }
 }

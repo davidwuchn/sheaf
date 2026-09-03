@@ -286,6 +286,64 @@ impl StableHLOEmitter {
         }
     }
 
+    pub fn emit_dynamic_slice(
+        &mut self,
+        input: &Register,
+        input_ty: &StableHLOType,
+        starts: &[Register],
+        slice_sizes: &[i64],
+    ) -> (Register, StableHLOType) {
+        let result_ty = indexing_type(input_ty, slice_sizes.to_vec());
+        let result_reg = self.fresh_register();
+        let operands = std::iter::once(input.to_mlir().to_string())
+            .chain(starts.iter().map(Register::to_mlir))
+            .collect::<Vec<_>>();
+        let operand_types = std::iter::once(input_ty.to_mlir())
+            .chain(starts.iter().map(|_| "tensor<i32>".to_string()))
+            .collect::<Vec<_>>();
+        let sizes = slice_sizes
+            .iter()
+            .map(|size| size.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.body.push(format!(
+            "    {} = \"stablehlo.dynamic_slice\"({}) {{ slice_sizes = array<i64: {}> }} : ({}) -> {}",
+            result_reg.to_mlir(),
+            operands.join(", "),
+            sizes,
+            operand_types.join(", "),
+            result_ty.to_mlir(),
+        ));
+        (result_reg, result_ty)
+    }
+
+    pub fn emit_dynamic_update_slice(
+        &mut self,
+        input: &Register,
+        input_ty: &StableHLOType,
+        update: &Register,
+        update_ty: &StableHLOType,
+        starts: &[Register],
+    ) -> (Register, StableHLOType) {
+        let result_reg = self.fresh_register();
+        let operands = std::iter::once(input.to_mlir().to_string())
+            .chain(std::iter::once(update.to_mlir().to_string()))
+            .chain(starts.iter().map(Register::to_mlir))
+            .collect::<Vec<_>>();
+        let operand_types = std::iter::once(input_ty.to_mlir())
+            .chain(std::iter::once(update_ty.to_mlir()))
+            .chain(starts.iter().map(|_| "tensor<i32>".to_string()))
+            .collect::<Vec<_>>();
+        self.body.push(format!(
+            "    {} = \"stablehlo.dynamic_update_slice\"({}) : ({}) -> {}",
+            result_reg.to_mlir(),
+            operands.join(", "),
+            operand_types.join(", "),
+            input_ty.to_mlir(),
+        ));
+        (result_reg, input_ty.clone())
+    }
+
     pub fn emit_slice_exclusive(
         &mut self,
         input: &Register,

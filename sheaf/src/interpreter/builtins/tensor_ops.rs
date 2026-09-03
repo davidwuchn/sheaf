@@ -13,6 +13,7 @@ pub(super) fn register(env: &mut Env) {
     env.set_builtin("index-update", builtin_index_update);
     env.set_builtin("swapaxes", builtin_swapaxes);
     env.set_builtin("dynamic-slice", builtin_dynamic_slice);
+    env.set_builtin("dynamic-update-slice", builtin_dynamic_update_slice);
     env.set_builtin("tensor-split", builtin_tensor_split);
     env.set_builtin("flip", builtin_flip);
 }
@@ -409,22 +410,184 @@ fn builtin_tensor_split(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     Ok(Value::List(chunks))
 }
 
+fn numeric_vector(
+    value: &Value,
+    operation: &str,
+) -> Result<Vec<i64>, crate::core::error::SheafError> {
+    let (array, _) = to_array(value)?;
+    if array.ndim() != 1 {
+        return Err(runtime_error(format!(
+            "{}: expected a one-dimensional numeric tensor",
+            operation
+        )));
+    }
+    Ok(array.iter().map(|value| *value as i64).collect())
+}
+
+fn dynamic_starts(
+    value: &Value,
+    rank: usize,
+    operation: &str,
+    limits: &[usize],
+) -> Result<Vec<usize>, crate::core::error::SheafError> {
+    let starts = numeric_vector(value, operation)?;
+    if starts.len() != rank {
+        return Err(runtime_error(format!(
+            "{}: starts has length {}, expected {}",
+            operation, starts.len(), rank
+        )));
+    }
+    Ok(starts
+        .into_iter()
+        .zip(limits)
+        .map(|(start, &limit)| {
+            if start < 0 { 0 } else { (start as usize).min(limit) }
+        })
+        .collect())
+}
+
+fn static_sizes(
+    value: &Value,
+    rank: usize,
+    operation: &str,
+) -> Result<Vec<usize>, crate::core::error::SheafError> {
+    let values: Vec<f64> = match value {
+        Value::List(items) => items
+            .iter()
+            .map(|item| {
+                item.to_f64().ok_or_else(|| {
+                    runtime_error(format!("{}: sizes must be numeric", operation))
+                })
+            })
+            .collect::<Result<_, _>>()?,
+        Value::Tensor { data, .. } if data.ndim() == 1 => {
+            data.iter().map(|&value| value as f64).collect()
+        }
+        _ => {
+            return Err(runtime_error(format!(
+                "{}: sizes must be a one-dimensional sequence",
+                operation
+            )));
+        }
+    };
+    if values.len() != rank {
+        return Err(runtime_error(format!(
+            "{}: sizes has length {}, expected {}",
+            operation,
+            values.len(),
+            rank
+        )));
+    }
+    values
+        .into_iter()
+        .map(|size| {
+            if size.is_finite() && size >= 0.0 && size.fract() == 0.0 {
+                Ok(size as usize)
+            } else {
+                Err(runtime_error(format!(
+                    "{}: sizes must contain non-negative integers",
+                    operation
+                )))
+            }
+        })
+        .collect()
+}
+
 fn builtin_dynamic_slice(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
-    let (arr, dtype) = to_array(&args[0])?;
-    if arr.ndim() == 0 {
-        return Err(runtime_error("dynamic-slice: cannot slice a 0-dimensional tensor"));
+    if args.len() != 3 {
+        return Err(runtime_error(format!(
+            "dynamic-slice expects 3 arguments, got {}",
+            args.len()
+        )));
     }
-    let start = args[1].to_f64().ok_or_else(|| runtime_error("dynamic-slice: start must be a number"))? as usize;
-    let end = args[2].to_f64().ok_or_else(|| runtime_error("dynamic-slice: end must be a number"))? as usize;
-    if start > end {
-        return Err(runtime_error(format!("dynamic-slice: start ({}) > end ({})", start, end)));
+    let (operand, dtype) = to_array(&args[0])?;
+    let rank = operand.ndim();
+    if rank == 0 {
+        return Err(runtime_error(
+            "dynamic-slice: operand must have non-zero rank",
+        ));
     }
-    let dim0 = arr.shape()[0];
-    if end >= dim0 {
-        return Err(runtime_error(format!("dynamic-slice: end ({}) out of bounds for axis 0 with size {}", end, dim0)));
+    let sizes = static_sizes(&args[2], rank, "dynamic-slice")?;
+    if sizes
+        .iter()
+        .zip(operand.shape())
+        .any(|(&size, &dimension)| size > dimension)
+    {
+        return Err(runtime_error(
+            "dynamic-slice: sizes exceed operand dimensions",
+        ));
     }
-    let sliced = arr.slice_axis(ndarray::Axis(0), ndarray::Slice::from(start..=end));
-    Ok(tensor_with_dtype(sliced.to_owned(), dtype))
+    let limits: Vec<usize> = operand
+        .shape()
+        .iter()
+        .zip(&sizes)
+        .map(|(&dimension, &size)| dimension - size)
+        .collect();
+    let starts = dynamic_starts(&args[1], rank, "dynamic-slice", &limits)?;
+    let mut result = operand;
+    for (axis, (&start, &size)) in starts.iter().zip(&sizes).enumerate() {
+        result = std::borrow::Cow::Owned(
+            result
+                .slice_axis(
+                    ndarray::Axis(axis),
+                    ndarray::Slice::from(start..start + size),
+                )
+                .to_owned(),
+        );
+    }
+    Ok(tensor_with_dtype(result.into_owned(), dtype))
+}
+
+fn builtin_dynamic_update_slice(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    if args.len() != 3 {
+        return Err(runtime_error(format!(
+            "dynamic-update-slice expects 3 arguments, got {}",
+            args.len()
+        )));
+    }
+    let (operand, dtype) = to_array(&args[0])?;
+    let (update, update_dtype) = to_array(&args[1])?;
+    let rank = operand.ndim();
+    if rank == 0 || update.ndim() != rank {
+        return Err(runtime_error(
+            "dynamic-update-slice: operand and update must have the same non-zero rank",
+        ));
+    }
+    if dtype != update_dtype {
+        return Err(runtime_error(
+            "dynamic-update-slice: operand and update dtypes must match",
+        ));
+    }
+    if update
+        .shape()
+        .iter()
+        .zip(operand.shape())
+        .any(|(&update_size, &operand_size)| update_size > operand_size)
+    {
+        return Err(runtime_error(
+            "dynamic-update-slice: update exceeds operand dimensions",
+        ));
+    }
+    let limits: Vec<usize> = operand
+        .shape()
+        .iter()
+        .zip(update.shape())
+        .map(|(&dimension, &size)| dimension - size)
+        .collect();
+    let starts = dynamic_starts(&args[2], rank, "dynamic-update-slice", &limits)?;
+    let mut result = operand.into_owned();
+    let update_shape = update.shape().to_vec();
+    for (flat_index, &value) in update.iter().enumerate() {
+        let mut remainder = flat_index;
+        let mut result_index = vec![0; rank];
+        for axis in (0..rank).rev() {
+            result_index[axis] = remainder % update_shape[axis];
+            remainder /= update_shape[axis];
+            result_index[axis] += starts[axis];
+        }
+        result[ndarray::IxDyn(&result_index)] = value;
+    }
+    Ok(tensor_with_dtype(result, dtype))
 }
 
 fn builtin_flip(args: &[Value], kw: &BTreeMap<String, Value>) -> R {

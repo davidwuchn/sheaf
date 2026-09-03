@@ -251,7 +251,7 @@ fn is_builtin_name(name: &str) -> bool {
         | "tensor" | "range" | "swapaxes" | "var" | "normalize" | "index-of"
         | "gensym" | "symbol?"
         | "einsum" | "append-and-roll"
-        | "dynamic-slice" | "mse-loss" | "mae-loss"
+        | "dynamic-slice" | "dynamic-update-slice" | "mse-loss" | "mae-loss"
         | "tree-map" | "tree-map-zeros" | "tree-reduce" | "flatten"
     )
 }

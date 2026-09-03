@@ -2400,14 +2400,54 @@ and Value projections in Transformer layers.
 ### dynamic-slice
 
 **Type:** function\
-**Signature:** `(dynamic-slice x start length)`
+**Signature:** `(dynamic-slice x starts sizes)`
 
-Extracts a slice of a fixed `length` starting from a dynamic `start` index. The
-output shape (length) remains constant even when the starting position is a
-computed value.
+Extracts a fixed-size slice from a tensor of non-zero rank. `starts` is a
+one-dimensional numeric tensor with one start index per axis. Its values may
+be computed at runtime. `sizes` is a static vector of non-negative integer
+literals with one size per axis. Each size must not exceed the corresponding
+input dimension.
+
+Start indices are converted to i32 and clamped independently to the interval
+`[0, dimension - size]`. A slice that would cross an upper bound is shifted
+back to fit. Negative starts are clamped to zero.
 
 ```sheaf
-(dynamic-slice (arange 5) 1 3)  ; => [1 2 3]
+(dynamic-slice (arange 5) [1] '[3])
+;; => [1 2 3]
+
+(dynamic-slice [[1 2 3]
+                [4 5 6]
+                [7 8 9]]
+               [1 1]
+               '[2 2])
+;; => [[5. 6.]
+;;     [8. 9.]]
+```
+
+---
+
+### dynamic-update-slice
+
+**Type:** function\
+**Signature:** `(dynamic-update-slice x update starts)`
+
+Returns `x` with `update` written at the position given by `starts`. `x` and
+`update` must have the same non-zero rank and dtype. Every update dimension
+must fit within the corresponding input dimension. `starts` follows the same
+conversion and clamping rules as `dynamic-slice`.
+
+The operation is functional: it returns an updated tensor and does not mutate
+its input value.
+
+```sheaf
+(dynamic-update-slice (zeros '[3 4])
+                      [[1 2]
+                       [3 4]]
+                      [1 2])
+;; => [[0. 0. 0. 0.]
+;;     [0. 0. 1. 2.]
+;;     [0. 0. 3. 4.]]
 ```
 
 ---

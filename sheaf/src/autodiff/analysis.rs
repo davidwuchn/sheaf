@@ -256,8 +256,8 @@ fn find_undiffable_rec(expr: &CompiledExpr, ops: &mut Vec<String>) {
         CompiledExpr::FunctionCall { name, args, .. } => {
             match name.as_str() {
                 "get" | "reduce" | "map" | "filter" | "find" | "range" | "len" | "first"
-                | "last" | "rest" | "cons" | "append" | "concat" | "slice" | "shape" | "print"
-                | "io" => ops.push(name.clone()),
+                | "last" | "rest" | "cons" | "append" | "concat" | "slice" | "dynamic-slice"
+                | "dynamic-update-slice" | "shape" | "print" | "io" => ops.push(name.clone()),
                 _ => {}
             }
             for a in args {
@@ -316,7 +316,8 @@ pub fn contains_undiffable_ops(expr: &CompiledExpr) -> bool {
     match expr {
         CompiledExpr::FunctionCall { name, args, .. } => match name.as_str() {
             "get" | "reduce" | "map" | "filter" | "find" | "range" | "len" | "first" | "last"
-            | "rest" | "cons" | "append" | "concat" | "slice" | "shape" | "print" | "io" => true,
+            | "rest" | "cons" | "append" | "concat" | "slice" | "dynamic-slice"
+            | "dynamic-update-slice" | "shape" | "print" | "io" => true,
             _ => args.iter().any(contains_undiffable_ops),
         },
         CompiledExpr::LambdaCall { .. } => true,
