@@ -291,3 +291,55 @@ pub fn propagate_let_layouts(
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{lower_inlined_gets, propagate_let_layouts};
+    use crate::core::expr::{BindingPattern, CompiledExpr};
+    use std::collections::{BTreeMap, HashMap};
+
+    #[test]
+    fn lower_get_through_inlined_nested_tuple_alias() {
+        let body = CompiledExpr::Let {
+            bindings: vec![(
+                BindingPattern::Simple("layer".to_string()),
+                CompiledExpr::GetTupleElement {
+                    param: "params".to_string(),
+                    indices: vec![0],
+                },
+            )],
+            body: Box::new(CompiledExpr::FunctionCall {
+                name: "get".to_string(),
+                args: vec![
+                    CompiledExpr::Symbol("layer".to_string()),
+                    CompiledExpr::Keyword("weight".to_string()),
+                ],
+                loc: None,
+            }),
+        };
+        let mut index_map = BTreeMap::new();
+        index_map.insert(vec!["layer".to_string()], vec![0]);
+        index_map.insert(
+            vec!["layer".to_string(), "weight".to_string()],
+            vec![0, 0],
+        );
+
+        let mut layouts = HashMap::from([
+            ("nested".to_string(), BTreeMap::from([("weight".to_string(), 0)])),
+        ]);
+        let idx_to_key = HashMap::from([
+            (("params".to_string(), 0), "nested".to_string()),
+            (("nested".to_string(), 0), "weight".to_string()),
+        ]);
+        propagate_let_layouts(&body, &idx_to_key, &mut layouts);
+        assert_eq!(layouts.get("layer"), layouts.get("nested"));
+
+        let lowered = lower_inlined_gets(&body, &[("params".to_string(), index_map)]);
+        assert!(matches!(
+            lowered,
+            CompiledExpr::Let { body, .. }
+                if matches!(*body, CompiledExpr::GetTupleElement { ref param, ref indices }
+                    if param == "params" && indices == &vec![0, 0])
+        ));
+    }
+}

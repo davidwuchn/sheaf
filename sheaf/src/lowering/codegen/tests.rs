@@ -1,6 +1,74 @@
 use super::*;
 
 #[test]
+fn test_static_tuple_get_preserves_nested_layout() {
+    use crate::core::dtype::ElementType;
+    use std::collections::{BTreeMap, HashMap};
+
+    let registry = HashMap::new();
+    let param_type = StableHLOType::Tuple(
+        vec![StableHLOType::Tuple(
+            vec![StableHLOType::Tuple(vec![StableHLOType::scalar_f32()], None)],
+            None,
+        )],
+        None,
+    );
+    let body = CompiledExpr::Let {
+        bindings: vec![
+            (
+                crate::core::expr::BindingPattern::Simple("blocks".to_string()),
+                CompiledExpr::GetTupleElement {
+                    param: "params".to_string(),
+                    indices: vec![0],
+                },
+            ),
+            (
+                crate::core::expr::BindingPattern::Simple("block-p".to_string()),
+                CompiledExpr::FunctionCall {
+                    name: "get".to_string(),
+                    args: vec![
+                        CompiledExpr::Symbol("blocks".to_string()),
+                        CompiledExpr::Integer(0),
+                    ],
+                    loc: None,
+                },
+            ),
+        ],
+        body: Box::new(CompiledExpr::FunctionCall {
+            name: "get".to_string(),
+            args: vec![
+                CompiledExpr::Symbol("block-p".to_string()),
+                CompiledExpr::Keyword("ln_1".to_string()),
+            ],
+            loc: None,
+        }),
+    };
+    let mut codegen = CodeGenerator::with_function_params(
+        &registry,
+        &["params".to_string()],
+        std::slice::from_ref(&param_type),
+    );
+    codegen.set_tuple_key_layouts(HashMap::from([
+        ("params".to_string(), BTreeMap::from([("h".to_string(), 0)])),
+        ("h".to_string(), BTreeMap::from([("0".to_string(), 0)])),
+        ("0".to_string(), BTreeMap::from([("ln_1".to_string(), 0)])),
+    ]));
+    codegen.set_idx_to_key(HashMap::from([
+        (("params".to_string(), 0), "h".to_string()),
+        (("h".to_string(), 0), "0".to_string()),
+    ]));
+    let (_, result_type) = codegen
+        .emit_func_declaration(
+            "nested_get",
+            &body,
+            std::slice::from_ref(&param_type),
+            &StableHLOType::ScalarF32,
+        )
+        .expect("static tuple get should preserve nested layout");
+    assert_eq!(result_type.element_type(), Some(ElementType::F32));
+}
+
+#[test]
 fn test_generate_constant() {
     let mut codegen = CodeGenerator::new();
     let expr = CompiledExpr::Integer(42);

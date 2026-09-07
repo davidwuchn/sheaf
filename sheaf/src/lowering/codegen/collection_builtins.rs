@@ -198,9 +198,40 @@ impl<'a> CodeGenerator<'a> {
         let sym_name = if let CompiledExpr::Symbol(s) = &args[0] { Some(s.clone()) } else { None };
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
         match &operand_ty {
-            StableHLOType::Tuple(..) => {
-                let layout_key = sym_name.clone()
-                    .or_else(|| self.layout_key_map.get(&operand_reg).cloned());
+            StableHLOType::Tuple(elements, _) => {
+                if let CompiledExpr::Integer(index) = &args[1] {
+                    let index = if *index < 0 {
+                        elements.len() as i64 + *index
+                    } else {
+                        *index
+                    };
+                    let element_ty = elements.get(index as usize).ok_or_else(|| {
+                        SheafError::Compile {
+                            message: format!(
+                                "get: tuple index {} out of bounds for {} elements",
+                                index,
+                                elements.len()
+                            ),
+                            location: crate::core::error::SourceLocation::unknown(),
+                        }
+                    })?;
+                    let reg = self.emitter.emit_get_tuple_element(
+                        &operand_reg,
+                        &operand_ty,
+                        index as usize,
+                        element_ty,
+                    );
+                    let parent_key = self.layout_key_map.get(&operand_reg).cloned()
+                        .or(sym_name.clone());
+                    if let Some(parent_key) = parent_key
+                        && let Some(child_key) = self.idx_to_key.get(&(parent_key, index as usize))
+                    {
+                        self.layout_key_map.insert(reg, child_key.clone());
+                    }
+                    return Ok((reg, element_ty.clone()));
+                }
+                let layout_key = self.layout_key_map.get(&operand_reg).cloned()
+                    .or(sym_name.clone());
                 if let Some(ref start_key) = layout_key {
                     let keywords: Vec<String> = args[1..].iter().filter_map(|a| match a {
                         CompiledExpr::Keyword(k) | CompiledExpr::String(k) => Some(k.clone()),

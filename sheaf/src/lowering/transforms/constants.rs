@@ -474,14 +474,43 @@ pub fn try_infer_shape(
 ) -> Option<Vec<i64>> {
     match expr {
         CompiledExpr::Symbol(s) => shapes.get(s).cloned(),
-        CompiledExpr::Vector(elems) => {
-            if elems.is_empty() {
+        CompiledExpr::Vector(elements) => {
+            if elements.is_empty() {
                 return Some(vec![0]);
             }
-            if let CompiledExpr::Vector(inner) = &elems[0] {
-                Some(vec![elems.len() as i64, inner.len() as i64])
+            if elements.iter().all(|element| {
+                matches!(
+                    element,
+                    CompiledExpr::Integer(_)
+                        | CompiledExpr::Float(_)
+                        | CompiledExpr::Boolean(_)
+                )
+            }) {
+                return Some(vec![elements.len() as i64]);
+            }
+            let rows: Option<Vec<&Vec<CompiledExpr>>> = elements
+                .iter()
+                .map(|element| match element {
+                    CompiledExpr::Vector(row) => Some(row),
+                    _ => None,
+                })
+                .collect();
+            let rows = rows?;
+            let width = rows.first()?.len();
+            if rows.iter().all(|row| {
+                row.len() == width
+                    && row.iter().all(|element| {
+                        matches!(
+                            element,
+                            CompiledExpr::Integer(_)
+                                | CompiledExpr::Float(_)
+                                | CompiledExpr::Boolean(_)
+                        )
+                    })
+            }) {
+                Some(vec![rows.len() as i64, width as i64])
             } else {
-                Some(vec![elems.len() as i64])
+                None
             }
         }
         CompiledExpr::Let { bindings, body } => {
@@ -515,7 +544,18 @@ pub fn try_infer_shape(
                     None
                 }
             }
-            "first" => args.first().and_then(|a| try_infer_shape(a, shapes)),
+            "first" if args.len() == 1 => match &args[0] {
+                CompiledExpr::Vector(elements) | CompiledExpr::Tuple(elements) => {
+                    elements.first().and_then(|element| try_infer_shape(element, shapes))
+                }
+                operand => {
+                    let mut shape = try_infer_shape(operand, shapes)?;
+                    if !shape.is_empty() {
+                        shape.remove(0);
+                    }
+                    Some(shape)
+                }
+            },
             "reshape" if args.len() == 2 => {
                 if let CompiledExpr::Vector(elems) = &args[1] {
                     elems
@@ -851,7 +891,7 @@ pub(crate) fn filter_constants_for_shape_positions(
 
 #[cfg(test)]
 mod shape_classifier_tests {
-    use super::{collect_shape_gtes, filter_constants_for_shape_positions};
+    use super::{collect_shape_gtes, filter_constants_for_shape_positions, try_infer_shape};
     use crate::core::expr::{BindingPattern, CompiledExpr};
     use std::collections::HashMap;
 
@@ -879,6 +919,21 @@ mod shape_classifier_tests {
                 .collect(),
             body: Box::new(body),
         }
+    }
+
+    #[test]
+    fn first_of_state_vector_uses_element_shape() {
+        let state = CompiledExpr::Vector(vec![sym("x"), sym("cache")]);
+        let shapes = HashMap::from([
+            ("x".to_string(), vec![1, 45, 768]),
+            ("cache".to_string(), vec![12, 1, 12, 512, 64]),
+        ]);
+
+        assert_eq!(try_infer_shape(&state, &shapes), None);
+        assert_eq!(
+            try_infer_shape(&call("first", vec![state]), &shapes),
+            Some(vec![1, 45, 768]),
+        );
     }
 
     #[test]

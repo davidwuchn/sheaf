@@ -389,20 +389,11 @@ impl<'a> CodeGenerator<'a> {
                         }
                     }
                     // Follow virtual tuple aliases introduced by inlining.
-                    else if let CompiledExpr::GetTupleElement { param, indices } = value_expr {
-                        let mut cur = param.clone();
-                        let mut resolved = true;
-                        for &idx in indices {
-                            if let Some(key) = self.idx_to_key.get(&(cur.clone(), idx)) {
-                                cur = key.clone();
-                            } else {
-                                resolved = false;
-                                break;
-                            }
-                        }
-                        if resolved
-                            && let Some(sub_layout) = self.tuple_key_layouts.get(&cur).cloned()
-                        {
+                    else if let CompiledExpr::GetTupleElement { param, indices } = value_expr
+                        && let Some(layout_key) = self.resolve_layout_key(param, indices)
+                    {
+                        self.layout_key_map.insert(reg, layout_key.clone());
+                        if let Some(sub_layout) = self.tuple_key_layouts.get(&layout_key).cloned() {
                             self.tuple_key_layouts.insert(name.clone(), sub_layout);
                         }
                     }
@@ -581,18 +572,21 @@ impl<'a> CodeGenerator<'a> {
         }).collect()
     }
 
-    fn track_layout_key(&mut self, param: &str, indices: &[usize], reg: Register) {
-        let mut cur = param.to_string();
-        for &idx in indices {
-            if let Some(key) = self.idx_to_key.get(&(cur.clone(), idx)) {
-                cur = key.clone();
-            } else {
-                cur = String::new();
-                break;
-            }
+    fn resolve_layout_key(&self, param: &str, indices: &[usize]) -> Option<String> {
+        let mut current = self.bindings
+            .get(param)
+            .and_then(|(reg, _)| self.layout_key_map.get(reg))
+            .cloned()
+            .unwrap_or_else(|| param.to_string());
+        for &index in indices {
+            current = self.idx_to_key.get(&(current, index))?.clone();
         }
-        if !cur.is_empty() {
-            self.layout_key_map.insert(reg, cur);
+        Some(current)
+    }
+
+    fn track_layout_key(&mut self, param: &str, indices: &[usize], reg: Register) {
+        if let Some(layout_key) = self.resolve_layout_key(param, indices) {
+            self.layout_key_map.insert(reg, layout_key);
         }
     }
 
