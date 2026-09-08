@@ -29,7 +29,7 @@ impl<'a> CodeGenerator<'a> {
             "__cast-like" if args.len() == 2 => Some(self.gen_cast_like(args)),
             "arange" | "range" if args.len() == 1 || args.len() == 2 =>
                 Some(self.gen_arange(name, args)),
-            "concat" if args.len() == 2 => Some(self.gen_concat(args)),
+            "concat" if !args.is_empty() => Some(self.gen_concat(args)),
             "swapaxes" if args.len() == 3 => Some(self.gen_swapaxes(args)),
             "tril" if args.len() == 1 => Some(self.gen_tril(args)),
             "where" if args.len() == 3 => Some(self.gen_where(args)),
@@ -344,33 +344,74 @@ impl<'a> CodeGenerator<'a> {
     }
 
     fn gen_concat(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
-        if let CompiledExpr::Vector(tensor_exprs) = &args[0] {
-            let mut operand_regs = Vec::new();
-            let mut operand_types = Vec::new();
-            for expr in tensor_exprs {
-                let (reg, ty) = self.generate(expr)?;
-                operand_regs.push(reg);
-                operand_types.push(ty);
-            }
-            if let CompiledExpr::Integer(dim) = &args[1] {
-                let (reg, ty) = self.emitter.emit_concatenate(
-                    &operand_regs,
-                    &operand_types,
-                    *dim,
-                );
-                Ok((reg, ty))
-            } else {
-                Err(SheafError::Compile {
-                    message: "concat expects an integer dimension argument".to_string(),
-                    location: crate::core::error::SourceLocation::unknown(),
-                })
-            }
+        let (tensor_exprs, axis) = if args.len() >= 3
+            && matches!(&args[args.len() - 2], CompiledExpr::Keyword(key) if key == "axis")
+        {
+            let axis = match &args[args.len() - 1] {
+                CompiledExpr::Integer(axis) => *axis,
+                _ => {
+                    return Err(SheafError::Compile {
+                        message: "concat: axis must be an integer".to_string(),
+                        location: crate::core::error::SourceLocation::unknown(),
+                    });
+                }
+            };
+            (&args[..args.len() - 2], axis)
         } else {
-            Err(SheafError::Compile {
-                message: "concat expects a vector of tensors as first argument".to_string(),
+            (args, 0)
+        };
+
+        if tensor_exprs.is_empty() {
+            return Err(SheafError::Compile {
+                message: "concat expects at least one tensor".to_string(),
                 location: crate::core::error::SourceLocation::unknown(),
-            })
+            });
         }
+
+        let mut operand_regs = Vec::with_capacity(tensor_exprs.len());
+        let mut operand_types = Vec::with_capacity(tensor_exprs.len());
+        for expr in tensor_exprs {
+            let (reg, ty) = self.generate(expr)?;
+            operand_regs.push(reg);
+            operand_types.push(ty);
+        }
+
+        let first_type = &operand_types[0];
+        let rank = first_type.shape().len();
+        let axis = if axis < 0 { axis + rank as i64 } else { axis };
+        if rank == 0 || axis < 0 || axis >= rank as i64 {
+            return Err(SheafError::Compile {
+                message: format!("concat: axis {} is out of bounds for rank {}", axis, rank),
+                location: crate::core::error::SourceLocation::unknown(),
+            });
+        }
+        let axis = axis as usize;
+        for ty in &operand_types[1..] {
+            if ty.shape().len() != rank || ty.element_type() != first_type.element_type() {
+                return Err(SheafError::Compile {
+                    message: "concat: all tensors must have the same rank and dtype".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                });
+            }
+            if ty
+                .shape()
+                .iter()
+                .zip(first_type.shape())
+                .enumerate()
+                .any(|(dimension, (actual, expected))| {
+                    dimension != axis && actual != expected
+                })
+            {
+                return Err(SheafError::Compile {
+                    message: "concat: non-concatenated dimensions must match".to_string(),
+                    location: crate::core::error::SourceLocation::unknown(),
+                });
+            }
+        }
+
+        Ok(self
+            .emitter
+            .emit_concatenate(&operand_regs, &operand_types, axis as i64))
     }
 
     fn gen_swapaxes(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {

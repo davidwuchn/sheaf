@@ -409,6 +409,40 @@ fn test_f16_comparison_and_slice_gradient_use_typed_constants() {
 }
 
 #[test]
+fn test_concat_accepts_variadic_tensors_and_axis_keyword() {
+    use crate::core::dtype::ElementType;
+
+    let registry = HashMap::new();
+    let param_types = vec![
+        StableHLOType::tensor(vec![2, 1], ElementType::F32),
+        StableHLOType::tensor(vec![2, 2], ElementType::F32),
+    ];
+    let codegen = CodeGenerator::with_function_params(
+        &registry,
+        &["x".to_string(), "y".to_string()],
+        &param_types,
+    );
+    let body = CompiledExpr::FunctionCall {
+        name: "concat".to_string(),
+        args: vec![
+            CompiledExpr::Symbol("x".to_string()),
+            CompiledExpr::Symbol("y".to_string()),
+            CompiledExpr::Keyword("axis".to_string()),
+            CompiledExpr::Integer(1),
+        ],
+        loc: None,
+    };
+    let result_type = StableHLOType::tensor(vec![2, 3], ElementType::F32);
+    let (mlir, actual_type) = codegen
+        .emit_func_declaration("concatenate", &body, &param_types, &result_type)
+        .unwrap();
+
+    assert!(mlir.contains("stablehlo.concatenate"));
+    assert!(mlir.contains("dim = 1"));
+    assert_eq!(actual_type, result_type);
+}
+
+#[test]
 fn test_dot_operations_preserve_dtypes() {
     use crate::core::dtype::ElementType;
 
