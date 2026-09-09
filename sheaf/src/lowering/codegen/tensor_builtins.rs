@@ -281,6 +281,7 @@ impl<'a> CodeGenerator<'a> {
         let (src_reg, src_ty) = self.generate(&args[0])?;
         if let CompiledExpr::Keyword(dtype_str) = &args[1] {
             let target_dtype = match dtype_str.as_str() {
+                "f16" => "f16",
                 "bf16" => "bf16",
                 "f32" => "f32",
                 "i32" => "i32",
@@ -297,7 +298,7 @@ impl<'a> CodeGenerator<'a> {
             Ok((reg, target_ty))
         } else {
             Err(SheafError::Compile {
-                message: "cast expects a keyword dtype argument (:bf16, :f32)".to_string(),
+                message: "cast expects a keyword dtype argument (:f16, :bf16, :f32, :i32)".to_string(),
                 location: crate::core::error::SourceLocation::unknown(),
             })
         }

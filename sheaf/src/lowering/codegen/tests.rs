@@ -292,6 +292,39 @@ fn vag_call(loss: CompiledExpr, argument: &str) -> CompiledExpr {
 }
 
 #[test]
+fn test_cast_supports_f16() {
+    use crate::core::dtype::ElementType;
+
+    let registry = HashMap::new();
+    let input_type = StableHLOType::f32_tensor(vec![2]);
+    let codegen = CodeGenerator::with_function_params(
+        &registry,
+        &["x".to_string()],
+        std::slice::from_ref(&input_type),
+    );
+    let body = call(
+        "cast",
+        vec![
+            CompiledExpr::Symbol("x".to_string()),
+            CompiledExpr::Keyword("f16".to_string()),
+        ],
+    );
+    let result_type = StableHLOType::tensor(vec![2], ElementType::F16);
+    let (mlir, actual_type) = codegen
+        .emit_func_declaration(
+            "cast_f16",
+            &body,
+            std::slice::from_ref(&input_type),
+            &result_type,
+        )
+        .unwrap();
+
+    assert!(mlir.contains("stablehlo.convert"));
+    assert!(mlir.contains("-> tensor<2xf16>"));
+    assert_eq!(actual_type, result_type);
+}
+
+#[test]
 fn test_f16_value_and_grad_preserves_seed_dtype() {
     use crate::core::dtype::ElementType;
 
