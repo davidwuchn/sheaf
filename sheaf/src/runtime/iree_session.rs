@@ -69,7 +69,7 @@ use crate::sheaf_msg;
 use crate::interpreter::value::{Dtype, Value};
 use crate::runtime::iree_ffi::*;
 
-use super::buffer_cache::{CachedBufferView, TensorFingerprint};
+use super::buffer_cache::{BufferViewCache, TensorFingerprint};
 use super::buffer_convert::{
     buffer_view_to_value, flatten_values, iree_err, unflatten_value, value_to_buffer_view,
 };
@@ -136,6 +136,8 @@ impl PrecompiledModuleRegistry {
     }
 }
 
+const BUFFER_VIEW_CACHE_CAPACITY: usize = 512;
+
 pub struct IreeSession {
     instance: *mut iree_runtime_instance_t,
     device_handle: Arc<IreeDeviceHandle>,
@@ -143,7 +145,7 @@ pub struct IreeSession {
     // Retains source spans referenced by IREE.
     _vmfb_data: Mutex<Vec<Vec<u8>>>,
     driver_name: String,
-    buffer_cache: Mutex<HashMap<String, Vec<Vec<CachedBufferView>>>>,
+    buffer_cache: Mutex<BufferViewCache>,
     precompiled_modules: Mutex<PrecompiledModuleRegistry>,
     profile: bool,
     profile_reported: AtomicBool,
@@ -255,7 +257,7 @@ impl IreeSession {
                 session,
                 _vmfb_data: Mutex::new(Vec::new()),
                 driver_name: chosen_driver.to_string(),
-                buffer_cache: Mutex::new(HashMap::new()),
+                buffer_cache: Mutex::new(BufferViewCache::new(BUFFER_VIEW_CACHE_CAPACITY)),
                 precompiled_modules: Mutex::new(PrecompiledModuleRegistry::default()),
                 profile: crate::core::config::jit_profile(),
                 profile_reported: AtomicBool::new(false),
@@ -448,23 +450,12 @@ impl IreeSession {
                 return Err(iree_err("failed to create input list"));
             }
 
-            const MAX_CACHE_ENTRIES: usize = 8;
             let mut cache = self.buffer_cache.lock().unwrap();
-            let cached_fn = match cache.get_mut(fn_name) {
-                Some(c) => c,
-                None => cache.entry(fn_name.to_string()).or_default(),
-            };
-            if cached_fn.len() < flat_inputs.len() {
-                cached_fn.resize_with(flat_inputs.len(), Vec::new);
-            }
 
-            for (i, val) in flat_inputs.iter().enumerate() {
-                let hit_idx = cached_fn[i].iter().position(|entry| entry.fingerprint.matches(val));
-
-                let bv = if let Some(idx) = hit_idx {
+            for val in &flat_inputs {
+                let bv = if let Some(buffer_view) = cache.get(val) {
                     if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
-                    if idx > 0 { cached_fn[i].swap(0, idx); }
-                    cached_fn[i][0].bv
+                    buffer_view
                 } else {
                     if self.profile { self.n_cache_misses.fetch_add(1, Ordering::Relaxed); }
                     let new_bv = match value_to_buffer_view(device, device_alloc, val) {
@@ -475,12 +466,10 @@ impl IreeSession {
                             return Err(error);
                         }
                     };
-                    if let Some(fp) = TensorFingerprint::from_value(val) {
-                        if cached_fn[i].len() >= MAX_CACHE_ENTRIES {
-                            let evicted = cached_fn[i].pop().unwrap();
-                            iree_hal_buffer_view_release(evicted.bv);
-                        }
-                        cached_fn[i].insert(0, CachedBufferView { fingerprint: fp, bv: new_bv });
+                    if let Some(fingerprint) = TensorFingerprint::from_value(val)
+                        && let Some(evicted) = cache.insert(fingerprint, new_bv)
+                    {
+                        iree_hal_buffer_view_release(evicted);
                     }
                     new_bv
                 };
@@ -619,25 +608,18 @@ impl IreeSession {
                     }
                 }
             } else {
-                const MAX_CACHE_ENTRIES: usize = 8;
                 let mut cache = self.buffer_cache.lock().unwrap();
-                let cached_fn = cache.entry(fn_name.to_string()).or_default();
-                if cached_fn.len() < flat_inputs.len() {
-                    cached_fn.resize_with(flat_inputs.len(), Vec::new);
-                }
 
-                for (i, val) in flat_inputs.iter().enumerate() {
+                for val in &flat_inputs {
                     let bv = match val {
                         Value::DeviceBuffer(db) => {
                             if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
                             db.buffer_view()
                         }
                         _ => {
-                            let hit_idx = cached_fn[i].iter().position(|entry| entry.fingerprint.matches(val));
-                            if let Some(idx) = hit_idx {
+                            if let Some(buffer_view) = cache.get(val) {
                                 if self.profile { self.n_cache_hits.fetch_add(1, Ordering::Relaxed); }
-                                if idx > 0 { cached_fn[i].swap(0, idx); }
-                                cached_fn[i][0].bv
+                                buffer_view
                             } else {
                                 if self.profile { self.n_cache_misses.fetch_add(1, Ordering::Relaxed); }
                                 let new_bv = match value_to_buffer_view(device, device_alloc, val) {
@@ -648,12 +630,10 @@ impl IreeSession {
                                         return Err(error);
                                     }
                                 };
-                                if let Some(fp) = TensorFingerprint::from_value(val) {
-                                    if cached_fn[i].len() >= MAX_CACHE_ENTRIES {
-                                        let evicted = cached_fn[i].pop().unwrap();
-                                        iree_hal_buffer_view_release(evicted.bv);
-                                    }
-                                    cached_fn[i].insert(0, CachedBufferView { fingerprint: fp, bv: new_bv });
+                                if let Some(fingerprint) = TensorFingerprint::from_value(val)
+                                    && let Some(evicted) = cache.insert(fingerprint, new_bv)
+                                {
+                                    iree_hal_buffer_view_release(evicted);
                                 }
                                 new_bv
                             }
@@ -828,12 +808,8 @@ impl Drop for IreeSession {
         unsafe {
             // Cached buffer views must not outlive the session.
             if let Ok(cache) = self.buffer_cache.lock() {
-                for positions in cache.values() {
-                    for slot in positions {
-                        for entry in slot {
-                            iree_hal_buffer_view_release(entry.bv);
-                        }
-                    }
+                for buffer_view in cache.buffer_views() {
+                    iree_hal_buffer_view_release(buffer_view);
                 }
             }
             if !self.session.is_null() {
