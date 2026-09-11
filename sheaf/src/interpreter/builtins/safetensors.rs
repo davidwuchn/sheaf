@@ -84,38 +84,38 @@ pub fn load_safetensors(data: &[u8]) -> Result<Value, SheafError> {
 fn decode_raw(raw: &[u8], dtype: &str) -> Result<(Vec<f32>, Dtype), String> {
     match dtype {
         "F32" => Ok((
-            raw.chunks_exact(4)
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            raw.as_chunks::<4>().0.iter()
+                .map(|c| f32::from_le_bytes(*c))
                 .collect(),
             Dtype::F32,
         )),
         "F64" => Ok((
-            raw.chunks_exact(8)
-                .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32)
+            raw.as_chunks::<8>().0.iter()
+                .map(|c| f64::from_le_bytes(*c) as f32)
                 .collect(),
             Dtype::F32,
         )),
         "F16" => Ok((
-            raw.chunks_exact(2)
-                .map(|c| crate::core::dtype::f16_bits_to_f32(u16::from_le_bytes([c[0], c[1]])))
+            raw.as_chunks::<2>().0.iter()
+                .map(|c| crate::core::dtype::f16_bits_to_f32(u16::from_le_bytes(*c)))
                 .collect(),
             Dtype::F16,
         )),
         "BF16" => Ok((
-            raw.chunks_exact(2)
-                .map(|c| crate::core::dtype::bf16_bits_to_f32(u16::from_le_bytes([c[0], c[1]])))
+            raw.as_chunks::<2>().0.iter()
+                .map(|c| crate::core::dtype::bf16_bits_to_f32(u16::from_le_bytes(*c)))
                 .collect(),
             Dtype::BF16,
         )),
         "I32" => Ok((
-            raw.chunks_exact(4)
-                .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32)
+            raw.as_chunks::<4>().0.iter()
+                .map(|c| i32::from_le_bytes(*c) as f32)
                 .collect(),
             Dtype::I32,
         )),
         "I64" => Ok((
-            raw.chunks_exact(8)
-                .map(|c| i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32)
+            raw.as_chunks::<8>().0.iter()
+                .map(|c| i64::from_le_bytes(*c) as f32)
                 .collect(),
             Dtype::I32,
         )),

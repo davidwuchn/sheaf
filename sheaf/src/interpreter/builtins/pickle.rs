@@ -652,40 +652,40 @@ fn extract_numpy_from_state(state: &[PV]) -> Option<PV> {
 fn numpy_bytes_to_f32(data: &[u8], dtype: NpDtype) -> Vec<f32> {
     match dtype {
         NpDtype::F32 => {
-            data.chunks_exact(4)
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            data.as_chunks::<4>().0.iter()
+                .map(|c| f32::from_le_bytes(*c))
                 .collect()
         }
         NpDtype::F64 => {
-            data.chunks_exact(8)
-                .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32)
+            data.as_chunks::<8>().0.iter()
+                .map(|c| f64::from_le_bytes(*c) as f32)
                 .collect()
         }
         NpDtype::I32 => {
-            data.chunks_exact(4)
-                .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32)
+            data.as_chunks::<4>().0.iter()
+                .map(|c| i32::from_le_bytes(*c) as f32)
                 .collect()
         }
         NpDtype::I64 => {
-            data.chunks_exact(8)
-                .map(|c| i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32)
+            data.as_chunks::<8>().0.iter()
+                .map(|c| i64::from_le_bytes(*c) as f32)
                 .collect()
         }
         NpDtype::U8 => {
             data.iter().map(|&b| b as f32).collect()
         }
         NpDtype::F16 => {
-            data.chunks_exact(2)
+            data.as_chunks::<2>().0.iter()
                 .map(|c| {
-                    let bits = u16::from_le_bytes([c[0], c[1]]);
+                    let bits = u16::from_le_bytes(*c);
                     f16_to_f32(bits)
                 })
                 .collect()
         }
         NpDtype::BF16 => {
-            data.chunks_exact(2)
+            data.as_chunks::<2>().0.iter()
                 .map(|c| {
-                    let bits = u16::from_le_bytes([c[0], c[1]]);
+                    let bits = u16::from_le_bytes(*c);
                     bf16_to_f32(bits)
                 })
                 .collect()
