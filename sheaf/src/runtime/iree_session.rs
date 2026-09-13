@@ -138,6 +138,21 @@ impl PrecompiledModuleRegistry {
 
 const BUFFER_VIEW_CACHE_CAPACITY: usize = 512;
 
+fn decode_scalar_value(dtype: Dtype, raw: [u8; 4]) -> Value {
+    match dtype {
+        Dtype::F16 => {
+            let bits = u16::from_le_bytes([raw[0], raw[1]]);
+            Value::Float(crate::core::dtype::f16_bits_to_f32(bits))
+        }
+        Dtype::BF16 => {
+            let bits = u16::from_le_bytes([raw[0], raw[1]]);
+            Value::Float(crate::core::dtype::bf16_bits_to_f32(bits))
+        }
+        Dtype::I32 => Value::Int(i32::from_le_bytes(raw) as i64),
+        _ => Value::Float(f32::from_le_bytes(raw)),
+    }
+}
+
 pub struct IreeSession {
     instance: *mut iree_runtime_instance_t,
     device_handle: Arc<IreeDeviceHandle>,
@@ -726,20 +741,7 @@ impl IreeSession {
                     ref_.ptr = std::ptr::null_mut();
                     iree_vm_ref_release(&mut ref_);
                     if iree_status_is_ok(status) {
-                        let val = if dtype == Dtype::F16 {
-                            let bits = u16::from_le_bytes([raw[0], raw[1]]);
-                            crate::core::dtype::f16_bits_to_f32(bits)
-                        } else if dtype == Dtype::BF16 {
-                            let bits = u16::from_le_bytes([raw[0], raw[1]]);
-                            crate::core::dtype::bf16_bits_to_f32(bits)
-                        } else {
-                            f32::from_le_bytes(raw)
-                        };
-                        if dtype == Dtype::I32 {
-                            results.push(Value::Int(val as i64));
-                        } else {
-                            results.push(Value::Float(val));
-                        }
+                        results.push(decode_scalar_value(dtype, raw));
                     } else {
                         results.push(Value::Float(0.0));
                     }
@@ -826,9 +828,11 @@ impl Drop for IreeSession {
 #[cfg(test)]
 mod lifetime_counter_tests {
     use super::{
-        LIVE_SESSION_COUNT, SESSION_CREATION_ATTEMPTS, live_session_count, record_live_session,
-        record_session_creation_attempt, record_session_drop, session_creation_attempt_count,
+        LIVE_SESSION_COUNT, SESSION_CREATION_ATTEMPTS, decode_scalar_value, live_session_count,
+        record_live_session, record_session_creation_attempt, record_session_drop,
+        session_creation_attempt_count,
     };
+    use crate::interpreter::value::{Dtype, Value};
     use std::sync::atomic::Ordering;
     use std::sync::{Mutex, OnceLock};
 
@@ -847,6 +851,18 @@ mod lifetime_counter_tests {
             SESSION_CREATION_ATTEMPTS.store(self.attempts, Ordering::Relaxed);
             LIVE_SESSION_COUNT.store(self.live, Ordering::Relaxed);
         }
+    }
+
+    #[test]
+    fn scalar_i32_results_preserve_their_bits() {
+        assert!(matches!(
+            decode_scalar_value(Dtype::I32, 262i32.to_le_bytes()),
+            Value::Int(262)
+        ));
+        assert!(matches!(
+            decode_scalar_value(Dtype::I32, (-7i32).to_le_bytes()),
+            Value::Int(-7)
+        ));
     }
 
     #[test]

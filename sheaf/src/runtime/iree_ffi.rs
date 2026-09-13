@@ -32,18 +32,22 @@ impl iree_timeout_t {
 pub const IREE_HAL_ELEMENT_TYPE_FLOAT_32: u32 = (0x21 << 24) | 32;
 pub const IREE_HAL_ELEMENT_TYPE_FLOAT_16: u32 = (0x21 << 24) | 16;
 pub const IREE_HAL_ELEMENT_TYPE_BFLOAT_16: u32 = (0x22 << 24) | 16;
-pub const IREE_HAL_ELEMENT_TYPE_INT_32: u32 = (0x11 << 24) | 32;
+pub const IREE_HAL_ELEMENT_TYPE_INT_32: u32 = (0x10 << 24) | 32;
 pub const IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR: u32 = 1;
 pub const IREE_HAL_QUEUE_AFFINITY_ANY: u64 = u64::MAX;
 
 #[cfg(test)]
 mod tests {
-    use super::{IREE_HAL_ELEMENT_TYPE_BFLOAT_16, IREE_HAL_ELEMENT_TYPE_FLOAT_16};
+    use super::{
+        IREE_HAL_ELEMENT_TYPE_BFLOAT_16, IREE_HAL_ELEMENT_TYPE_FLOAT_16,
+        IREE_HAL_ELEMENT_TYPE_INT_32,
+    };
 
     #[test]
-    fn uses_iree_hal_float_type_encodings() {
+    fn uses_iree_hal_element_type_encodings() {
         assert_eq!(IREE_HAL_ELEMENT_TYPE_FLOAT_16, 0x2100_0010);
         assert_eq!(IREE_HAL_ELEMENT_TYPE_BFLOAT_16, 0x2200_0010);
+        assert_eq!(IREE_HAL_ELEMENT_TYPE_INT_32, 0x1000_0020);
     }
 }
 
