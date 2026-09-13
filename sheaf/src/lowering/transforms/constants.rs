@@ -143,58 +143,73 @@ fn resolve_constants_rec(
             })
         }
         CompiledExpr::Let { bindings, body } => {
-            let new_bindings: Vec<_> = bindings
-                .iter()
-                .map(|(k, v)| {
-                    let resolved = resolve_constants_rec(v, constants, locals, shapes, skip_lambda);
-                    match &resolved {
-                        CompiledExpr::Integer(_) | CompiledExpr::Float(_) => {
-                            if let BindingPattern::Simple(k_str) = k {
-                                locals.insert(k_str.clone(), resolved.clone());
-                            }
-                        }
-                        CompiledExpr::Symbol(aliased) => {
-                            if let Some(sh) = shapes.get(aliased).cloned()
-                                && let BindingPattern::Simple(k_str) = k
-                            {
-                                shapes.insert(k_str.clone(), sh);
-                            }
-                        }
-                        CompiledExpr::Vector(elems)
-                            if elems.iter().all(|e| matches!(e, CompiledExpr::Integer(_))) =>
-                        {
-                            let sh: Vec<i64> = elems
-                                .iter()
-                                .filter_map(|e| {
-                                    if let CompiledExpr::Integer(n) = e {
-                                        Some(*n)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            if let BindingPattern::Simple(k_str) = k {
-                                shapes.insert(k_str.clone(), sh);
-                            }
-                        }
-                        _ => {
-                            if let BindingPattern::Simple(k_str) = k
-                                && let Some(sh) = try_infer_shape(&resolved, shapes)
-                            {
-                                shapes.insert(k_str.clone(), sh);
-                            }
+            let mut scoped_locals = locals.clone();
+            let mut scoped_shapes = shapes.clone();
+            let mut new_bindings = Vec::with_capacity(bindings.len());
+            for (k, v) in bindings {
+                let resolved = resolve_constants_rec(
+                    v,
+                    constants,
+                    &mut scoped_locals,
+                    &mut scoped_shapes,
+                    skip_lambda,
+                );
+                match &resolved {
+                    CompiledExpr::Integer(_) | CompiledExpr::Float(_) => {
+                        if let BindingPattern::Simple(k_str) = k {
+                            scoped_locals.insert(k_str.clone(), resolved.clone());
                         }
                     }
-                    (k.clone(), resolved)
-                })
-                .collect();
+                    CompiledExpr::Symbol(aliased) => {
+                        if let Some(sh) = scoped_shapes.get(aliased).cloned()
+                            && let BindingPattern::Simple(k_str) = k
+                        {
+                            scoped_shapes.insert(k_str.clone(), sh);
+                        }
+                    }
+                    CompiledExpr::Vector(elems)
+                        if elems.iter().all(|e| matches!(e, CompiledExpr::Integer(_))) =>
+                    {
+                        let sh: Vec<i64> = elems
+                            .iter()
+                            .filter_map(|e| {
+                                if let CompiledExpr::Integer(n) = e {
+                                    Some(*n)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        if let BindingPattern::Simple(k_str) = k {
+                            scoped_shapes.insert(k_str.clone(), sh);
+                        }
+                    }
+                    _ => {
+                        if let BindingPattern::Simple(k_str) = k
+                            && let Some(sh) = try_infer_shape(&resolved, &scoped_shapes)
+                        {
+                            scoped_shapes.insert(k_str.clone(), sh);
+                        }
+                    }
+                }
+                if let BindingPattern::Simple(k_str) = k
+                    && let Some(sh) = try_infer_sequence_element_shape(
+                        &resolved,
+                        0,
+                        &scoped_shapes,
+                    )
+                {
+                    scoped_shapes.insert(sequence_element_key(k_str, 0), sh);
+                }
+                new_bindings.push((k.clone(), resolved));
+            }
             CompiledExpr::Let {
                 bindings: new_bindings,
                 body: Box::new(resolve_constants_rec(
                     body,
                     constants,
-                    locals,
-                    shapes,
+                    &mut scoped_locals,
+                    &mut scoped_shapes,
                     skip_lambda,
                 )),
             }
@@ -242,16 +257,21 @@ fn resolve_constants_rec(
                     body: body.clone(),
                 }
             } else {
-                let saved_locals = locals.clone();
-                for p in params {
-                    locals.remove(p);
+                let mut scoped_locals = locals.clone();
+                let mut scoped_shapes = shapes.clone();
+                for param in params {
+                    scoped_locals.remove(param);
+                    scoped_shapes.remove(param);
                 }
-                let resolved_body =
-                    resolve_constants_rec(body, constants, locals, shapes, skip_lambda);
-                *locals = saved_locals;
                 CompiledExpr::Lambda {
                     params: params.clone(),
-                    body: Box::new(resolved_body),
+                    body: Box::new(resolve_constants_rec(
+                        body,
+                        constants,
+                        &mut scoped_locals,
+                        &mut scoped_shapes,
+                        skip_lambda,
+                    )),
                 }
             }
         }
@@ -545,6 +565,16 @@ pub fn try_infer_shape(
                 }
             }
             "first" if args.len() == 1 => match &args[0] {
+                CompiledExpr::Symbol(name) => shapes
+                    .get(&sequence_element_key(name, 0))
+                    .cloned()
+                    .or_else(|| {
+                        let mut shape = try_infer_shape(&args[0], shapes)?;
+                        if !shape.is_empty() {
+                            shape.remove(0);
+                        }
+                        Some(shape)
+                    }),
                 CompiledExpr::Vector(elements) | CompiledExpr::Tuple(elements) => {
                     elements.first().and_then(|element| try_infer_shape(element, shapes))
                 }
@@ -672,6 +702,38 @@ pub fn try_infer_shape(
             let key = format!("{}@{:?}", param, indices);
             shapes.get(&key).cloned()
         }
+        _ => None,
+    }
+}
+
+fn sequence_element_key(name: &str, index: usize) -> String {
+    format!("{name}@[{index}]")
+}
+
+fn try_infer_sequence_element_shape(
+    expr: &CompiledExpr,
+    index: usize,
+    shapes: &HashMap<String, Vec<i64>>,
+) -> Option<Vec<i64>> {
+    match expr {
+        CompiledExpr::Vector(elements) | CompiledExpr::Tuple(elements) => elements
+            .get(index)
+            .and_then(|element| try_infer_shape(element, shapes)),
+        CompiledExpr::Let { bindings, body } => {
+            let mut inner = shapes.clone();
+            for (name, rhs) in bindings {
+                if let BindingPattern::Simple(name) = name {
+                    if let Some(sh) = try_infer_shape(rhs, &inner) {
+                        inner.insert(name.clone(), sh);
+                    }
+                    if let Some(sh) = try_infer_sequence_element_shape(rhs, 0, &inner) {
+                        inner.insert(sequence_element_key(name, 0), sh);
+                    }
+                }
+            }
+            try_infer_sequence_element_shape(body, index, &inner)
+        }
+        CompiledExpr::Symbol(name) => shapes.get(&sequence_element_key(name, index)).cloned(),
         _ => None,
     }
 }
@@ -891,7 +953,10 @@ pub(crate) fn filter_constants_for_shape_positions(
 
 #[cfg(test)]
 mod shape_classifier_tests {
-    use super::{collect_shape_gtes, filter_constants_for_shape_positions, try_infer_shape};
+    use super::{
+        collect_shape_gtes, filter_constants_for_shape_positions, resolve_static_constants,
+        try_infer_shape,
+    };
     use crate::core::expr::{BindingPattern, CompiledExpr};
     use std::collections::HashMap;
 
@@ -1005,6 +1070,123 @@ mod shape_classifier_tests {
         let filtered = filter_constants_for_shape_positions(&constants, &body);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered.get(&("cfg".to_string(), vec![0])), Some(&8.0));
+    }
+
+    #[test]
+    fn nested_let_does_not_leak_shape_bindings() {
+        let inner_with_shadow = let_(
+            vec![(
+                "x",
+                call(
+                    "reshape",
+                    vec![
+                        sym("x"),
+                        CompiledExpr::Vector(vec![
+                            CompiledExpr::Integer(2),
+                            CompiledExpr::Integer(6400),
+                        ]),
+                    ],
+                ),
+            )],
+            sym("x"),
+        );
+        let shape_after_inner = let_(
+            vec![
+                ("x", sym("x")),
+                (
+                    "d",
+                    call(
+                        "get",
+                        vec![call("shape", vec![sym("x")]), CompiledExpr::Integer(2)],
+                    ),
+                ),
+            ],
+            sym("d"),
+        );
+        let body = let_(
+            vec![("discarded", inner_with_shadow), ("result", shape_after_inner)],
+            sym("result"),
+        );
+        let shapes = HashMap::from([("x".to_string(), vec![1, 8, 1600])]);
+
+        let resolved = resolve_static_constants(&body, &HashMap::new(), &shapes, false);
+        let CompiledExpr::Let { bindings, .. } = resolved else {
+            panic!("expected outer let");
+        };
+        let CompiledExpr::Let { body, .. } = &bindings[1].1 else {
+            panic!("expected nested let");
+        };
+
+        assert!(matches!(body.as_ref(), CompiledExpr::Integer(1600)));
+    }
+
+    #[test]
+    fn lambda_parameter_does_not_inherit_an_outer_shape() {
+        let body = CompiledExpr::Lambda {
+            params: vec!["x".to_string()],
+            body: Box::new(call("shape", vec![sym("x")])),
+        };
+        let shapes = HashMap::from([("x".to_string(), vec![1, 8, 1600])]);
+
+        let resolved = resolve_static_constants(&body, &HashMap::new(), &shapes, false);
+        let CompiledExpr::Lambda { body, .. } = resolved else {
+            panic!("expected lambda");
+        };
+
+        assert!(matches!(
+            body.as_ref(),
+            CompiledExpr::FunctionCall { name, .. } if name == "shape"
+        ));
+    }
+
+    #[test]
+    fn first_of_bound_sequence_preserves_element_shape() {
+        let result = let_(
+            vec![(
+                "y",
+                call(
+                    "reshape",
+                    vec![
+                        sym("x"),
+                        CompiledExpr::Vector(vec![
+                            CompiledExpr::Integer(1),
+                            CompiledExpr::Integer(8),
+                            CompiledExpr::Integer(1600),
+                        ]),
+                    ],
+                ),
+            )],
+            CompiledExpr::Vector(vec![sym("y"), CompiledExpr::Integer(0)]),
+        );
+        let body = let_(
+            vec![
+                ("result", result),
+                ("hidden", call("first", vec![sym("result")])),
+                (
+                    "d",
+                    call(
+                        "get",
+                        vec![
+                            call("shape", vec![sym("hidden")]),
+                            CompiledExpr::Integer(2),
+                        ],
+                    ),
+                ),
+            ],
+            sym("d"),
+        );
+
+        let resolved = resolve_static_constants(
+            &body,
+            &HashMap::new(),
+            &HashMap::from([("x".to_string(), vec![1, 8, 1600])]),
+            false,
+        );
+        let CompiledExpr::Let { body, .. } = resolved else {
+            panic!("expected let");
+        };
+
+        assert!(matches!(body.as_ref(), CompiledExpr::Integer(1600)));
     }
 
     #[test]
