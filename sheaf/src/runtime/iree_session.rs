@@ -136,7 +136,7 @@ impl PrecompiledModuleRegistry {
     }
 }
 
-const BUFFER_VIEW_CACHE_CAPACITY: usize = 512;
+const INITIAL_BUFFER_VIEW_CACHE_CAPACITY: usize = 512;
 
 fn decode_scalar_value(dtype: Dtype, raw: [u8; 4]) -> Value {
     match dtype {
@@ -272,7 +272,7 @@ impl IreeSession {
                 session,
                 _vmfb_data: Mutex::new(Vec::new()),
                 driver_name: chosen_driver.to_string(),
-                buffer_cache: Mutex::new(BufferViewCache::new(BUFFER_VIEW_CACHE_CAPACITY)),
+                buffer_cache: Mutex::new(BufferViewCache::new(INITIAL_BUFFER_VIEW_CACHE_CAPACITY)),
                 precompiled_modules: Mutex::new(PrecompiledModuleRegistry::default()),
                 profile: crate::core::config::jit_profile(),
                 profile_reported: AtomicBool::new(false),
@@ -322,6 +322,11 @@ impl IreeSession {
         let total = flatten + buffers + call + output;
         let hits = self.n_cache_hits.load(Ordering::Relaxed);
         let misses = self.n_cache_misses.load(Ordering::Relaxed);
+        let cache_size = self
+            .buffer_cache
+            .lock()
+            .map(|cache| (cache.len(), cache.capacity(), cache.evictions()))
+            .unwrap_or((0, 0, 0));
         sheaf_msg!(
             "\njit: dispatch profile ({} calls, {:.1}ms total):",
             n,
@@ -333,11 +338,14 @@ impl IreeSession {
             flatten / total * 100.0
         );
         sheaf_msg!(
-            "  buffers:  {:7.1}ms ({:4.1}%)  [hits: {}, misses: {}]",
+            "  buffers:  {:7.1}ms ({:4.1}%)  [hits: {}, misses: {}, cache: {}/{}, evictions: {}]",
             buffers,
             buffers / total * 100.0,
             hits,
-            misses
+            misses,
+            cache_size.0,
+            cache_size.1,
+            cache_size.2
         );
         sheaf_msg!("  call:     {:7.1}ms ({:4.1}%)", call, call / total * 100.0);
         sheaf_msg!(
@@ -466,6 +474,7 @@ impl IreeSession {
             }
 
             let mut cache = self.buffer_cache.lock().unwrap();
+            cache.ensure_capacity(flat_inputs.len());
 
             for val in &flat_inputs {
                 let bv = if let Some(buffer_view) = cache.get(val) {
@@ -624,6 +633,7 @@ impl IreeSession {
                 }
             } else {
                 let mut cache = self.buffer_cache.lock().unwrap();
+                cache.ensure_capacity(flat_inputs.len());
 
                 for val in &flat_inputs {
                     let bv = match val {
