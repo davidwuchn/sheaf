@@ -1049,11 +1049,13 @@ fn distribute_fn_adjoint_named(
                     CompiledExpr::Vector(vec![CompiledExpr::Integer(1), CompiledExpr::Integer(-1)]),
                 ]));
                 let grad = emit_binding(bindings, call("@", vec![sym(&oh_col), sym(&adj_row)]));
-                acc_arg(&args[0], sym(&grad), adj_names, bindings);
+                let grad = maybe_unbroadcast(sym(&grad), &args[0], shapes, bindings);
+                acc_arg(&args[0], grad, adj_names, bindings);
             } else {
                 let oh_t = emit_binding(bindings, call("tr", vec![sym(&oh)]));
                 let grad = emit_binding(bindings, call("@", vec![sym(&oh_t), adj.clone()]));
-                acc_arg(&args[0], sym(&grad), adj_names, bindings);
+                let grad = maybe_unbroadcast(sym(&grad), &args[0], shapes, bindings);
+                acc_arg(&args[0], grad, adj_names, bindings);
             }
         }
 

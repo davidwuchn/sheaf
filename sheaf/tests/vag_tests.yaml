@@ -94,6 +94,14 @@
 - name: vag-get-embedding-repeated
   test: ((value-and-grad (fn [emb] (sum (get emb [0 0 1])))) [[1.0 2.0] [3.0 4.0] [5.0 6.0]])
   expected: "[13.0, [[2. 2.] [1. 1.] [0. 0.]]]"
+- name: vag-shared-embedding-head
+  test: >
+    ((value-and-grad
+       (fn [w]
+         (+ (sum (get w [[0] [1]]))
+            (sum (@ [[[1.0 2.0]] [[3.0 4.0]]] (tr w))))))
+     [[1.0 0.0] [0.0 1.0] [1.0 1.0]])
+  expected: "[22.0, [[5. 7.] [5. 7.] [4. 6.]]]"
 
 # Control flow
 - name: vag-where
