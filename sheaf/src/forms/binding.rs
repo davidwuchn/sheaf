@@ -216,29 +216,10 @@ impl SpecialForm for DefnForm {
                         }
                     }
 
-                    // If body returns a Dict, store sorted keys for IREE result reconstruction
-                    fn find_return_dict_keys(expr: &CompiledExpr) -> Option<Vec<String>> {
-                        match expr {
-                            CompiledExpr::Dict(pairs) => {
-                                let mut keys: Vec<String> = pairs
-                                    .iter()
-                                    .filter_map(|(k, _)| {
-                                        if let CompiledExpr::Keyword(s) = k {
-                                            Some(s.clone())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
-                                keys.sort();
-                                Some(keys)
-                            }
-                            CompiledExpr::Let { body, .. } => find_return_dict_keys(body),
-                            CompiledExpr::Do(exprs) => exprs.last().and_then(find_return_dict_keys),
-                            _ => None,
-                        }
-                    }
-                    if let Some(keys) = find_return_dict_keys(&body_compiled) {
+                    // If the body returns a dict, store its sorted keys for IREE result reconstruction.
+                    if let Some(keys) =
+                        crate::core::inference::find_return_dict_keys(&body_compiled)
+                    {
                         sig.return_dict_keys = Some(keys);
                     }
                 }

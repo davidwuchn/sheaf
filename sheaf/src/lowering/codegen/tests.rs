@@ -77,6 +77,27 @@ fn test_generate_constant() {
 }
 
 #[test]
+fn string_dict_keys_are_preserved_and_sorted() {
+    let mut codegen = CodeGenerator::new();
+    let expr = CompiledExpr::Dict(vec![
+        (
+            CompiledExpr::String("p".to_string()),
+            CompiledExpr::Float(1.0),
+        ),
+        (
+            CompiledExpr::String("loss".to_string()),
+            CompiledExpr::Float(2.0),
+        ),
+    ]);
+
+    let (_, ty) = codegen.generate(&expr).expect("dictionary should compile");
+    let StableHLOType::Tuple(_, Some(keys)) = ty else {
+        panic!("dictionary should retain its keys");
+    };
+    assert_eq!(keys, vec!["loss".to_string(), "p".to_string()]);
+}
+
+#[test]
 fn test_generate_binop() {
     let mut codegen = CodeGenerator::new();
     let expr = CompiledExpr::FunctionCall {

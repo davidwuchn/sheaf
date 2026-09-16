@@ -482,29 +482,29 @@ impl<'a> CodeGenerator<'a> {
 
 
             CompiledExpr::Dict(pairs) => {
-                let mut sorted: Vec<_> = pairs.iter().collect();
-                sorted.sort_by(|(k1, _), (k2, _)| {
-                    let key1 = match k1 {
-                        CompiledExpr::Keyword(k) => k.as_str(),
-                        _ => "",
+                let mut sorted = Vec::with_capacity(pairs.len());
+                for (key, value) in pairs {
+                    let name = match key {
+                        CompiledExpr::Keyword(name) | CompiledExpr::String(name) => name.clone(),
+                        _ => {
+                            return Err(SheafError::Compile {
+                                message: format!("dictionary key must be static, got {:?}", key),
+                                location: crate::core::error::SourceLocation::unknown(),
+                            });
+                        }
                     };
-                    let key2 = match k2 {
-                        CompiledExpr::Keyword(k) => k.as_str(),
-                        _ => "",
-                    };
-                    key1.cmp(key2)
-                });
+                    sorted.push((name, value));
+                }
+                sorted.sort_by(|(left, _), (right, _)| left.cmp(right));
+
                 let mut regs = Vec::new();
                 let mut tys = Vec::new();
                 let mut keys = Vec::new();
-                for (k, val) in &sorted {
-                    let (r, t) = self.generate(val)?;
-                    regs.push(r);
-                    tys.push(t);
-                    keys.push(match k {
-                        CompiledExpr::Keyword(k) => k.clone(),
-                        _ => String::new(),
-                    });
+                for (key, value) in sorted {
+                    let (reg, ty) = self.generate(value)?;
+                    regs.push(reg);
+                    tys.push(ty);
+                    keys.push(key);
                 }
                 let (reg, _) = self.emitter.emit_tuple(&regs, &tys);
                 Ok((reg, StableHLOType::Tuple(tys, Some(keys))))

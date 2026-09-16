@@ -183,19 +183,18 @@ pub fn infer_function_signature_with_known(
     })
 }
 
-fn find_return_dict_keys(expr: &CompiledExpr) -> Option<Vec<String>> {
+pub(crate) fn find_return_dict_keys(expr: &CompiledExpr) -> Option<Vec<String>> {
     match expr {
         CompiledExpr::Dict(pairs) => {
             let mut keys: Vec<String> = pairs
                 .iter()
-                .filter_map(|(k, _)| {
-                    if let CompiledExpr::Keyword(s) = k {
-                        Some(s.clone())
-                    } else {
-                        None
+                .map(|(key, _)| match key {
+                    CompiledExpr::Keyword(name) | CompiledExpr::String(name) => {
+                        Some(name.clone())
                     }
+                    _ => None,
                 })
-                .collect();
+                .collect::<Option<_>>()?;
             keys.sort();
             Some(keys)
         }
@@ -762,6 +761,25 @@ mod tests {
             args,
             loc: None,
         }
+    }
+
+    #[test]
+    fn return_dict_keys_include_strings_and_keywords() {
+        let expr = CompiledExpr::Dict(vec![
+            (
+                CompiledExpr::String("p".to_string()),
+                CompiledExpr::Float(1.0),
+            ),
+            (
+                CompiledExpr::Keyword("loss".to_string()),
+                CompiledExpr::Float(2.0),
+            ),
+        ]);
+
+        assert_eq!(
+            find_return_dict_keys(&expr),
+            Some(vec!["loss".to_string(), "p".to_string()]),
+        );
     }
 
     #[test]
