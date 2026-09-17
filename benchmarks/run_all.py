@@ -141,7 +141,9 @@ MACRO = [
 ]
 
 MACRO_SELF_TIMED = [
-  ("GPT-2 124M value-and-grad", "bench_vag_sheaf.shf"),
+  ("GPT-2 124M value-and-grad", "bench_vag_sheaf.shf", "per-step"),
+  ("buffer cache across VMFB modules", "bench_buffer_cache_shared.shf", "second-module"),
+  ("buffer cache [600 tensors]", "bench_buffer_cache_capacity.shf", "per-step"),
 ]
 
 
@@ -217,15 +219,21 @@ def bench_macro_one(name: str, script: str, device: str, runs: int) -> float:
     return statistics.median(times)
 
 
-def parse_per_step_ms(stdout: str) -> float:
-    m = re.search(r"per-step:\s+([\d.]+)\s+ms", stdout)
-    if not m:
-        print(f"No per-step timing in output:\n{stdout[:300]}", file=sys.stderr)
+def parse_self_timed_ms(stdout: str, metric: str) -> float:
+    match = re.search(rf"{re.escape(metric)}:\s+([\d.]+)\s+ms", stdout)
+    if not match:
+        print(f"No '{metric}' timing in output:\n{stdout[:300]}", file=sys.stderr)
         sys.exit(1)
-    return float(m.group(1))
+    return float(match.group(1))
 
 
-def bench_self_timed(name: str, script: str, device: str, runs: int) -> float:
+def bench_self_timed(
+    name: str,
+    script: str,
+    metric: str,
+    device: str,
+    runs: int,
+) -> float:
     script_path = SCRIPT_DIR / script
     if not script_path.exists():
         return None
@@ -236,7 +244,7 @@ def bench_self_timed(name: str, script: str, device: str, runs: int) -> float:
         if r.returncode != 0:
             print(f"FAIL: {r.stderr[:200] if r.stderr else 'no stderr'}", file=sys.stderr)
             sys.exit(1)
-        times.append(parse_per_step_ms(r.stdout))
+        times.append(parse_self_timed_ms(r.stdout, metric))
     return statistics.median(times)
 
 
@@ -326,9 +334,9 @@ def main():
             results[name] = ms
 
     print("\nMacro (self-timed):")
-    for name, script in MACRO_SELF_TIMED:
+    for name, script, metric in MACRO_SELF_TIMED:
         macro_runs = min(args.runs, MACRO_RUNS)
-        ms = bench_self_timed(name, script, args.device, macro_runs)
+        ms = bench_self_timed(name, script, metric, args.device, macro_runs)
         if ms is not None:
             print(f"  {name:<40} {ms:>10.3f} ms", flush=True)
             results[name] = ms

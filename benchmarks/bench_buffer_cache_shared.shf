@@ -1,0 +1,26 @@
+;; -*- mode: clojure -*-
+;; Buffer reuse benchmark across two VMFB modules with different argument layouts.
+
+(defn cache-consumer-a [params]
+  (sum (first (get params :values))))
+
+(defn cache-consumer-b [params]
+  (* (sum (first (get params :values))) -1.0))
+
+(let [tensor-count 400
+      tensor-size 4096
+      values (map (fn [_] (ones [tensor-size])) (range tensor-count))
+      reversed (reduce (fn [result value] (cons value result)) '[] values)
+      params-a {:values values}
+      params-b {:values reversed}
+
+      ;; Run the script once before measuring so that both VMFB files exist and
+      ;; JIT compilation is excluded.
+      warm (cache-consumer-a params-a)
+      warm-sync (print "warmup:" warm)
+
+      start (time)
+      result (cache-consumer-b params-b)
+      sync (print "result:" result)
+      elapsed (- (time) start)]
+  (print "second-module:" (* elapsed 1000.0) "ms"))

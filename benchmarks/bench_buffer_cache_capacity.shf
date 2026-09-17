@@ -1,0 +1,23 @@
+;; -*- mode: clojure -*-
+;; Buffer cache capacity benchmark with a working set larger than 512 entries.
+
+(defn cache-consumer [params]
+  (sum (first (get params :values))))
+
+(let [tensor-count 600
+      tensor-size 4096
+      steps 20
+      params {:values (map (fn [_] (ones [tensor-size])) (range tensor-count))}
+
+      ;; Run the script once before measuring so that the VMFB file exists and
+      ;; JIT compilation is excluded.
+      warm (cache-consumer params)
+      warm-sync (print "warmup:" warm)
+
+      start (time)
+      final (reduce (fn [_ _] (cache-consumer params))
+                    warm
+                    (range steps))
+      sync (print "result:" final)
+      elapsed (- (time) start)]
+  (print "per-step:" (/ (* elapsed 1000.0) steps) "ms"))
