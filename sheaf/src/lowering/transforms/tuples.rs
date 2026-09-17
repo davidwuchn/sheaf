@@ -208,6 +208,10 @@ fn kind_of(expr: &CompiledExpr, symbol_types: &HashMap<String, StableHLOType>) -
         CompiledExpr::Tuple(_) => DestructKind::Tuple,
         expr if is_inline_value_and_grad(expr) => DestructKind::Tuple,
         CompiledExpr::Vector(_) => DestructKind::Vector1D,
+        CompiledExpr::Let { body, .. } => kind_of(body, symbol_types),
+        CompiledExpr::Do(exprs) => exprs
+            .last()
+            .map_or(DestructKind::Unknown, |expr| kind_of(expr, symbol_types)),
         CompiledExpr::Symbol(s) => match symbol_types.get(s) {
             Some(StableHLOType::Tuple(_, _)) => DestructKind::Tuple,
             Some(ty) => {
@@ -233,6 +237,10 @@ fn static_length_with_types(
         CompiledExpr::Vector(elems) => Some(elems.len()),
         CompiledExpr::Tuple(elems) => Some(elems.len()),
         expr if is_inline_value_and_grad(expr) => Some(2),
+        CompiledExpr::Let { body, .. } => static_length_with_types(body, symbol_types),
+        CompiledExpr::Do(exprs) => exprs
+            .last()
+            .and_then(|expr| static_length_with_types(expr, symbol_types)),
         CompiledExpr::Symbol(s) => symbol_types.get(s).and_then(|ty| match ty {
             StableHLOType::Tuple(tys, _) => Some(tys.len()),
             other => {
@@ -268,7 +276,7 @@ pub fn desugar_destructuring_lets(
     match expr {
         CompiledExpr::Let { bindings, body } => {
             let mut new_bindings = Vec::new();
-            let mut body = desugar_destructuring_lets(*body, symbol_types)?;
+            let body = desugar_destructuring_lets(*body, symbol_types)?;
 
             for (pattern, value) in bindings {
                 match pattern {
@@ -314,7 +322,8 @@ pub fn desugar_destructuring_lets(
                             });
                         }
 
-                        for (i, name) in names.into_iter().enumerate().rev() {
+                        new_bindings.push((BindingPattern::Simple(tmp.clone()), value));
+                        for (i, name) in names.into_iter().enumerate() {
                             let extraction = match kind {
                                 DestructKind::Tuple => CompiledExpr::GetTupleElement {
                                     param: tmp.clone(),
@@ -337,14 +346,8 @@ pub fn desugar_destructuring_lets(
                                     });
                                 }
                             };
-
-                            body = CompiledExpr::Let {
-                                bindings: vec![(name, extraction)],
-                                body: Box::new(body),
-                            };
+                            new_bindings.push((name, extraction));
                         }
-
-                        new_bindings.push((BindingPattern::Simple(tmp), value));
                     }
                 }
             }
@@ -423,5 +426,60 @@ pub fn desugar_destructuring_lets(
                 .collect::<SheafResult<_>>()?,
         )),
         other => Ok(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::desugar_destructuring_lets;
+    use crate::core::expr::{BindingPattern, CompiledExpr};
+    use std::collections::HashMap;
+
+    #[test]
+    fn destructures_a_tuple_returned_through_a_let() {
+        let source = CompiledExpr::Let {
+            bindings: vec![(
+                BindingPattern::Simple("intermediate".to_string()),
+                CompiledExpr::Float(1.0),
+            )],
+            body: Box::new(CompiledExpr::Tuple(vec![
+                CompiledExpr::Symbol("intermediate".to_string()),
+                CompiledExpr::Float(2.0),
+            ])),
+        };
+        let expr = CompiledExpr::Let {
+            bindings: vec![
+                (
+                    BindingPattern::Destructure(vec![
+                        BindingPattern::Simple("left".to_string()),
+                        BindingPattern::Simple("right".to_string()),
+                    ]),
+                    source,
+                ),
+                (
+                    BindingPattern::Simple("total".to_string()),
+                    CompiledExpr::FunctionCall {
+                        name: "+".to_string(),
+                        args: vec![
+                            CompiledExpr::Symbol("left".to_string()),
+                            CompiledExpr::Symbol("right".to_string()),
+                        ],
+                        loc: None,
+                    },
+                ),
+            ],
+            body: Box::new(CompiledExpr::Symbol("total".to_string())),
+        };
+
+        let CompiledExpr::Let { bindings, .. } =
+            desugar_destructuring_lets(expr, &HashMap::new()).unwrap()
+        else {
+            panic!("destructuring should remain a let");
+        };
+        let names: Vec<_> = bindings
+            .iter()
+            .filter_map(|(pattern, _)| pattern.as_simple())
+            .collect();
+        assert_eq!(names[1..], ["left", "right", "total"]);
     }
 }
