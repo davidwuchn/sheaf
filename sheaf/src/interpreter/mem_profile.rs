@@ -46,9 +46,13 @@ pub struct MemProfiler {
     iree_device_peak: AtomicUsize,
     #[cfg(iree_runtime)]
     iree_host_peak: AtomicUsize,
+    /// IREE Metal 3.10 does not update allocator free counters for directly
+    /// destroyed buffers, so its allocation totals are cumulative rather than live.
     #[cfg(iree_runtime)]
-    // Device peak, device live, host peak, host live.
-    iree_last: Mutex<(usize, usize, usize, usize)>,
+    iree_metal_cumulative: AtomicBool,
+    #[cfg(iree_runtime)]
+    // Device peak/live/allocated, then host peak/live/allocated.
+    iree_last: Mutex<(usize, usize, usize, usize, usize, usize)>,
 }
 
 impl Default for MemProfiler {
@@ -94,7 +98,9 @@ impl MemProfiler {
             #[cfg(iree_runtime)]
             iree_host_peak: AtomicUsize::new(0),
             #[cfg(iree_runtime)]
-            iree_last: Mutex::new((0, 0, 0, 0)),
+            iree_metal_cumulative: AtomicBool::new(false),
+            #[cfg(iree_runtime)]
+            iree_last: Mutex::new((0, 0, 0, 0, 0, 0)),
         }
     }
 
@@ -123,6 +129,8 @@ impl MemProfiler {
         unsafe { iree_hal_allocator_query_statistics(allocator, &mut stats) };
         let dev_peak = stats.device_bytes_peak;
         let host_peak = stats.host_bytes_peak;
+        self.iree_metal_cumulative
+            .store(session.driver_name() == "metal", Ordering::SeqCst);
         let dev_live = stats.device_bytes_allocated.saturating_sub(stats.device_bytes_freed);
         let host_live = stats.host_bytes_allocated.saturating_sub(stats.host_bytes_freed);
         if dev_peak > self.iree_device_peak.load(Ordering::SeqCst) {
@@ -132,7 +140,14 @@ impl MemProfiler {
             self.iree_host_peak.store(host_peak, Ordering::SeqCst);
         }
         if let Ok(mut g) = self.iree_last.lock() {
-            *g = (dev_peak, dev_live, host_peak, host_live);
+            *g = (
+                dev_peak,
+                dev_live,
+                stats.device_bytes_allocated,
+                host_peak,
+                host_live,
+                stats.host_bytes_allocated,
+            );
         }
     }
 
@@ -185,14 +200,51 @@ impl MemProfiler {
         {
             let dev_peak = self.iree_device_peak.load(Ordering::SeqCst);
             if dev_peak > 0 {
-                lines.push("  IREE device allocator:".to_string());
-                lines.push(format!("  {:<28} {:>12}", "device memory peak", format_bytes(dev_peak)));
+                let metal_cumulative = self.iree_metal_cumulative.load(Ordering::SeqCst);
+                if metal_cumulative {
+                    lines.push("  IREE Metal allocator counters:".to_string());
+                } else {
+                    lines.push("  IREE device allocator:".to_string());
+                }
                 if let Ok(g) = self.iree_last.lock() {
-                    lines.push(format!("  {:<28} {:>12}", "device memory live", format_bytes(g.1)));
+                    if metal_cumulative {
+                        lines.push(format!(
+                            "  {:<28} {:>12}",
+                            "device allocated (cumulative)",
+                            format_bytes(g.2),
+                        ));
+                    } else {
+                        lines.push(format!(
+                            "  {:<28} {:>12}",
+                            "device memory peak",
+                            format_bytes(dev_peak),
+                        ));
+                        lines.push(format!(
+                            "  {:<28} {:>12}",
+                            "device memory live",
+                            format_bytes(g.1),
+                        ));
+                    }
                     let hpeak = self.iree_host_peak.load(Ordering::SeqCst);
                     if hpeak > 0 {
-                        lines.push(format!("  {:<28} {:>12}", "IREE host peak", format_bytes(hpeak)));
-                        lines.push(format!("  {:<28} {:>12}", "IREE host live", format_bytes(g.3)));
+                        if metal_cumulative {
+                            lines.push(format!(
+                                "  {:<28} {:>12}",
+                                "host allocated (cumulative)",
+                                format_bytes(g.5),
+                            ));
+                        } else {
+                            lines.push(format!(
+                                "  {:<28} {:>12}",
+                                "IREE host peak",
+                                format_bytes(hpeak),
+                            ));
+                            lines.push(format!(
+                                "  {:<28} {:>12}",
+                                "IREE host live",
+                                format_bytes(g.4),
+                            ));
+                        }
                     }
                 }
             }
@@ -375,5 +427,28 @@ fn format_delta(delta: i64) -> String {
             sign,
             format_bytes(delta.unsigned_abs() as usize)
         )
+    }
+}
+
+#[cfg(all(test, iree_runtime))]
+mod tests {
+    use super::MemProfiler;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn metal_allocator_totals_are_reported_as_cumulative() {
+        let profiler = MemProfiler::new();
+        profiler.iree_device_peak.store(4096, Ordering::SeqCst);
+        profiler.iree_host_peak.store(2048, Ordering::SeqCst);
+        profiler.iree_metal_cumulative.store(true, Ordering::SeqCst);
+        *profiler.iree_last.lock().unwrap() = (4096, 4096, 4096, 2048, 2048, 2048);
+
+        let report = profiler.report();
+
+        assert!(report.contains("IREE Metal allocator counters:"));
+        assert!(report.contains("device allocated (cumulative)"));
+        assert!(report.contains("host allocated (cumulative)"));
+        assert!(!report.contains("device memory live"));
+        assert!(!report.contains("IREE host live"));
     }
 }
