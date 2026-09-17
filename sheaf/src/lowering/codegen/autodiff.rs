@@ -8,11 +8,29 @@ use crate::lowering::stablehlo::{Register, StableHLOType};
 use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::error::{SheafError, SheafResult};
 use crate::lowering::config::lower_get_calls;
+use crate::lowering::transforms::{lower_inlined_gets, unroll_reduces};
 use super::helpers::TupleLeaf;
 use super::{CodeGenerator, collect_tuple_references, collect_tuple_type_leaves, expand_tuple_to_symbols};
 use crate::autodiff::reverse::GradientOutput;
 use super::control_flow::build_deep_index_map;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+fn vag_argument_layout_key(
+    call_arg: &CompiledExpr,
+    wrt_reg: &Register,
+    register_layouts: &HashMap<Register, String>,
+    tuple_layouts: &HashMap<String, BTreeMap<String, usize>>,
+) -> Option<String> {
+    register_layouts.get(wrt_reg).cloned().or_else(|| {
+        if let CompiledExpr::Symbol(name) = call_arg
+            && tuple_layouts.contains_key(name)
+        {
+            Some(name.clone())
+        } else {
+            None
+        }
+    })
+}
 
 fn rewrite_gte_param(expr: &CompiledExpr, aliases: &[String], canonical: &str) -> CompiledExpr {
     match expr {
@@ -227,45 +245,61 @@ impl<'a> CodeGenerator<'a> {
         let saved_bindings = self.bindings.clone();
         let saved_lambda_bindings = self.lambda_bindings.clone();
 
-        self.bindings.insert(param_name.clone(), (wrt_reg, wrt_ty.clone()));
+        self.bindings
+            .insert(param_name.clone(), (wrt_reg, wrt_ty.clone()));
 
-        if let Some(layout_key) = self.layout_key_map.get(&wrt_reg).cloned() {
+        let layout_key = vag_argument_layout_key(
+            &call_args[0],
+            &wrt_reg,
+            &self.layout_key_map,
+            &self.tuple_key_layouts,
+        );
+        if let Some(layout_key) = layout_key {
             if let Some(layout) = self.tuple_key_layouts.get(&layout_key).cloned() {
                 self.tuple_key_layouts.insert(param_name.clone(), layout);
             }
-            let idx_entries: Vec<_> = self.idx_to_key.iter()
+            let idx_entries: Vec<_> = self
+                .idx_to_key
+                .iter()
                 .filter(|((name, _), _)| name == &layout_key)
                 .map(|((_, idx), key)| (*idx, key.clone()))
                 .collect();
-        for (idx, key) in idx_entries {
-            self.idx_to_key.insert((param_name.clone(), idx), key);
+            for (idx, key) in idx_entries {
+                self.idx_to_key.insert((param_name.clone(), idx), key);
+            }
         }
-    }
 
-    let fn_body = if self.tuple_key_layouts.contains_key(param_name) {
-        let index_map = build_deep_index_map(param_name, &self.tuple_key_layouts);
-        let mut param_aliases = vec![param_name.clone()];
-        collect_param_aliases(&fn_body, param_name, &mut param_aliases);
-        let mut body = fn_body;
-        for alias in &param_aliases {
-            body = lower_get_calls(&body, alias, &index_map);
-        }
-        if param_aliases.len() > 1 {
-            body = rewrite_gte_param(&body, &param_aliases[1..], param_name);
-        }
-        body
-    } else {
-        fn_body
-    };
+        let fn_body = if self.tuple_key_layouts.contains_key(param_name) {
+            let index_map = build_deep_index_map(param_name, &self.tuple_key_layouts);
+            let mut param_aliases = vec![param_name.clone()];
+            collect_param_aliases(&fn_body, param_name, &mut param_aliases);
+            let mut body = fn_body;
+            for alias in &param_aliases {
+                body = lower_get_calls(&body, alias, &index_map);
+            }
+            if param_aliases.len() > 1 {
+                body = rewrite_gte_param(&body, &param_aliases[1..], param_name);
+            }
 
-    let (leaves, structural_references, expanded_body) = match &wrt_ty {
+            body = unroll_reduces(&body, &[(param_name.clone(), wrt_ty.clone())]);
+            body = lower_get_calls(&body, param_name, &index_map);
+            lower_inlined_gets(&body, &[(param_name.clone(), index_map)])
+        } else {
+            fn_body
+        };
+
+        let (leaves, structural_references, expanded_body) = match &wrt_ty {
             StableHLOType::Tuple(..) => {
                 let leaves = collect_tuple_type_leaves(param_name, &wrt_ty);
                 let references = collect_tuple_references(&fn_body, param_name);
                 let expanded = expand_tuple_to_symbols(&fn_body, param_name);
                 (leaves, references, expanded)
             }
-            _ => (Vec::<TupleLeaf>::new(), Vec::<TupleLeaf>::new(), fn_body.clone()),
+            _ => (
+                Vec::<TupleLeaf>::new(),
+                Vec::<TupleLeaf>::new(),
+                fn_body.clone(),
+            ),
         };
 
         let mut all_wrt_symbols: Vec<String> = Vec::new();
@@ -374,5 +408,33 @@ impl<'a> CodeGenerator<'a> {
         self.bindings = saved_bindings;
 
         Ok((tuple_reg, tuple_ty))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::vag_argument_layout_key;
+    use crate::core::expr::CompiledExpr;
+    use crate::lowering::stablehlo::Register;
+    use std::collections::{BTreeMap, HashMap};
+
+    #[test]
+    fn vag_layout_falls_back_to_the_argument_symbol() {
+        let argument = CompiledExpr::Symbol("params".to_string());
+        let register = Register::Reg(7);
+        let tuple_layouts = HashMap::from([(
+            "params".to_string(),
+            BTreeMap::from([("transformer".to_string(), 0)]),
+        )]);
+
+        assert_eq!(
+            vag_argument_layout_key(
+                &argument,
+                &register,
+                &HashMap::new(),
+                &tuple_layouts,
+            ),
+            Some("params".to_string()),
+        );
     }
 }
