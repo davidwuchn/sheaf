@@ -371,8 +371,8 @@ impl<'a> CodeGenerator<'a> {
     ) -> SheafResult<(Register, StableHLOType)> {
         let sym_name = if let CompiledExpr::Symbol(s) = &args[0] { Some(s.clone()) } else { None };
         let (base_reg, base_ty) = self.generate(&args[0])?;
-        let elems = match &base_ty {
-            StableHLOType::Tuple(e, _) => e.clone(),
+        let (elems, keys) = match &base_ty {
+            StableHLOType::Tuple(elems, keys) => (elems.clone(), keys.clone()),
             _ => {
                 return Err(SheafError::Compile {
                     message: "assoc: base must be a tuple".to_string(),
@@ -433,7 +433,8 @@ impl<'a> CodeGenerator<'a> {
                 new_tys.push(elem_ty.clone());
             }
         }
-        Ok(self.emitter.emit_tuple(&new_regs, &new_tys))
+        let (reg, _) = self.emitter.emit_tuple(&new_regs, &new_tys);
+        Ok((reg, StableHLOType::Tuple(new_tys, keys)))
     }
 
     fn gen_top_k(

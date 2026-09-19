@@ -98,6 +98,38 @@ fn string_dict_keys_are_preserved_and_sorted() {
 }
 
 #[test]
+fn assoc_preserves_dict_keys() {
+    use std::collections::{BTreeMap, HashMap};
+
+    let registry = HashMap::new();
+    let state_type = StableHLOType::Tuple(
+        vec![StableHLOType::scalar_f32(), StableHLOType::scalar_f32()],
+        Some(vec!["loss".to_string(), "step".to_string()]),
+    );
+    let mut codegen = CodeGenerator::with_function_params(
+        &registry,
+        &["state".to_string()],
+        std::slice::from_ref(&state_type),
+    );
+    codegen.set_tuple_key_layouts(HashMap::from([(
+        "state".to_string(),
+        BTreeMap::from([("loss".to_string(), 0), ("step".to_string(), 1)]),
+    )]));
+    let expr = CompiledExpr::FunctionCall {
+        name: "assoc".to_string(),
+        args: vec![
+            CompiledExpr::Symbol("state".to_string()),
+            CompiledExpr::Keyword("loss".to_string()),
+            CompiledExpr::Float(2.0),
+        ],
+        loc: None,
+    };
+
+    let (_, ty) = codegen.generate(&expr).expect("assoc should compile");
+    assert_eq!(ty, state_type);
+}
+
+#[test]
 fn test_generate_binop() {
     let mut codegen = CodeGenerator::new();
     let expr = CompiledExpr::FunctionCall {

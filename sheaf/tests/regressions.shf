@@ -9,6 +9,17 @@
     (guard :range [7 7] (tensor [(when true 7)]))
     true))
 
+(defn assoc-dict-result [state]
+  (assoc state :loss (+ (get state :loss) 1.0)))
+
+(defn check-assoc-dict-result []
+  (let [result (assoc-dict-result {:loss (zeros [1])
+                                   :step (ones [1])})]
+    (do
+      (guard :range [1.0 1.0] (get result :loss))
+      (guard :range [1.0 1.0] (get result :step))
+      true)))
+
 (defn check-mlp []
   (let [[X Y] (xor-data)
         params (init-params (random-key 42))
