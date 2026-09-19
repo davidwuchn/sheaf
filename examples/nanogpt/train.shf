@@ -55,7 +55,8 @@
                     {:params params
                      :m (tree-map-zeros params)
                      :v (tree-map-zeros params)
-                     :t 0}))
+                     :t 0
+                     :loss 0.0}))
       state     (assoc state :key (random-key (io "entropy")))
 
       B         (get config :block_size)

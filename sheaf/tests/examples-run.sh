@@ -258,8 +258,8 @@ run_example () {
     log_info "→ $group/$entry  (device=$DEVICE, timeout=${timeout}s)"
 
     local -a sheaf_args=(--device "$DEVICE")
-    # Ensure the transformer forward pass is JIT-compiled, otherwise this is a regression.
-    if [[ "$validator" == "nanoGPT-sample" ]]; then
+    # NanoGPT model and training functions must compile instead of falling back.
+    if [[ "$validator" == "nanoGPT-sample" || "$validator" == "nanoGPT-train" ]]; then
         sheaf_args+=(-v)
     fi
 
@@ -302,6 +302,14 @@ run_example () {
         nanoGPT-sample)
             val_out="$(validate_nanoGPT_sample "$stdout_log" "$stderr_log")" ;;
         nanoGPT-train)
+            if grep -q -- 'jit: train-step skipped' "$stderr_log"; then
+                record_fail "train-step fell back to the interpreter"
+                return
+            fi
+            if ! grep -Eq -- 'jit: compiling train-step \[|jit: train-step \(cached\)' "$stderr_log"; then
+                record_fail "train-step did not compile through JIT"
+                return
+            fi
             val_out="$( cd "$workdir" && \
                 timeout --foreground 30 \
                     "$SHEAF_BIN" --device "$DEVICE" -c \
