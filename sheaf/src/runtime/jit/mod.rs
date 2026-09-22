@@ -374,7 +374,9 @@ fn expr_node_count(expr: &CompiledExpr) -> usize {
 }
 
 const MAX_VAG_GRAPH_NODES: usize = 10_000;
-use crate::core::inference::{infer_function_signature_with_known, FunctionSignature};
+use crate::core::inference::{
+    infer_function_signature_with_known, FunctionSignature, ValueLayout,
+};
 use crate::core::trace::{value_to_param_layout, value_to_stablehlo_type};
 use crate::interpreter::value::Value;
 use crate::StableHLOType;
@@ -384,6 +386,7 @@ use crate::StableHLOType;
 #[derive(Default)]
 struct SharedModuleCatalog {
     modules: HashMap<JitCacheKey, CompiledModuleInfo>,
+    variants: HashMap<String, Vec<JitCacheKey>>,
     identities: HashMap<String, JitCacheKey>,
     compiling: HashSet<JitCacheKey>,
     growth_warned: bool,
@@ -444,6 +447,8 @@ pub struct JitCompiler {
     last_vag_error: Option<SheafError>,
     /// Cache compiled VAG sessions: vag_key -> (session_idx, signature, param_names)
     vag_cache: HashMap<String, (String, FunctionSignature, Vec<String>)>,
+    /// Definition identities already validated by the full compilation-key path.
+    definition_identities: HashMap<String, String>,
 }
 
 /// Dispatch metadata for a module loaded in the shared IREE session.
@@ -452,6 +457,136 @@ pub struct CompiledModuleInfo {
     pub function_name: String,
     pub module_name: String,
     pub sig: FunctionSignature,
+    pub(crate) argument_layouts: Vec<ValueLayout>,
+}
+
+fn runtime_args_match(
+    args: &[Value],
+    params: &[String],
+    info: &CompiledModuleInfo,
+) -> bool {
+    if args.len() != info.sig.param_types.len()
+        || args.len() != info.argument_layouts.len()
+    {
+        return false;
+    }
+    if !args
+        .iter()
+        .zip(&info.argument_layouts)
+        .all(|(value, layout)| runtime_layout_matches(value, layout))
+    {
+        return false;
+    }
+    if !args
+        .iter()
+        .zip(&info.sig.param_types)
+        .all(|(value, ty)| runtime_type_matches(value, ty))
+    {
+        return false;
+    }
+    info.sig.captured_scalars.iter().all(|((param, indices), expected)| {
+        let Some(param_index) = params.iter().position(|name| name == param) else {
+            return false;
+        };
+        runtime_scalar_at(&args[param_index], indices)
+            .is_some_and(|actual| actual.to_bits() == expected.to_bits())
+    })
+}
+
+fn runtime_layout_matches(value: &Value, layout: &ValueLayout) -> bool {
+    match (value, layout) {
+        (Value::Dict(values), ValueLayout::Dict(entries)) => {
+            values.len() == entries.len()
+                && values.iter().zip(entries).all(
+                    |((actual_key, actual), (expected_key, expected))| {
+                        actual_key == expected_key
+                            && runtime_layout_matches(actual, expected)
+                    },
+                )
+        }
+        (Value::List(values), ValueLayout::List(entries)) => {
+            values.len() == entries.len()
+                && values
+                    .iter()
+                    .zip(entries)
+                    .all(|(actual, expected)| runtime_layout_matches(actual, expected))
+        }
+        (Value::Dict(_) | Value::List(_), ValueLayout::Leaf) => false,
+        (_, ValueLayout::Leaf) => true,
+        _ => false,
+    }
+}
+
+fn runtime_type_matches(value: &Value, expected: &StableHLOType) -> bool {
+    use crate::core::dtype::ElementType;
+
+    match (value, expected) {
+        (
+            Value::Float(_) | Value::Int(_) | Value::Bool(_) | Value::Nil,
+            StableHLOType::ScalarF32,
+        ) => true,
+        (Value::Tensor { data, dtype }, StableHLOType::Tensor { shape, dtype: expected_dtype }) => {
+            let actual_dtype = match dtype {
+                ElementType::F16 | ElementType::BF16 | ElementType::F32 => *dtype,
+                _ => ElementType::F32,
+            };
+            actual_dtype == *expected_dtype
+                && data.shape().iter().map(|&dim| dim as i64).eq(shape.iter().copied())
+        }
+        (Value::DeviceBuffer(buffer), StableHLOType::Tensor { shape, dtype: expected_dtype }) => {
+            let actual_dtype = match buffer.dtype {
+                ElementType::F16 | ElementType::BF16 | ElementType::F32 => buffer.dtype,
+                _ => ElementType::F32,
+            };
+            actual_dtype == *expected_dtype
+                && buffer.shape.iter().map(|&dim| dim as i64).eq(shape.iter().copied())
+        }
+        (Value::List(values), StableHLOType::Tensor { shape, dtype }) => {
+            *dtype == ElementType::F32
+                && shape.as_slice() == [values.len() as i64]
+                && values
+                    .iter()
+                    .all(|value| matches!(value, Value::Float(_) | Value::Int(_)))
+        }
+        (Value::Dict(values), StableHLOType::Tuple(types, Some(keys))) => {
+            values.len() == types.len()
+                && values.len() == keys.len()
+                && values.iter().zip(keys).zip(types).all(
+                    |(((actual_key, actual), expected_key), expected_type)| {
+                        actual_key == expected_key
+                            && runtime_type_matches(actual, expected_type)
+                    },
+                )
+        }
+        (Value::Tuple(values), StableHLOType::Tuple(types, None))
+        | (Value::List(values), StableHLOType::Tuple(types, None)) => {
+            values.len() == types.len()
+                && values
+                    .iter()
+                    .zip(types)
+                    .all(|(actual, expected)| runtime_type_matches(actual, expected))
+        }
+        _ => false,
+    }
+}
+
+fn runtime_scalar_at(value: &Value, indices: &[usize]) -> Option<f64> {
+    let mut current = value;
+    for &index in indices {
+        current = match current {
+            Value::Dict(values) => values.values().nth(index)?,
+            Value::List(values) | Value::Tuple(values) => values.get(index)?,
+            _ => return None,
+        };
+    }
+    match current {
+        Value::Float(value) => Some(*value as f64),
+        Value::Int(value) => Some(*value as f64),
+        Value::Tensor { data, .. } if data.len() == 1 => {
+            data.iter().next().map(|&value| value as f64)
+        }
+        _ => None,
+    }
 }
 
 fn module_growth_warning(
@@ -510,6 +645,7 @@ impl JitCompiler {
             last_vag_fail_reason: None,
             last_vag_error: None,
             vag_cache: HashMap::new(),
+            definition_identities: HashMap::new(),
         }
     }
 
@@ -543,13 +679,44 @@ impl JitCompiler {
 
     /// Obtain shared module metadata without exposing the catalogue lock to
     /// dispatch callers.
-    pub(crate) fn module_for_key(&self, key: &JitCacheKey) -> Option<CompiledModuleInfo> {
-        shared_module_catalog()
+    pub(crate) fn module_for_key(&mut self, key: &JitCacheKey) -> Option<CompiledModuleInfo> {
+        let info = shared_module_catalog()
             .lock()
             .expect("JIT catalogue lock poisoned")
             .modules
             .get(key)
-            .cloned()
+            .cloned();
+        if info.is_some() {
+            self.definition_identities
+                .insert(key.function_name.clone(), key.definition_hash.clone());
+        }
+        info
+    }
+
+    /// Find an already compiled variant without rebuilding its compilation key.
+    pub(crate) fn module_for_args(
+        &self,
+        func_def: &FunctionDef,
+        args: &[Value],
+    ) -> Option<CompiledModuleInfo> {
+        let definition_identity = self.definition_identities.get(&func_def.name)?;
+        let catalog = shared_module_catalog()
+            .lock()
+            .expect("JIT catalogue lock poisoned");
+        catalog
+            .variants
+            .get(&func_def.name)?
+            .iter()
+            .find_map(|key| {
+                let info = catalog.modules.get(key)?;
+                if key.definition_hash == *definition_identity
+                    && runtime_args_match(args, &func_def.params, info)
+                {
+                    Some(info.clone())
+                } else {
+                    None
+                }
+            })
     }
 
     /// Reject and memoize definitions that cannot enter the JIT pipeline.
@@ -594,11 +761,14 @@ mod vag;
 mod cache_key_tests {
     use super::{
         cache_key_for, cache_key_for_function, function_definition_identity,
-        module_growth_warning, JitCompiler, JitVagOutcome,
+        module_growth_warning, runtime_args_match, CompiledModuleInfo, JitCompiler,
+        JitVagOutcome,
     };
     use crate::core::ast::SheafValue;
     use crate::core::error::{SheafError, SourceLocation};
     use crate::core::expr::{CompiledExpr, FunctionDef};
+    use crate::core::inference::{FunctionSignature, ValueLayout};
+    use crate::core::trace::value_to_stablehlo_type;
     use crate::interpreter::value::{Dtype, Value};
     use ndarray::ArrayD;
     use std::collections::{HashMap, HashSet};
@@ -668,6 +838,78 @@ mod cache_key_tests {
             data: Arc::new(ArrayD::zeros(shape)),
             dtype,
         }
+    }
+
+    fn compiled_module_for_args(
+        args: &[Value],
+        captured_scalars: HashMap<(String, Vec<usize>), f64>,
+    ) -> CompiledModuleInfo {
+        CompiledModuleInfo {
+            function_name: "f".to_string(),
+            module_name: "f__variant".to_string(),
+            sig: FunctionSignature {
+                param_types: args
+                    .iter()
+                    .map(|value| value_to_stablehlo_type(value).unwrap())
+                    .collect(),
+                return_type: crate::StableHLOType::scalar_f32(),
+                return_dict_keys: None,
+                arg_type_layouts: Vec::new(),
+                captured_scalars,
+            },
+            argument_layouts: args.iter().map(ValueLayout::from_value).collect(),
+        }
+    }
+
+    #[test]
+    fn fast_variant_lookup_checks_shapes_layouts_and_captured_scalars() {
+        let params = vec!["x".to_string(), "cfg".to_string()];
+        let args = vec![tensor_f32(vec![2, 3], 0.0), dict_cfg(4.0)];
+        let captured = HashMap::from([(("cfg".to_string(), vec![0]), 4.0)]);
+        let info = compiled_module_for_args(&args, captured);
+
+        assert!(runtime_args_match(&args, &params, &info));
+        assert!(!runtime_args_match(
+            &[tensor_f32(vec![3, 2], 0.0), dict_cfg(4.0)],
+            &params,
+            &info,
+        ));
+        assert!(!runtime_args_match(
+            &[tensor_f32(vec![2, 3], 0.0), dict_cfg(5.0)],
+            &params,
+            &info,
+        ));
+    }
+
+    #[test]
+    fn fast_variant_lookup_ignores_uncaptured_scalar_values() {
+        let params = vec!["x".to_string(), "cfg".to_string()];
+        let original = vec![tensor_f32(vec![2], 0.0), dict_cfg(4.0)];
+        let info = compiled_module_for_args(&original, HashMap::new());
+        let changed = vec![tensor_f32(vec![2], 1.0), dict_cfg(5.0)];
+
+        assert!(runtime_args_match(&changed, &params, &info));
+    }
+
+    #[test]
+    fn fast_variant_lookup_rejects_dtype_and_container_changes() {
+        let params = vec!["params".to_string()];
+        let original = Value::Dict(std::collections::BTreeMap::from([(
+            "layers".to_string(),
+            Value::List(vec![tensor_f32(vec![2], 0.0)]),
+        )]));
+        let info = compiled_module_for_args(std::slice::from_ref(&original), HashMap::new());
+        let changed_dtype = Value::Dict(std::collections::BTreeMap::from([(
+            "layers".to_string(),
+            Value::List(vec![tensor_with_dtype(vec![2], Dtype::F16)]),
+        )]));
+        let changed_container = Value::Dict(std::collections::BTreeMap::from([(
+            "layers".to_string(),
+            Value::Tuple(vec![tensor_f32(vec![2], 0.0)]),
+        )]));
+
+        assert!(!runtime_args_match(&[changed_dtype], &params, &info));
+        assert!(!runtime_args_match(&[changed_container], &params, &info));
     }
 
     /// Distinct runtime shapes produce distinct variants.
@@ -825,6 +1067,7 @@ mod cache_key_tests {
                 symbol: "p_0".to_string(),
             }),
             vag_cache: HashMap::new(),
+            definition_identities: HashMap::new(),
         };
 
         assert!(matches!(
@@ -849,6 +1092,7 @@ mod cache_key_tests {
                 location: Some(location.clone()),
             }),
             vag_cache: HashMap::new(),
+            definition_identities: HashMap::new(),
         };
 
         assert!(matches!(
@@ -880,6 +1124,7 @@ mod cache_key_tests {
             last_vag_fail_reason: None,
             last_vag_error: None,
             vag_cache: HashMap::new(),
+            definition_identities: HashMap::new(),
         };
         let identity = function_definition_identity(&recursive, &registry);
 

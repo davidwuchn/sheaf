@@ -123,15 +123,27 @@ impl JitCompiler {
             function_name: name.to_string(),
             module_name: module_name.clone(),
             sig: sig.clone(),
+            argument_layouts: args
+                .iter()
+                .map(crate::core::inference::ValueLayout::from_value)
+                .collect(),
         };
         {
             let mut catalogue = shared_module_catalog()
                 .lock()
                 .expect("JIT catalogue lock poisoned");
             catalogue.identities.insert(module_name, cache_key.clone());
-            catalogue.modules.insert(cache_key.clone(), info);
+            if catalogue.modules.insert(cache_key.clone(), info).is_none() {
+                catalogue
+                    .variants
+                    .entry(name.clone())
+                    .or_default()
+                    .push(cache_key.clone());
+            }
             catalogue.compiling.remove(&cache_key);
         }
+        self.definition_identities
+            .insert(name.clone(), cache_key.definition_hash.clone());
         reservation.finish();
         // Module unloading is unavailable, so report excessive catalogue growth.
         let threshold = crate::core::config::jit_module_warning_threshold();
