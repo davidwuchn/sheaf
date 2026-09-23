@@ -9,7 +9,7 @@ use crate::sheaf_msg;
 use crate::runtime::jit::JitVagOutcome;
 use crate::core::error::SheafError;
 use crate::interpreter::env::{runtime_error, Env};
-use crate::interpreter::value::Value;
+use crate::interpreter::value::{Dtype, Value};
 use std::collections::BTreeMap;
 
 pub(super) fn validate_device_dtypes(args: &[Value]) -> Result<(), SheafError> {
@@ -44,12 +44,14 @@ pub(super) fn try_iree_dispatch(
     args: &[Value],
     env: &mut Env,
 ) -> Option<Result<Value, SheafError>> {
+    if let Err(error) = validate_device_dtypes(args) {
+        return Some(Err(error));
+    }
     let aot_variant = match func_def.signature.as_ref() {
         Some(signature)
             if crate::runtime::iree_session::args_match_signature(args, &signature.param_types)
                 && crate::runtime::iree_session::check_shapes_match(
                     args,
-                    
                     &signature.param_types,
                 )
                 .is_ok() =>
@@ -70,8 +72,16 @@ pub(super) fn try_iree_dispatch(
         Some((module_name, signature)) => (dispatch_name(&module_name, &func_def.name), signature),
         None => {
             let jit = env.jit_compiler.as_mut()?;
-            let key = crate::runtime::jit::cache_key_for_function(func_def, args, &env.registry)?;
-            let info = jit.module_for_key(&key)?;
+            let info = if let Some(info) = jit.module_for_args(func_def, args) {
+                info
+            } else {
+                let key = crate::runtime::jit::cache_key_for_function(
+                    func_def,
+                    args,
+                    &env.registry,
+                )?;
+                jit.module_for_key(&key)?
+            };
             (jit_dispatch_name(&info, &func_def.name), info.sig)
         }
     };
@@ -125,6 +135,9 @@ pub(super) fn try_jit_vag(
     params: &Value,
     env: &mut Env,
 ) -> JitVagOutcome {
+    if let Err(error) = validate_device_dtypes(std::slice::from_ref(params)) {
+        return JitVagOutcome::Success(Err(error));
+    }
     let augmented_func = match augment_closure_with_free_vars(func, env) {
         Some(f) => f,
         None => return JitVagOutcome::Unsupported,
@@ -166,7 +179,6 @@ pub(super) fn try_jit_vag(
         } else if let Some((_, val)) = closure.iter().find(|(k, _)| k == name) {
             args.push(val.clone());
         } else {
-            // Scalar capture, not passed to IREE
             continue;
         }
     }
@@ -240,7 +252,6 @@ fn augment_closure_with_free_vars(func: &Value, env: &Env) -> Option<Value> {
         if let Ok(val) = env.get(name) {
             augmented_closure.push((name.to_string(), val.clone()));
         }
-        // If not in env, leave it, the JIT will fail gracefully
     }
 
     Some(Value::Function {
@@ -345,7 +356,7 @@ fn tuple_to_list(tuple_val: &Value, original: &[Value]) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch_name, jit_dispatch_name};
+    use super::{dispatch_name, jit_dispatch_name, validate_backend_dtypes};
     use crate::core::inference::FunctionSignature;
     use crate::runtime::jit::CompiledModuleInfo;
 
@@ -357,6 +368,22 @@ mod tests {
             arg_type_layouts: Vec::new(),
             captured_scalars: std::collections::HashMap::new(),
         }
+    }
+
+    #[test]
+    fn metal_rejects_nested_bf16_values() {
+        let value = crate::interpreter::value::Value::Dict(
+            std::iter::once((
+                "weight".to_string(),
+                crate::interpreter::value::Value::tensor_bf16(
+                    ndarray::ArrayD::zeros(ndarray::IxDyn(&[2])),
+                ),
+            ))
+            .collect(),
+        );
+        let error = validate_backend_dtypes(true, std::slice::from_ref(&value)).unwrap_err();
+        assert!(error.to_string().contains("bf16 is not supported on Metal"));
+        assert!(validate_backend_dtypes(false, std::slice::from_ref(&value)).is_ok());
     }
 
     #[test]
@@ -373,6 +400,7 @@ mod tests {
             function_name: "predict-value?".to_string(),
             module_name: "jit_variant_42".to_string(),
             sig: signature(),
+            argument_layouts: vec![crate::core::inference::ValueLayout::Leaf],
         };
 
         assert_eq!(
