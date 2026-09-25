@@ -83,7 +83,7 @@ still change between releases.
 
 - Download the binary tarball from https://github.com/sheaf-lang/sheaf/releases
 - Download the examples:
-  https://github.com/sheaf-lang/sheaf/releases/download/v2.2.0/sheaf-examples.tar.gz
+  https://github.com/sheaf-lang/sheaf/releases/download/v2.3.0/sheaf-examples.tar.gz
 
 On macOS, the Sheaf binary might be blocked by Gatekeeper. Unlock it with:
 

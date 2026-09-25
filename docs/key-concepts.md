@@ -8,11 +8,16 @@ This page describes the concepts behind the system: what happens when you run a 
 
 Sheaf follows a small set of principles that inform every design decision:
 
-**Pure functions compile automatically.** Any function that takes tensors and returns tensors, without side effects, is eligible for GPU compilation. There are no `@jit` decorator nor `torch.compile()`. The compiler decides what to compile based on purity analysis. Functions that perform I/O or print are interpreted; everything else is compiled.
+**Lisp, not Python**. Lisp programs are built from expressions that a compiler can inspect and transform directly. Sheaf can parse a call or a reduce over layers without tracing Python execution to reconstruct the program.
+This results in fewer moving parts between the Sheaf model and the code that runs on the GPU.
 
-**No Python in the execution path.** The compiler, runtime, and IREE execution engine are statically linked into a single binary. Models ship as `.shf` source files alongside cached `.vmfb` compiled artifacts. A standalone deployment consists of the Sheaf binary, the model files (code and data), and its compiled artefacts.
+**Explicit, not implicit.** Model parameters are values passed to functions, not mutable fields hidden inside a
+model object. A training step returns updated parameters and optimizer state rather than changing them in place.
+Even random operations are pure (key in, result out), so they can compile to GPU code like any other operation.
 
-**Functional PRNG.** Random number generation follows the JAX model: keys are explicit values, not implicit global state. `(random-key 42)` produces a key; `(random-split key n)` derives sub-keys deterministically. This makes random operations pure (key in, result out), which means they compile to GPU code like any other operation.
+**Automatic compilation.** Any function that takes tensors and returns tensors, without side effects, is eligible for GPU compilation. There is no `@jit` decorator or `torch.compile()` call.
+
+**Standalone execution.** The compiler, runtime, and IREE execution engine are statically linked into a single binary. Models ship as `.shf` source files alongside cached `.vmfb` compiled artifacts. A standalone deployment consists of the Sheaf binary, the model files (code and data), and its compiled artefacts.
 
 ## Parameter Trees
 

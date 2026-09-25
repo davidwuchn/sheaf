@@ -1,197 +1,195 @@
 # Sheaf Data Types
 
-Sheaf is **tensor-first**: all numeric values are tensors by default, with `f32` (32-bit float) as the default dtype.
+Sheaf uses tensors for numerical computation. A number written on its own is a
+scalar. An array of numbers written in square brackets is a tensor.
 
-## Summary Table
+The default tensor dtype is `f32`.
 
-| Type           | Notation       | Example         | Description                      |
-| -------------- | -------------- | --------------- | -------------------------------- |
-| Tensor         | `[...]`        | `[1 2 3]`       | N-dimensional array, default f32 |
-| Tensor (typed) | `[...] :dtype` | `[1 2] :bf16`   | Explicit dtype                   |
-| Literal List   | `'[...]`       | `'[3 4]`        | List of static data              |
-| Dictionary     | `{...}`        | `{:x 1}`        | Key-value pairs (pytree node)    |
-| Keyword        | `:name`        | `:weight`       | Dictionary keys, options         |
-| Boolean        | Literal        | `true`, `false` | Boolean values                   |
-| String         | `"..."`        | `"hello"`       | Text strings                     |
+## Type Summary Table
 
----
+| Value        | Example         | Notes                             |
+| ------------ | --------------- | --------------------------------- |
+| Scalar       | `42`, `3.14`    | Integer or floating-point value   |
+| Tensor       | `[1 2 3]`       | Numeric array (`f32` by default)  |
+| Typed tensor | `[1 2 3] :f16`  | Explicit dtype                    |
+| List         | `'[1 2 3]`      | Quoted data, not a tensor         |
+| Dictionary   | `{:x 1}`        | Keys and values (can be nested)   |
+| Keyword      | `:weight`       | Commonly used as a dictionary key |
+| Boolean      | `true`, `false` | Scalar truth values               |
+| String       | `"hello"`       | Text                              |
+| Nil          | `nil`           | Absence of a value                |
 
-## Tensors
-
-Tensors are the primary data type in Sheaf. All numeric literals and vectors become tensors.
-
-!!! note "**Note: Syntactic Context Matters**"
-
-    Brackets `[]` become tensors in _expression_ context. In _syntactic_ positions, they serve other purposes:
-
-    - `(defn f [x y] ...)` — parameter list, not a tensor
-
-    - `(let [[a b] val] ...)` — destructuring pattern, not a tensor
-
-    - `'[3 4]` — quoted shape literal, not a tensor
-
-### Basic Tensors
+In Sheaf code, scalar and tensor literals are expressed like this:
 
 ```clojure
-42                    ; Scalar value (f32)
-3.14                  ; Scalar value (f32)
-[1 2 3]               ; 1D tensor, shape (3,)
-[[1 2] [3 4]]         ; 2D tensor, shape (2, 2)
+42                    ; integer scalar
+3.14                  ; floating-point scalar
+[1 2 3]               ; f32 tensor with shape [3]
+[[1 2] [3 4]]         ; f32 tensor with shape [2 2]
 ```
 
-### Dtype Specification
+## Dtypes and casts
 
-A dtype keyword may follow a vector literal to specify its precision:
+A tensor’s dtype determines how its numbers are stored. Tensor literals use `f32`
+by default. Both `f16` and `bf16` use half as much memory per number as `f32`,
+but they make different trade-offs: `f16` keeps more precision, while `bf16` can
+represent much larger and smaller values.
+
+The dtype can be set by appending a keyword to a tensor literal:
 
 ```clojure
-[1 2 3]               ; Default f32
-[1 2 3] :f32          ; Explicit f32
-[1 2 3] :bf16         ; BFloat16
-[1 2 3] :i32          ; 32-bit integer
-[1 2 3] :bool         ; Boolean
+[1 2 3] :f32
+[1 2 3] :f16
+[1 2 3] :bf16
+[1 2 3] :i32
+[1 0] :bool
 ```
 
-### Literal Lists
+**Note**: `bf16` is not supported on Apple Metal.
 
-The quote `'` prevents evaluation, treating the following form as literal data rather than code or a numerical tensor. It is typically used to pass structural metadata, such as shapes for tensor creation functions:
-
-```clojure
-;; Without the quote, [2 3] is evaluated as a tensor
-(nth [2 3] 0)  ; => tensor f32[] = 2.0
-
-;; With the quote, '[2 3] is passed as a literal list
-(nth '[2 3] 0) ; => 2
-
-;; Passing shapes is a typical use for quoted vectors
-(random-normal (random-key 0) '[3 4])   ; 3x4 random matrix from N(0,1)
-(zeros '[2 3])                          ; 2x3 tensor of zeros
-(ones '[10])                            ; 1D tensor of ones, length 10
-(reshape (arange 6) '[2 3])             ; Reshape to 2x3
-```
-
----
-
-### List to Tensor Conversion
-
-The `tensor` function converts a quoted list or dynamically-generated list into a tensor:
+`cast` changes the dtype of an existing tensor. It accepts `:f32`, `:f16`,
+`:bf16`, and `:i32`:
 
 ```clojure
-;; From quoted list
-(tensor '[1 2 3 4 5 6])                    ; => tensor i32[6] = [1 2 3 4 5 6]
+(cast (ones '[3]) :f16) ; => tensor f16[3] = [1. 1. 1.]
 
-;; From dynamically-generated list
-(let [lst (cons 1 '[2 3])]                  ; cons returns a list
-  (tensor lst))                             ; Convert to tensor
-; => tensor i32[3] = [1 2 3]
-
-;; Chaining with tensor operations
-(reshape (tensor '[1 2 3 4 5 6]) '[2 3])   ; => tensor i32[2x3] = [[1 2 3] [4 5 6]]
-```
-
-### Type Conversion
-
-Sheaf does not perform implicit type conversions. All dtype changes must be explicit.
-
-`cast` converts a tensor to a different dtype. Shape is preserved.
-
-```clojure
-;; Direct annotation on vector literals
-[1 2 3] :bf16                ; bf16 tensor
-
-;; cast converts an existing tensor
 (let [x [1 2 3] :bf16]
-  (cast x :f32))             ; bf16 -> f32
+  (cast x :f32))        ; => tensor f32[3] = [1. 2. 3.]
 ```
 
-`int` and `float` convert a scalar to a 32-bit integer or float respectively.
+`int` and `float` convert scalars. They also convert tensors: a rank-zero tensor
+becomes a scalar, while a tensor with more axes keeps its shape.
 
----
+```clojure
+(int 3.9)           ; => 3
+(float 3)           ; => 3.0
+(int [1.2 2.8])     ; => tensor i32[2] = [1 2]
+```
+
+Arithmetic with a scalar can adopt the dtype of a typed tensor.
+However, if two tensors have different dtypes, Sheaf does not silently convert one to match the other but rejects the operation with a `dtype mismatch` error:
+
+```clojure
+(+ [1 2] :f16 3)       ; => tensor f16[2] = [4. 5.]
+                       ; '3' was automatically cast to f16
+
+(let [x [1 2] :f16     ; f16 tensor
+      y [3 4]]         ; no dtype specified, so y is a f32 tensor
+  (+ x y))             ; => error: dtype mismatch: f16 and f32
+```
+
+To add them, cast one tensor to the other's dtype:
+
+```clojure
+(let [x [1 2] :f16
+      y [3 4]]
+  (+ x (cast y :f16))) ; => tensor f16[2] = [4. 6.]
+```
+
+### Lists and tensor conversion
+
+The quote `'` keeps a vector as a list instead of turning it into a tensor.
+This is useful for shapes: `[2 3]` creates a tensor, while `'[2 3]` keeps the
+dimensions as a list. The list can then be used to create or reshape a tensor:
+
+```clojure
+(zeros '[2 3])                      ; => tensor f32[2x3]
+(reshape (arange 6) '[2 3])         ; => tensor i32[2x3]
+```
+
+`tensor` converts a list of numbers to an `f32` tensor, even when the list
+contains integers:
+
+```clojure
+(tensor '[1 2 3])                   ; => tensor f32[3] = [1. 2. 3.]
+```
+
+## Brackets in syntax
+
+Brackets do not always create a tensor. In a function definition they name the
+parameters. In a `let` binding they can name the parts of a value. A quoted
+vector stays a list, as in the shape examples above:
+
+```clojure
+(defn add [x y] (+ x y))  ; [x y] names the parameters
+(let [[a b] [1 2]] a)     ; [a b] binds the two elements to a and b
+'[3 4]                    ; a list, not a tensor
+```
+
+Brackets can also form a list without a quote. For example, `[:x :y]` contains
+keywords rather than numbers, so it is a list. A list of numbers such as `[1 2]`
+needs the quote to stay a list rather than become a tensor.
 
 ## Dictionaries
 
-Key-value structures using curly braces. Keys are typically keywords.
+Dictionaries group related values together and associate each value with a name.
+
+A model layer, for example, has weights and biases. Keeping both in one dictionary makes
+the layer a single value, with each part accessible by name.
+Those names are called _keys_, which can be keywords such as `:weight` or strings.
+
+A dictionary is written with braces, and `get` reads a value by its key:
 
 ```clojure
-{}                    ; Empty dictionary
-{:x 1 :y 2}           ; Simple dictionary
-{:layer1 {:W [[1 2] [3 4]] :b [0.1 0.2]}}  ; Nested (pytree)
+; Defining a dictionary
+(def point {:x 1 :y 2})
+; Reading the value for ':y':
+(get point :y)                     ; => 2
 ```
 
-### Dictionary Operations
+The `keys` function returns the keys as a list of strings, even when they were
+written as keywords. `vals` returns a list of the values. In Sheaf source, those
+two lists would be written `'["x" "y"]` and `'[1 2]`. The `=>` comments below show
+how the REPL displays them, with commas between items and single quotes around
+strings.
+
+To create a different version of a dictionary, `assoc` adds or replaces a
+value and `dissoc` removes keys. `dissoc` takes a list, so it can remove several
+keys at once. Both return a new dictionary, leaving `point` unchanged:
 
 ```clojure
-(get {:x 1 :y 2} :x)              ; => 1
-(assoc {:x 1} :y 2)               ; => {:x 1 :y 2}
-(dissoc {:x 1 :y 2} [:x])         ; => {:y 2} (pass keys as a list)
-(dissoc {:x 1 :y 2} [:x :y])      ; => {} (remove multiple keys)
-(keys {:x 1 :y 2})                ; => '[:x :y] (literal list)
-(vals {:x 1 :y 2})                ; => '[1 2] (literal list)
-(merge {:x 1} {:y 2})             ; => {:x 1 :y 2}
+(keys point)                       ; => ['x', 'y']
+(vals point)                       ; => [1, 2]
+(assoc point :z 3)                 ; => {:x 1 :y 2 :z 3}
+(dissoc point [:y])                ; => {:x 1} (point is unchanged)
+(dissoc point [:x :y])             ; => {}
 ```
 
-Dictionaries are pytree nodes: Sheaf can differentiate through them and apply transformations like `vmap` to their contents.
-
----
-
-## Keywords
-
-Identifiers prefixed with `:`. Self-evaluating and used as dictionary keys.
+Dictionaries can also be passed to and returned from functions:
 
 ```clojure
-:x                    ; Keyword
-:learning-rate        ; Keyword with hyphen
-(get params :layer1)  ; Access dictionary value
+(defn with-z [point]
+  (assoc point :z 3))
+
+(with-z point)                     ; => {:x 1 :y 2 :z 3}
 ```
 
----
+Since data structures often have more than one layer, dictionaries can contain other dictionaries, which can hold tensors and lists.
 
-## Booleans
+`get-in` reads a value from a nested dictionary by following a path of keys:
 
 ```clojure
-true                  ; Boolean true
-false                 ; Boolean false
+; A dictionary containing a dictionary of tensors:
+(def params {:layer {:weight [[1 2]
+                              [3 4]]
+                     :bias [0.1 0.2]}})
+
+(get params :layer)                ; => {:bias [0.1 0.2], :weight [[1. 2.] [3. 4.]]}
+(get-in params [:layer :bias])     ; => tensor f32[2] = [0.1 0.2]
 ```
 
-Comparison operations return boolean tensors:
+## Booleans and strings
+
+`true` and `false` are scalar booleans. Element-wise comparisons return boolean
+tensors, while `=` compares complete values:
 
 ```clojure
-(> [1 2 3] 2)         ; => [false false true]
-(== [1 2 1] 1)        ; => [true false true]  (element-wise)
-(= [1 2 1] 1)         ; => false              (structural equality)
+(> [1 2 3] 2)                     ; [false false true]
+(== [1 2 1] 1)                    ; [true false true]
+(= [1 2 1] 1)                     ; false
 ```
 
----
+Strings are text values, not tensors. String operations run in the interpreter.
+Strings are not tensor arguments to compiled functions.
 
-## Strings
-
-```clojure
-"hello"               ; String literal
-```
-
-String operations are available through builtin functions. Strings are not tensors and cannot be JIT-compiled.
-
----
-
-## PyTrees
-
-PyTrees are nested structures of dictionaries and tensors. They are mostly used for neural network parameters:
-
-```clojure
-{:layer1 {:W (random-normal (random-key 0) '[4 8]) :b (zeros '[8])}
- :layer2 {:W (random-normal (random-key 1) '[8 1]) :b (zeros '[1])}}
-```
-
-PyTrees enable:
-
-- Gradient computation through nested structures via `value-and-grad`
-- Batch operations via `vmap` (planned feature)
-- Efficient iteration via `scan`
-
-```clojure
-(flatten params)           ; Get all tensor leaves
-(tree-reduce + params 0.0) ; Sum all values in pytree
-```
-
----
-
-For function signatures and detailed examples, see the [Function Reference](reference.md).
+For function signatures and more examples, see the [Function Reference](reference.md).
