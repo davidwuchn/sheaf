@@ -1,6 +1,6 @@
 module(
     name = "sheaf",
-    version = "2.2.0",
+    version = "2.3.0",
 )
 
 bazel_dep(name = "apple_support", version = "1.24.2")

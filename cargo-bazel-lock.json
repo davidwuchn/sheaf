@@ -1,5 +1,5 @@
 {
-  "checksum": "cc8ce40cced81f8c97927f92fa1dbf0449b5db9d799bdbc06959932798faee58",
+  "checksum": "581c8a13d98eccb657ac732298c917182cfddb2626b6976a2905590032929e72",
   "crates": {
     "accelerate-src 0.3.2": {
       "name": "accelerate-src",
@@ -2987,9 +2987,9 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
-    "sheaf-compiler 2.2.0": {
+    "sheaf-compiler 2.3.0": {
       "name": "sheaf-compiler",
-      "version": "2.2.0",
+      "version": "2.3.0",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -3084,7 +3084,7 @@
           "selects": {}
         },
         "edition": "2024",
-        "version": "2.2.0"
+        "version": "2.3.0"
       },
       "build_script_attrs": {
         "compile_data_glob": [
@@ -4531,7 +4531,7 @@
   },
   "binary_crates": [],
   "workspace_members": {
-    "sheaf-compiler 2.2.0": "sheaf"
+    "sheaf-compiler 2.3.0": "sheaf"
   },
   "conditions": {
     "aarch64-apple-darwin": [
