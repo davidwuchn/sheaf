@@ -800,6 +800,8 @@ impl JitCompiler {
         if name.starts_with("__vag_") {
             self.failed_vag.insert(name.to_string());
             self.last_vag_fail_reason = Some(reason.to_string());
+        } else {
+            self.last_compile_failure = Some(reason.to_string());
         }
         let display_name = if name.starts_with("__vag_") {
             "value-and-grad"

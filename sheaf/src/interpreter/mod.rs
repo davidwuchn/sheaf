@@ -560,7 +560,9 @@ let has_kwargs = matches!(name,
                         return Err(error);
                     }
                 };
-                if jit.try_jit_compile(&func_def, &pos_args, &env.registry, &shared_session).is_some() {
+                if let crate::runtime::jit::JitCompileOutcome::Compiled(_) =
+                    jit.try_jit_compile(&func_def, &pos_args, &env.registry, &shared_session)
+                {
                     recompiled = true;
                     if let Some(result) = iree_dispatch::try_iree_dispatch(&func_def, &pos_args, env) {
                         if let Some(ref mut p) = env.profiler { p.exit(); }

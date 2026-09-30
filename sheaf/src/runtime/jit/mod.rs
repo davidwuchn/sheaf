@@ -439,10 +439,11 @@ pub struct JitCompiler {
     iree_compile_path: Option<String>,
     target_backend: String,
     /// Definitions rejected independently of runtime argument shapes.
-    failed_definitions: HashSet<String>,
+    failed_definitions: HashMap<String, String>,
     failed_vag: HashSet<String>,
-    /// Variants that failed compilation.
-    failed_keys: HashSet<JitCacheKey>,
+    /// Variants that failed compilation, with the original diagnostic.
+    failed_keys: HashMap<JitCacheKey, String>,
+    last_compile_failure: Option<String>,
     last_vag_fail_reason: Option<String>,
     last_vag_error: Option<SheafError>,
     /// Cache compiled VAG sessions: vag_key -> (session_idx, signature, param_names)
@@ -639,9 +640,10 @@ impl JitCompiler {
         Self {
             iree_compile_path,
             target_backend,
-            failed_definitions: HashSet::new(),
+            failed_definitions: HashMap::new(),
             failed_vag: HashSet::new(),
-            failed_keys: HashSet::new(),
+            failed_keys: HashMap::new(),
+            last_compile_failure: None,
             last_vag_fail_reason: None,
             last_vag_error: None,
             vag_cache: HashMap::new(),
@@ -729,16 +731,28 @@ impl JitCompiler {
         registry: &HashMap<String, FunctionDef>,
     ) -> bool {
         let identity = function_definition_identity(func_def, registry);
-        if self.failed_definitions.contains(&identity) {
+        if self.failed_definitions.contains_key(&identity) {
             return false;
         }
         if let Err(reason) = jit_eligibility(&func_def.name, registry) {
-            self.failed_definitions.insert(identity);
+            self.failed_definitions.insert(identity, reason.clone());
             self.jit_fail(&func_def.name, &reason);
             return false;
         }
         true
     }
+}
+
+/// Outcome of a JIT attempt for an ordinary function.
+#[derive(Debug)]
+pub enum JitCompileOutcome {
+    Compiled(FunctionSignature),
+    /// The function is not eligible for JIT compilation.
+    Unsupported(String),
+    /// Compilation was attempted but failed.
+    Failed(String),
+    /// Another attempt is compiling this variant.
+    InProgress,
 }
 
 /// Why the JIT skipped a value-and-grad call.
@@ -761,8 +775,8 @@ mod vag;
 mod cache_key_tests {
     use super::{
         cache_key_for, cache_key_for_function, function_definition_identity,
-        module_growth_warning, runtime_args_match, CompiledModuleInfo, JitCompiler,
-        JitVagOutcome,
+        module_growth_warning, runtime_args_match, CompiledModuleInfo, JitCompileOutcome,
+        JitCompiler, JitVagOutcome,
     };
     use crate::core::ast::SheafValue;
     use crate::core::error::{SheafError, SourceLocation};
@@ -1059,9 +1073,10 @@ mod cache_key_tests {
         let compiler = JitCompiler {
             iree_compile_path: None,
             target_backend: "llvm-cpu".to_string(),
-            failed_definitions: HashSet::new(),
+            failed_definitions: HashMap::new(),
             failed_vag: HashSet::new(),
-            failed_keys: HashSet::new(),
+            failed_keys: HashMap::new(),
+            last_compile_failure: None,
             last_vag_fail_reason: Some("codegen failed".to_string()),
             last_vag_error: Some(SheafError::AutodiffMissingGradientOutput {
                 symbol: "p_0".to_string(),
@@ -1083,9 +1098,10 @@ mod cache_key_tests {
         let compiler = JitCompiler {
             iree_compile_path: None,
             target_backend: "llvm-cpu".to_string(),
-            failed_definitions: HashSet::new(),
+            failed_definitions: HashMap::new(),
             failed_vag: HashSet::new(),
-            failed_keys: HashSet::new(),
+            failed_keys: HashMap::new(),
+            last_compile_failure: None,
             last_vag_fail_reason: Some("codegen failed".to_string()),
             last_vag_error: Some(SheafError::AutodiffMissingRule {
                 operation: "unknown".to_string(),
@@ -1118,9 +1134,10 @@ mod cache_key_tests {
         let mut compiler = JitCompiler {
             iree_compile_path: None,
             target_backend: "llvm-cpu".to_string(),
-            failed_definitions: HashSet::new(),
+            failed_definitions: HashMap::new(),
             failed_vag: HashSet::new(),
-            failed_keys: HashSet::new(),
+            failed_keys: HashMap::new(),
+            last_compile_failure: None,
             last_vag_fail_reason: None,
             last_vag_error: None,
             vag_cache: HashMap::new(),
@@ -1129,9 +1146,12 @@ mod cache_key_tests {
         let identity = function_definition_identity(&recursive, &registry);
 
         assert!(!compiler.preflight_jit_eligibility(&recursive, &registry));
-        assert!(compiler.failed_definitions.contains(&identity));
         assert!(!compiler.preflight_jit_eligibility(&recursive, &registry));
         assert_eq!(compiler.failed_definitions.len(), 1);
+        assert_eq!(
+            compiler.failed_definitions.get(&identity).map(String::as_str),
+            Some("recursive call through 'recursive'")
+        );
     }
 
     #[test]
@@ -1165,9 +1185,46 @@ mod cache_key_tests {
     }
 
     #[test]
+    fn jit_outcome_preserves_cached_skip_and_failure_reasons() {
+        let session = crate::runtime::iree_session::shared_session().unwrap();
+        let mut compiler = JitCompiler::new();
+        compiler.iree_compile_path = Some("unused".to_string());
+        let recursive = function(
+            "recursive-outcome",
+            CompiledExpr::FunctionCall {
+                name: "recursive-outcome".into(),
+                args: vec![CompiledExpr::Symbol("x".into())],
+                loc: None,
+            },
+        );
+        let registry = HashMap::from([(recursive.name.clone(), recursive.clone())]);
+        let args = [tensor_f32(vec![2], 0.0)];
+        for _ in 0..2 {
+            assert!(matches!(
+                compiler.try_jit_compile(&recursive, &args, &registry, &session),
+                JitCompileOutcome::Unsupported(reason)
+                    if reason == "recursive call through 'recursive-outcome'"
+            ));
+        }
+
+        let ordinary = function("failed-outcome", body_no_shape_scalar());
+        let registry = HashMap::from([(ordinary.name.clone(), ordinary.clone())]);
+        let key = cache_key_for_function(&ordinary, &args, &registry).unwrap();
+        compiler.failed_keys.insert(key, "codegen: test failure".to_string());
+        assert!(matches!(
+            compiler.try_jit_compile(&ordinary, &args, &registry, &session),
+            JitCompileOutcome::Failed(reason) if reason == "codegen: test failure"
+        ));
+    }
+
+    #[test]
     fn variant_failure_does_not_blacklist_a_definition() {
         let mut compiler = JitCompiler::new();
         compiler.jit_fail("polymorphic", "shape-specific codegen failure");
+        assert_eq!(
+            compiler.last_compile_failure.as_deref(),
+            Some("shape-specific codegen failure")
+        );
         assert!(compiler.failed_definitions.is_empty());
         assert!(compiler.failed_keys.is_empty());
     }

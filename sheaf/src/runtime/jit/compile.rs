@@ -24,15 +24,17 @@ impl JitCompiler {
         args: &[Value],
         registry: &HashMap<String, FunctionDef>,
         shared_session: &std::sync::Arc<crate::runtime::iree_session::IreeSession>,
-    ) -> Option<FunctionSignature> {
+    ) -> JitCompileOutcome {
         let name = &func_def.name;
-        let iree_compile = self.iree_compile_path.clone()?;
-
         // Cache-key construction performs shape analysis with call inlining.
         // Establish eligibility first, including the negative definition cache.
         if !self.preflight_jit_eligibility(func_def, registry) {
-            return None;
+            let identity = function_definition_identity(func_def, registry);
+            return JitCompileOutcome::Unsupported(self.failed_definitions[&identity].clone());
         }
+        let Some(iree_compile) = self.iree_compile_path.clone() else {
+            return JitCompileOutcome::Failed("compiler toolchain unavailable".to_string());
+        };
 
         // The session's active driver is the source of truth for compilation.
         if let Some(backend) = crate::runtime::iree_session::IreeSession::cached_target_backend() {
@@ -40,23 +42,29 @@ impl JitCompiler {
         }
 
         // Success and failure caches use the same variant identity.
-        let cache_key = cache_key_for_eligible_function(func_def, args, registry)?;
-        if self.failed_definitions.contains(&cache_key.definition_hash) {
-            return None;
+        let Some(cache_key) = cache_key_for_eligible_function(func_def, args, registry) else {
+            return if func_def.body_compiled.is_none() {
+                JitCompileOutcome::Unsupported("no compiled function body".to_string())
+            } else {
+                JitCompileOutcome::Failed("cannot compute JIT cache key".to_string())
+            };
+        };
+        if let Some(reason) = self.failed_definitions.get(&cache_key.definition_hash) {
+            return JitCompileOutcome::Unsupported(reason.clone());
         }
 
         // (1) Success cache hit: the module is already loaded into the shared
         // session; return its signature without recompiling.
         if let Some(info) = self.module_for_key(&cache_key) {
             JIT_CATALOG_HITS.fetch_add(1, Ordering::Relaxed);
-            return Some(info.sig);
+            return JitCompileOutcome::Compiled(info.sig);
         }
         JIT_CATALOG_MISSES.fetch_add(1, Ordering::Relaxed);
 
         // (2) Failure cache hit: this exact (fn, shape) was tried before and
         // the compile failed. Don't retry.
-        if self.failed_keys.contains(&cache_key) {
-            return None;
+        if let Some(reason) = self.failed_keys.get(&cache_key) {
+            return JitCompileOutcome::Failed(reason.clone());
         }
 
         // Skip scalar-only functions (no benefit from IREE)
@@ -68,9 +76,9 @@ impl JitCompiler {
         });
         if !has_tensor {
             self.failed_definitions
-                .insert(cache_key.definition_hash.clone());
+                .insert(cache_key.definition_hash.clone(), "scalar-only args".to_string());
             self.jit_fail(name, "scalar-only args");
-            return None;
+            return JitCompileOutcome::Unsupported("scalar-only args".to_string());
         }
 
         let module_name = module_name_for(name, &cache_key);
@@ -85,8 +93,8 @@ impl JitCompiler {
                     "ERROR jit: module fingerprint collision for {} (refusing to load)",
                     module_name
                 );
-                self.failed_keys.insert(cache_key);
-                return None;
+                self.failed_keys.insert(cache_key, "module fingerprint collision".to_string());
+                return JitCompileOutcome::Failed("module fingerprint collision".to_string());
             }
 
         // Reserve the variant without holding the catalogue lock during compilation.
@@ -95,7 +103,7 @@ impl JitCompiler {
                 .lock()
                 .expect("JIT catalogue lock poisoned");
             if !catalogue.compiling.insert(cache_key.clone()) {
-                return None;
+                return JitCompileOutcome::InProgress;
             }
         }
         let mut reservation = CompilationReservation::new(cache_key.clone());
@@ -110,13 +118,15 @@ impl JitCompiler {
             target_backend: &backend,
             cache_key: &cache_key,
         };
+        self.last_compile_failure = None;
         let sig = match self.compile_function(request) {
             Some(x) => x,
             None => {
-                // Compile failed for this variant. The reservation guard removes
-                // the in-flight marker; other variants remain eligible.
-                self.failed_keys.insert(cache_key);
-                return None;
+                // The reservation guard removes the in-flight marker.
+                let reason = self.last_compile_failure.take()
+                    .unwrap_or_else(|| "JIT compilation returned no module".to_string());
+                self.failed_keys.insert(cache_key, reason.clone());
+                return JitCompileOutcome::Failed(reason);
             }
         };
         let info = CompiledModuleInfo {
@@ -173,7 +183,7 @@ impl JitCompiler {
             sheaf_msg!("{}", message);
         }
 
-        Some(sig)
+        JitCompileOutcome::Compiled(sig)
     }
 
     fn compile_function(
