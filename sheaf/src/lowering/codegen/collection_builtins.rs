@@ -95,17 +95,19 @@ impl<'a> CodeGenerator<'a> {
         args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType)> {
         let (_, operand_ty) = self.generate(&args[0])?;
-        let shape = operand_ty.shape();
-        if shape.is_empty() {
-            return Err(SheafError::Compile {
-                message: format!("{}: cannot get length of scalar", name),
-                location: crate::core::error::SourceLocation::unknown(),
-            });
-        }
-    let len = shape[0] as f64;
-    let reg = self.emitter.emit_constant_f32(len);
-    self.emitter.set_known_scalar(reg, len);
-    Ok((reg, StableHLOType::ScalarF32))
+        let len = match &operand_ty {
+            StableHLOType::Tuple(elems, _) => elems.len() as f64,
+            ty if !ty.shape().is_empty() => ty.shape()[0] as f64,
+            _ => {
+                return Err(SheafError::Compile {
+                    message: format!("{}: cannot get length of scalar", name),
+                    location: crate::core::error::SourceLocation::unknown(),
+                });
+            }
+        };
+        let reg = self.emitter.emit_constant_f32(len);
+        self.emitter.set_known_scalar(reg, len);
+        Ok((reg, StableHLOType::ScalarF32))
     }
 
     fn gen_first(
@@ -199,11 +201,28 @@ impl<'a> CodeGenerator<'a> {
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
         match &operand_ty {
             StableHLOType::Tuple(elements, _) => {
-                if let CompiledExpr::Integer(index) = &args[1] {
-                    let index = if *index < 0 {
-                        elements.len() as i64 + *index
+                let static_index = match &args[1] {
+                    CompiledExpr::Integer(index) => Some(*index),
+                    CompiledExpr::Symbol(_) => {
+                        let (reg, _) = self.generate(&args[1])?;
+                        if self.static_tuple_indices.contains(&reg) {
+                            self.emitter.known_scalar_value(&reg).and_then(|value| {
+                                let limit = elements.len() as f64;
+                                (value.is_finite() && value.fract() == 0.0
+                                    && value >= -limit && value < limit)
+                                    .then_some(value as i64)
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(index) = static_index {
+                    let index = if index < 0 {
+                        elements.len() as i64 + index
                     } else {
-                        *index
+                        index
                     };
                     let element_ty = elements.get(index as usize).ok_or_else(|| {
                         SheafError::Compile {
@@ -232,36 +251,42 @@ impl<'a> CodeGenerator<'a> {
                 }
                 let layout_key = self.layout_key_map.get(&operand_reg).cloned()
                     .or(sym_name.clone());
-                if let Some(ref start_key) = layout_key {
-                    let keywords: Vec<String> = args[1..].iter().filter_map(|a| match a {
-                        CompiledExpr::Keyword(k) | CompiledExpr::String(k) => Some(k.clone()),
-                        _ => None,
-                    }).collect();
-                    if keywords.len() == args.len() - 1 && !keywords.is_empty() {
-                        let mut cur_reg = operand_reg;
-                        let mut cur_ty = operand_ty.clone();
-                        let mut cur_key = start_key.clone();
-                        let mut ok = true;
-                        for key in &keywords {
-                            if let StableHLOType::Tuple(sub_types, _) = &cur_ty
-                                && let Some(layout) = self.tuple_key_layouts.get(&cur_key).cloned()
-                                && let Some(&idx) = layout.get(key)
+                let keywords: Vec<String> = args[1..].iter().filter_map(|a| match a {
+                    CompiledExpr::Keyword(k) | CompiledExpr::String(k) => Some(k.clone()),
+                    _ => None,
+                }).collect();
+                if keywords.len() == args.len() - 1 && !keywords.is_empty() {
+                    let mut cur_reg = operand_reg;
+                    let mut cur_ty = operand_ty.clone();
+                    let mut cur_key = layout_key;
+                    let mut ok = true;
+                    for key in &keywords {
+                        if let StableHLOType::Tuple(sub_types, type_keys) = &cur_ty {
+                            let index = match type_keys {
+                                Some(keys) => keys.iter().position(|k| k == key),
+                                None => cur_key.as_ref()
+                                    .and_then(|name| self.tuple_key_layouts.get(name))
+                                    .and_then(|layout| layout.get(key).copied()),
+                            };
+                            if let Some((idx, sub_ty)) = index
+                                .and_then(|idx| sub_types.get(idx).cloned().map(|ty| (idx, ty)))
                             {
-                                let sub_ty = sub_types[idx].clone();
                                 cur_reg = self.emitter.emit_get_tuple_element(
                                     &cur_reg, &cur_ty, idx, &sub_ty,
                                 );
                                 cur_ty = sub_ty;
-                                cur_key = key.clone();
+                                cur_key = Some(key.clone());
                                 continue;
                             }
-                            ok = false;
-                            break;
                         }
-                        if ok {
-                            self.layout_key_map.insert(cur_reg, cur_key);
-                            return Ok((cur_reg, cur_ty));
+                        ok = false;
+                        break;
+                    }
+                    if ok {
+                        if let Some(key) = cur_key {
+                            self.layout_key_map.insert(cur_reg, key);
                         }
+                        return Ok((cur_reg, cur_ty));
                     }
                 }
                 Err(SheafError::Compile {

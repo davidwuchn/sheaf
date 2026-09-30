@@ -283,6 +283,16 @@ impl<'a> CodeGenerator<'a> {
     ) -> SheafResult<(Register, StableHLOType)> {
         let coll_sym = if let CompiledExpr::Symbol(s) = coll { Some(s.clone()) } else { None };
         let (coll_reg, coll_ty) = self.generate(coll)?;
+        let range_start = match coll {
+            CompiledExpr::FunctionCall { name, args, .. }
+                if (name == "range" || name == "arange") && args.len() == 1 => Some(0),
+            CompiledExpr::FunctionCall { name, args, .. }
+                if (name == "range" || name == "arange") && args.len() == 2 =>
+            {
+                self.static_range_bound(&args[0])
+            }
+            _ => None,
+        };
         let (mut carry_reg, mut carry_ty) = self.generate(init)?;
 
         let lambda_resolved = match lambda {
@@ -395,6 +405,13 @@ impl<'a> CodeGenerator<'a> {
                     self.emitter.emit_index_axis0(&coll_reg, &coll_ty, i as i64)
                 }
             };
+            if matches!(&kind, ElemKind::PlainTensor)
+                && let Some(value) = range_start
+                    .and_then(|start| i64::try_from(i).ok()?.checked_add(start))
+            {
+                self.emitter.set_known_scalar(elem_reg, value as f64);
+                self.static_tuple_indices.insert(elem_reg);
+            }
 
             if let Some(ref layout) = elem_layout {
                 self.tuple_key_layouts.insert(elem_param.clone(), layout.clone());

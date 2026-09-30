@@ -51,6 +51,7 @@ pub struct CodeGenerator<'a> {
     tuple_key_layouts: HashMap<String, std::collections::BTreeMap<String, usize>>,
     idx_to_key: HashMap<(String, usize), String>,
     layout_key_map: HashMap<Register, String>,
+    static_tuple_indices: HashSet<Register>,
 }
 
 impl<'a> CodeGenerator<'a> {
@@ -64,6 +65,7 @@ impl<'a> CodeGenerator<'a> {
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
+            static_tuple_indices: HashSet::new(),
         }
     }
 
@@ -79,6 +81,7 @@ impl<'a> CodeGenerator<'a> {
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
+            static_tuple_indices: HashSet::new(),
         }
     }
 
@@ -105,6 +108,7 @@ impl<'a> CodeGenerator<'a> {
             tuple_key_layouts: HashMap::new(),
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
+            static_tuple_indices: HashSet::new(),
         }
     }
 

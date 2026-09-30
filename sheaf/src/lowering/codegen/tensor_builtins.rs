@@ -304,42 +304,50 @@ impl<'a> CodeGenerator<'a> {
         }
     }
 
+    pub(super) fn static_range_bound(&mut self, expr: &CompiledExpr) -> Option<i64> {
+        match expr {
+            CompiledExpr::Integer(n) => Some(*n),
+            CompiledExpr::FunctionCall { name, args, .. }
+                if (name == "len" || name == "count") && args.len() == 1 =>
+            {
+                let (_, ty) = self.generate(&args[0]).ok()?;
+                match ty {
+                    StableHLOType::Tuple(elems, _) => i64::try_from(elems.len()).ok(),
+                    other => other.shape().first().copied().filter(|n| *n >= 0),
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn gen_arange(&mut self, name: &str, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
         if args.len() == 1 {
-            if let CompiledExpr::Integer(n) = &args[0] {
-                let shape = vec![*n];
-                let (reg, ty) = self.emitter.emit_iota(&shape, 0);
-                Ok((reg, ty))
+            let n = self.static_range_bound(&args[0]).ok_or_else(|| SheafError::Compile {
+                message: format!("{} expects an integer argument", name),
+                location: crate::core::error::SourceLocation::unknown(),
+            })?;
+            let (reg, ty) = self.emitter.emit_iota(&[n], 0);
+            Ok((reg, ty))
+        } else {
+            let start = self.static_range_bound(&args[0]);
+            let end = self.static_range_bound(&args[1]);
+            if let (Some(start), Some(end)) = (start, end) {
+                let len = end.checked_sub(start).filter(|n| *n > 0).ok_or_else(|| SheafError::Compile {
+                    message: format!("range: end ({}) must be greater than start ({})", end, start),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })?;
+                let (iota_reg, iota_ty) = self.emitter.emit_iota(&[len], 0);
+                if start == 0 {
+                    return Ok((iota_reg, iota_ty));
+                }
+                let start_reg = self.emitter.emit_constant_f32(start as f64);
+                let start_ty = StableHLOType::scalar_f32();
+                Ok(self.emitter.emit_binop("add", &iota_reg, &start_reg, &iota_ty, &start_ty))
             } else {
                 Err(SheafError::Compile {
-                    message: format!("{} expects an integer argument", name),
-                    location: crate::core::error::SourceLocation::unknown(),
-                })
-            }
-        } else {
-            match (&args[0], &args[1]) {
-                (CompiledExpr::Integer(start), CompiledExpr::Integer(end)) => {
-                    let len = end - start;
-                    if len <= 0 {
-                        return Err(SheafError::Compile {
-                            message: format!("range: end ({}) must be greater than start ({})", end, start),
-                            location: crate::core::error::SourceLocation::unknown(),
-                        });
-                    }
-                    let shape = vec![len];
-                    let (iota_reg, iota_ty) = self.emitter.emit_iota(&shape, 0);
-                    if *start == 0 {
-                        return Ok((iota_reg, iota_ty));
-                    }
-                    let start_reg = self.emitter.emit_constant_f32(*start as f64);
-                    let start_ty = StableHLOType::scalar_f32();
-                    let (reg, ty) = self.emitter.emit_binop("add", &iota_reg, &start_reg, &iota_ty, &start_ty);
-                    Ok((reg, ty))
-                }
-                _ => Err(SheafError::Compile {
                     message: "range expects integer arguments".to_string(),
                     location: crate::core::error::SourceLocation::unknown(),
-                }),
+                })
             }
         }
     }

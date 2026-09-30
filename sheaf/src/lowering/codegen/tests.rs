@@ -98,6 +98,45 @@ fn string_dict_keys_are_preserved_and_sorted() {
 }
 
 #[test]
+fn typed_dict_keys_take_precedence_over_external_layouts() {
+    use std::collections::{BTreeMap, HashMap};
+
+    let registry = HashMap::new();
+    let ty = StableHLOType::Tuple(
+        vec![StableHLOType::scalar_f32()],
+        Some(vec!["w".to_string()]),
+    );
+    let mut codegen = CodeGenerator::with_function_params(
+        &registry,
+        &["block".to_string()],
+        std::slice::from_ref(&ty),
+    );
+    codegen.set_tuple_key_layouts(HashMap::from([(
+        "block".to_string(),
+        BTreeMap::from([("other".to_string(), 0)]),
+    )]));
+    let missing = CompiledExpr::FunctionCall {
+        name: "get".to_string(),
+        args: vec![
+            CompiledExpr::Symbol("block".to_string()),
+            CompiledExpr::Keyword("other".to_string()),
+        ],
+        loc: None,
+    };
+    assert!(codegen.generate(&missing).is_err());
+
+    let present = CompiledExpr::FunctionCall {
+        name: "get".to_string(),
+        args: vec![
+            CompiledExpr::Symbol("block".to_string()),
+            CompiledExpr::Keyword("w".to_string()),
+        ],
+        loc: None,
+    };
+    assert!(codegen.generate(&present).is_ok());
+}
+
+#[test]
 fn assoc_preserves_dict_keys() {
     use std::collections::{BTreeMap, HashMap};
 

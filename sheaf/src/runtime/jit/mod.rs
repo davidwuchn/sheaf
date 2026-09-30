@@ -1217,6 +1217,93 @@ mod cache_key_tests {
         ));
     }
 
+    fn compile_jit_case(source: &str, name: &str, args: &[Value]) -> JitCompileOutcome {
+        let mut compiler_context = crate::CompilerContext::new();
+        for form in crate::parse(source, "<jit-regression>").unwrap() {
+            compiler_context.compile(&form).unwrap();
+        }
+        let func = compiler_context.registry.get(name).unwrap();
+        assert!(func.body_compiled.is_some(), "{name} must have a compiled body");
+        let session = crate::runtime::iree_session::shared_session().unwrap();
+        JitCompiler::new().try_jit_compile(func, args, &compiler_context.registry, &session)
+    }
+
+    #[test]
+    fn reduce_over_dict_blocks_compiles_with_element_keys() {
+        let blocks = Value::List(vec![
+            Value::Dict(std::collections::BTreeMap::from([(
+                "w".to_string(), tensor_f32(vec![2], 1.0),
+            )])),
+            Value::Dict(std::collections::BTreeMap::from([(
+                "w".to_string(), tensor_f32(vec![2], 2.0),
+            )])),
+        ]);
+        let outcome = compile_jit_case(
+            "(defn regression-reduce-layout [blocks x] \
+               (reduce (fn [acc block] (+ acc (get block :w))) x blocks))",
+            "regression-reduce-layout",
+            &[blocks, tensor_f32(vec![2], 0.0)],
+        );
+        assert!(matches!(outcome, JitCompileOutcome::Compiled(_)), "{outcome:?}");
+    }
+
+    #[test]
+    fn range_of_collection_length_compiles() {
+        let outcome = compile_jit_case(
+            "(defn regression-range-len [xs] (range (len xs)))",
+            "regression-range-len",
+            &[tensor_f32(vec![3], 0.0)],
+        );
+        assert!(matches!(outcome, JitCompileOutcome::Compiled(_)), "{outcome:?}");
+
+        let blocks = Value::List(vec![Value::Dict(std::collections::BTreeMap::from([(
+            "w".to_string(), tensor_f32(vec![2], 1.0),
+        )]))]);
+        let outcome = compile_jit_case(
+            "(defn regression-range-blocks [blocks x] (range (len blocks)))",
+            "regression-range-blocks",
+            &[blocks, tensor_f32(vec![2], 0.0)],
+        );
+        assert!(matches!(outcome, JitCompileOutcome::Compiled(_)), "{outcome:?}");
+    }
+
+    #[test]
+    fn reduce_over_range_keeps_static_tuple_indices() {
+        let blocks = Value::List(vec![
+            Value::Dict(std::collections::BTreeMap::from([(
+                "w".to_string(), tensor_f32(vec![2], 1.0),
+            )])),
+            Value::Dict(std::collections::BTreeMap::from([(
+                "w".to_string(), tensor_f32(vec![2], 2.0),
+            )])),
+        ]);
+        let outcome = compile_jit_case(
+            "(defn regression-reduce-index [blocks x] \
+               (reduce (fn [acc i] (+ acc (get (get blocks i) :w))) \
+                 x (range (len blocks))))",
+            "regression-reduce-index",
+            &[blocks, tensor_f32(vec![2], 0.0)],
+        );
+        assert!(matches!(outcome, JitCompileOutcome::Compiled(_)), "{outcome:?}");
+    }
+
+    #[test]
+    fn runtime_scalar_does_not_become_a_static_tuple_index() {
+        let blocks = Value::List(vec![Value::Dict(std::collections::BTreeMap::from([(
+            "w".to_string(), tensor_f32(vec![2], 1.0),
+        )]))]);
+        let outcome = compile_jit_case(
+            "(defn regression-dynamic-index [blocks i x] (get blocks i))",
+            "regression-dynamic-index",
+            &[blocks, Value::Int(0), tensor_f32(vec![2], 0.0)],
+        );
+        assert!(matches!(
+            outcome,
+            JitCompileOutcome::Failed(reason)
+                if reason.contains("get on dict/tuple requires type info")
+        ));
+    }
+
     #[test]
     fn variant_failure_does_not_blacklist_a_definition() {
         let mut compiler = JitCompiler::new();
