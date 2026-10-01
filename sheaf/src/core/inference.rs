@@ -15,6 +15,7 @@ use crate::core::error::{SheafError, SheafResult};
 pub enum ValueLayout {
     Dict(Vec<(String, ValueLayout)>),
     List(Vec<ValueLayout>),
+    Tuple(Vec<ValueLayout>),
     Leaf,
 }
 
@@ -23,6 +24,8 @@ pub struct FunctionSignature {
     pub param_types: Vec<StableHLOType>,
     pub return_type: StableHLOType,
     pub return_dict_keys: Option<Vec<String>>,
+    #[serde(default)]
+    pub return_layout: Option<ValueLayout>,
     /// Layouts of structured arguments.
     pub arg_type_layouts: Vec<(StableHLOType, ValueLayout)>,
     #[serde(with = "captured_scalar_map")]
@@ -103,6 +106,14 @@ impl ValueLayout {
                     .collect();
                 Value::List(list)
             }
+            (ValueLayout::Tuple(items), Value::Tuple(elems)) if items.len() == elems.len() => {
+                let tuple = items
+                    .iter()
+                    .zip(elems)
+                    .map(|(sub_layout, elem)| sub_layout.reconstruct(elem))
+                    .collect();
+                Value::Tuple(tuple)
+            }
             (_, v) => v,
         }
     }
@@ -178,6 +189,7 @@ pub fn infer_function_signature_with_known(
         param_types,
         return_type,
         return_dict_keys,
+        return_layout: None,
         arg_type_layouts: vec![],
         captured_scalars: std::collections::HashMap::new(),
     })

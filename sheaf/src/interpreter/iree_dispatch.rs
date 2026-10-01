@@ -100,6 +100,11 @@ pub(super) fn try_iree_dispatch(
     } else {
         result
     };
+    let result = if let Some(layout) = &sig.return_layout {
+        layout.reconstruct(result)
+    } else {
+        result
+    };
     let result = match (&sig.return_dict_keys, result) {
         (Some(keys), Value::Tuple(elems)) if elems.len() == keys.len() => {
             let map = keys.iter().cloned().zip(elems).collect();
@@ -365,6 +370,7 @@ mod tests {
             param_types: vec![crate::StableHLOType::scalar_f32()],
             return_type: crate::StableHLOType::scalar_f32(),
             return_dict_keys: None,
+            return_layout: None,
             arg_type_layouts: Vec::new(),
             captured_scalars: std::collections::HashMap::new(),
         }

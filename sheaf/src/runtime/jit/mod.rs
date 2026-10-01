@@ -868,6 +868,7 @@ mod cache_key_tests {
                     .collect(),
                 return_type: crate::StableHLOType::scalar_f32(),
                 return_dict_keys: None,
+                return_layout: None,
                 arg_type_layouts: Vec::new(),
                 captured_scalars,
             },
@@ -1226,6 +1227,94 @@ mod cache_key_tests {
         assert!(func.body_compiled.is_some(), "{name} must have a compiled body");
         let session = crate::runtime::iree_session::shared_session().unwrap();
         JitCompiler::new().try_jit_compile(func, args, &compiler_context.registry, &session)
+    }
+
+    #[test]
+    fn append_to_list_compiles_and_returns_a_list() {
+        let outcome = compile_jit_case(
+            "(defn regression-append [x] (append [] x))",
+            "regression-append",
+            &[tensor_f32(vec![2], 1.0)],
+        );
+        assert!(matches!(outcome, JitCompileOutcome::Compiled(_)), "{outcome:?}");
+        let result = crate::interpreter::eval::eval_source(
+            "(defn regression-append [x] (append [] x)) \
+             (regression-append [1 2])",
+        ).unwrap();
+        let Value::List(items) = result else {
+            panic!("append must return a list, got {result:?}");
+        };
+        assert_eq!(items.len(), 1);
+        let value = items[0].ensure_host().unwrap();
+        assert!(matches!(&value, Value::Tensor { data, .. }
+            if data.iter().copied().collect::<Vec<_>>() == vec![1.0, 2.0]));
+    }
+
+    #[test]
+    fn append_to_list_parameter_preserves_the_result_layout() {
+        let items = Value::List(vec![tensor_f32(vec![2], 1.0)]);
+        let outcome = compile_jit_case(
+            "(defn regression-append-param [items x] (append items x))",
+            "regression-append-param",
+            &[items, tensor_f32(vec![2], 2.0)],
+        );
+        assert!(matches!(outcome, JitCompileOutcome::Compiled(_)), "{outcome:?}");
+        let result = crate::interpreter::eval::eval_source(
+            "(defn regression-append-param [items x] (append items x)) \
+             (regression-append-param [(tensor [1 1])] (tensor [2 2]))",
+        ).unwrap();
+        let Value::List(items) = result else {
+            panic!("append must return a list, got {result:?}");
+        };
+        assert_eq!(items.len(), 2);
+        for (item, expected) in items.iter().zip([1.0, 2.0]) {
+            let value = item.ensure_host().unwrap();
+            assert!(matches!(value, Value::Tensor { data, .. }
+                if data.iter().all(|&n| n == expected)));
+        }
+    }
+
+    #[test]
+    fn reduce_append_preserves_nested_lists() {
+        let source = "(defn regression-append-cache [x] \
+            (reduce (fn [cache i] (append cache [(+ x i) (* x i)])) \
+              [] (range 2)))";
+        let outcome = compile_jit_case(
+            source,
+            "regression-append-cache",
+            &[tensor_f32(vec![2], 1.0)],
+        );
+        assert!(matches!(outcome, JitCompileOutcome::Compiled(_)), "{outcome:?}");
+        let result = crate::interpreter::eval::eval_source(
+            &format!("{source} (regression-append-cache [1 1])"),
+        ).unwrap();
+        let Value::List(items) = result else {
+            panic!("reduce must return a list, got {result:?}");
+        };
+        assert_eq!(items.len(), 2);
+        for (index, item) in items.iter().enumerate() {
+            let Value::List(pair) = item else {
+                panic!("cache entry {index} must be a list, got {item:?}");
+            };
+            assert_eq!(pair.len(), 2);
+        }
+    }
+
+    #[test]
+    fn append_rejects_a_tuple_parameter() {
+        let outcome = compile_jit_case(
+            "(defn regression-append-tuple [items x] (append items x))",
+            "regression-append-tuple",
+            &[
+                Value::Tuple(vec![tensor_f32(vec![2], 0.0)]),
+                tensor_f32(vec![2], 1.0),
+            ],
+        );
+        assert!(matches!(
+            outcome,
+            JitCompileOutcome::Failed(reason)
+                if reason.contains("append: first argument must be a list")
+        ));
     }
 
     #[test]

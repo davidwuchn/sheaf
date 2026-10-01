@@ -25,11 +25,42 @@ impl<'a> CodeGenerator<'a> {
             "get" if args.len() >= 2 => Some(self.gen_get(args)),
             "get-in" if args.len() >= 2 => Some(self.gen_get_in()),
             "assoc" if args.len() >= 3 && args.len() % 2 == 1 => Some(self.gen_assoc(args)),
+            "append" if args.len() == 2 => Some(self.gen_append(args)),
             "top_k" if args.len() == 2 => Some(self.gen_top_k(args)),
             "int" if args.len() == 1 => Some(self.generate(&args[0])),
             "float" if args.len() == 1 => Some(self.generate(&args[0])),
             _ => None,
         }
+    }
+
+    fn gen_append(
+        &mut self,
+        args: &[CompiledExpr],
+    ) -> SheafResult<(Register, StableHLOType)> {
+        let (list_reg, list_ty) = self.generate(&args[0])?;
+        if !self.list_regs.contains(&list_reg) {
+            return Err(SheafError::Compile {
+                message: "append: first argument must be a list".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            });
+        }
+        let StableHLOType::Tuple(elems, None) = &list_ty else {
+            return Err(SheafError::Compile {
+                message: "append: first argument must be a list".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            });
+        };
+        let mut regs = Vec::with_capacity(elems.len() + 1);
+        let mut types = elems.clone();
+        for (index, ty) in elems.iter().enumerate() {
+            regs.push(self.emitter.emit_get_tuple_element(&list_reg, &list_ty, index, ty));
+        }
+        let (value_reg, value_ty) = self.generate(&args[1])?;
+        regs.push(value_reg);
+        types.push(value_ty);
+        let result = self.emitter.emit_tuple(&regs, &types);
+        self.list_regs.insert(result.0);
+        Ok(result)
     }
 
     fn gen_shape(

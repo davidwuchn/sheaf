@@ -95,6 +95,10 @@ impl StableHLOEmitter {
     }
 
     /// Flattens a virtual tuple into its leaf registers.
+    pub fn virtual_tuple_elements(&self, reg: &Register) -> Option<&[(Register, StableHLOType)]> {
+        self.virtual_tuples.get(reg).map(Vec::as_slice)
+    }
+
     pub fn collect_virtual_leaves(&self, reg: Register, ty: &StableHLOType) -> Vec<(Register, StableHLOType)> {
         if let Some(constituents) = self.virtual_tuples.get(&reg) {
             constituents.iter()

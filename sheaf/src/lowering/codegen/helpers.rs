@@ -99,7 +99,7 @@ pub(crate) fn expand_tuple_to_symbols(expr: &CompiledExpr, param_name: &str) -> 
 
 pub fn try_flatten_to_constant(elements: &[CompiledExpr]) -> Option<(Vec<f64>, Vec<i64>)> {
     if elements.is_empty() {
-        return Some((vec![], vec![0]));
+        return None;
     }
 
     match &elements[0] {

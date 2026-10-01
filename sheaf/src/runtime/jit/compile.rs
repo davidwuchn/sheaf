@@ -384,7 +384,11 @@ impl JitCompiler {
             codegen.set_tuple_key_layouts(metadata.tuple_key_layouts);
             codegen.set_idx_to_key(metadata.idx_to_key);
             codegen.set_scalar_param_values(&metadata.scalar_param_values);
-            codegen.emit_func_declaration(
+            let layouts = args.iter()
+                .map(crate::core::inference::ValueLayout::from_value)
+                .collect::<Vec<_>>();
+            codegen.set_parameter_value_layouts(&func_def.params, &layouts);
+            codegen.emit_func_declaration_with_layout(
                 &func_def.name,
                 &body,
                 &signature.param_types,
@@ -392,7 +396,7 @@ impl JitCompiler {
             )
         }));
 
-        let (declaration, actual_return_ty) = match codegen_result {
+        let (declaration, actual_return_ty, return_layout) = match codegen_result {
             Ok(Ok(result)) => result,
             Ok(Err(e)) => {
                 self.jit_fail(&func_def.name, &format!("codegen: {}", e));
@@ -404,6 +408,7 @@ impl JitCompiler {
             }
         };
         signature.return_type = actual_return_ty;
+        signature.return_layout = return_layout;
 
         if crate::core::config::verbosity() >= 2 {
             sheaf_msg!(

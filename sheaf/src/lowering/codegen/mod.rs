@@ -16,6 +16,7 @@ mod tests;
 
 use crate::lowering::stablehlo::{Register, StableHLOEmitter, StableHLOType};
 use crate::core::expr::{BindingPattern, CompiledExpr};
+use crate::core::inference::ValueLayout;
 use crate::core::error::{SheafError, SheafResult};
 pub(crate) use helpers::{
     try_flatten_to_constant, TupleLeaf, collect_tuple_references, collect_tuple_type_leaves,
@@ -52,6 +53,7 @@ pub struct CodeGenerator<'a> {
     idx_to_key: HashMap<(String, usize), String>,
     layout_key_map: HashMap<Register, String>,
     static_tuple_indices: HashSet<Register>,
+    list_regs: HashSet<Register>,
 }
 
 impl<'a> CodeGenerator<'a> {
@@ -66,6 +68,7 @@ impl<'a> CodeGenerator<'a> {
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
             static_tuple_indices: HashSet::new(),
+            list_regs: HashSet::new(),
         }
     }
 
@@ -82,6 +85,7 @@ impl<'a> CodeGenerator<'a> {
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
             static_tuple_indices: HashSet::new(),
+            list_regs: HashSet::new(),
         }
     }
 
@@ -109,6 +113,7 @@ impl<'a> CodeGenerator<'a> {
             idx_to_key: HashMap::new(),
             layout_key_map: HashMap::new(),
             static_tuple_indices: HashSet::new(),
+            list_regs: HashSet::new(),
         }
     }
 
@@ -121,6 +126,30 @@ impl<'a> CodeGenerator<'a> {
 
     pub fn set_idx_to_key(&mut self, map: HashMap<(String, usize), String>) {
         self.idx_to_key = map;
+    }
+
+    fn mark_list_layout(&mut self, reg: Register, layout: &ValueLayout) {
+        if let ValueLayout::List(_) = layout {
+            self.list_regs.insert(reg);
+        }
+        let children = match layout {
+            ValueLayout::Dict(entries) => entries.iter().map(|(_, layout)| layout).collect::<Vec<_>>(),
+            ValueLayout::List(items) | ValueLayout::Tuple(items) => items.iter().collect(),
+            ValueLayout::Leaf => return,
+        };
+        let Some(regs) = self.emitter.virtual_tuple_elements(&reg) else { return };
+        let regs: Vec<_> = regs.iter().map(|(reg, _)| *reg).collect();
+        for (child, layout) in regs.into_iter().zip(children) {
+            self.mark_list_layout(child, layout);
+        }
+    }
+
+    pub fn set_parameter_value_layouts(&mut self, names: &[String], layouts: &[ValueLayout]) {
+        for (name, layout) in names.iter().zip(layouts) {
+            if let Some(&(reg, _)) = self.bindings.get(name) {
+                self.mark_list_layout(reg, layout);
+            }
+        }
     }
 
     pub fn set_scalar_param_values(&mut self, values: &[(String, f64)]) {
@@ -285,7 +314,9 @@ impl<'a> CodeGenerator<'a> {
                             regs.push(reg);
                             tys.push(ty);
                         }
-                        Ok(self.emitter.emit_tuple(&regs, &tys))
+                        let result = self.emitter.emit_tuple(&regs, &tys);
+                        self.list_regs.insert(result.0);
+                        Ok(result)
                     }
                 }
             }
@@ -298,7 +329,9 @@ impl<'a> CodeGenerator<'a> {
                     regs.push(reg);
                     tys.push(ty);
                 }
-                Ok(self.emitter.emit_tuple(&regs, &tys))
+                let result = self.emitter.emit_tuple(&regs, &tys);
+                self.list_regs.insert(result.0);
+                Ok(result)
             }
 
             CompiledExpr::Symbol(name) => {
@@ -601,14 +634,49 @@ impl<'a> CodeGenerator<'a> {
         Ok(self.emitter.emit_function_body(name, &result_ty))
     }
 
+    fn result_layout(&self, reg: Register, ty: &StableHLOType) -> Option<ValueLayout> {
+        let StableHLOType::Tuple(types, keys) = ty else { return None };
+        let elements = self.emitter.virtual_tuple_elements(&reg)?;
+        if elements.len() != types.len() {
+            return None;
+        }
+        let layouts: Vec<_> = elements.iter()
+            .zip(types)
+            .map(|((child, _), ty)| self.result_layout(*child, ty))
+            .collect();
+        if !self.list_regs.contains(&reg) && layouts.iter().all(Option::is_none) {
+            return None;
+        }
+        let layouts: Vec<_> = layouts.into_iter()
+            .map(|layout| layout.unwrap_or(ValueLayout::Leaf))
+            .collect();
+        match keys {
+            Some(keys) => Some(ValueLayout::Dict(keys.iter().cloned().zip(layouts).collect())),
+            None if self.list_regs.contains(&reg) => Some(ValueLayout::List(layouts)),
+            None => Some(ValueLayout::Tuple(layouts)),
+        }
+    }
+
     pub fn emit_func_declaration(
+        self,
+        name: &str,
+        expr: &CompiledExpr,
+        param_types: &[StableHLOType],
+        return_type: &StableHLOType,
+    ) -> SheafResult<(String, StableHLOType)> {
+        self.emit_func_declaration_with_layout(name, expr, param_types, return_type)
+            .map(|(decl, ty, _)| (decl, ty))
+    }
+
+    pub fn emit_func_declaration_with_layout(
         mut self,
         name: &str,
         expr: &CompiledExpr,
         param_types: &[StableHLOType],
         _return_type: &StableHLOType,
-    ) -> SheafResult<(String, StableHLOType)> {
+    ) -> SheafResult<(String, StableHLOType, Option<ValueLayout>)> {
         let (result_reg, result_ty) = self.generate(expr)?;
+        let result_layout = self.result_layout(result_reg, &result_ty);
         let flat_params = flatten_param_types(param_types);
         let leaves = self.emitter.collect_virtual_leaves(result_reg, &result_ty);
         let (leaf_regs, leaf_tys): (Vec<_>, Vec<_>) = leaves.into_iter().unzip();
@@ -618,13 +686,13 @@ impl<'a> CodeGenerator<'a> {
         let body = self.emitter.body.clone();
             let decl = self.emitter
                 .emit_func_declaration(name, &flat_params, &leaf_tys[0], &body);
-            Ok((decl, result_ty))
+            Ok((decl, result_ty, result_layout))
     } else {
         self.emitter.emit_return_multi(&leaf_regs, &leaf_tys);
         let body = self.emitter.body.clone();
             let decl = self.emitter
                 .emit_func_declaration_multi(name, &flat_params, &leaf_tys, &body);
-            Ok((decl, result_ty))
+            Ok((decl, result_ty, result_layout))
         }
     }
 
