@@ -17,6 +17,10 @@ on:
 permissions:
   contents: write   # publish-nightly creates/updates the `nightly` tag+release
 
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
 jobs:
   preflight:
     runs-on: ubuntu-22.04
@@ -84,10 +88,27 @@ jobs:
       - name: List artifacts
         run: ls -la sheaf-*.tar.gz
 
-      - name: Create / overwrite rolling `nightly` prerelease
+      - name: Update nightly tag and remove previous release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NIGHTLY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git tag --force nightly "$NIGHTLY_SHA"
+          git push --force origin refs/tags/nightly
+
+          RELEASE_ID=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq '.[] | select(.tag_name == "nightly") | .id')
+          if [[ -n "$RELEASE_ID" ]]; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
+          fi
+
+      - name: Recreate rolling `nightly` prerelease
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly
+          target_commitish: ${{ github.sha }}
+          make_latest: "false"
           name: Nightly build
           body: |
             Nightly builds have not gone through release validation, and performance may differ from release builds.
