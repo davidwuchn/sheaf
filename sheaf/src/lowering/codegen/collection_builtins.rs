@@ -337,7 +337,18 @@ impl<'a> CodeGenerator<'a> {
                         } else {
                             *idx
                         };
+                        let known_value = if operand_ty.shape().len() == 1 {
+                            usize::try_from(actual_idx).ok().and_then(|index| {
+                                self.emitter.known_tensor_values(&operand_reg)
+                                    .and_then(|values| values.get(index).copied())
+                            })
+                        } else {
+                            None
+                        };
                         let (reg, ty) = self.emitter.emit_index_axis0(&operand_reg, &operand_ty, actual_idx);
+                        if let Some(value) = known_value {
+                            self.emitter.set_known_scalar(reg, value);
+                        }
                         Ok((reg, ty))
                     }
                     CompiledExpr::Symbol(s) if s == "..." => {

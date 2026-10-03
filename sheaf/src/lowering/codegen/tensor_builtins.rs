@@ -53,8 +53,11 @@ impl<'a> CodeGenerator<'a> {
     }
 
     fn gen_zeros(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
-        if let CompiledExpr::Vector(shape_elems) = &args[0] {
-            let shape = self.parse_shape_vec(shape_elems)?;
+        if matches!(&args[0], CompiledExpr::Vector(_) | CompiledExpr::Quoted(_)) {
+            let shape = match &args[0] {
+                CompiledExpr::Vector(elems) => self.parse_shape_vec(elems)?,
+                quoted => self.parse_static_shape_arg(quoted, "zeros")?,
+            };
             let (reg, ty) = self.emitter.emit_zeros(&shape);
             Ok((reg, ty))
         } else {
@@ -66,8 +69,11 @@ impl<'a> CodeGenerator<'a> {
     }
 
     fn gen_ones(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
-        if let CompiledExpr::Vector(shape_elems) = &args[0] {
-            let shape = self.parse_shape_vec(shape_elems)?;
+        if matches!(&args[0], CompiledExpr::Vector(_) | CompiledExpr::Quoted(_)) {
+            let shape = match &args[0] {
+                CompiledExpr::Vector(elems) => self.parse_shape_vec(elems)?,
+                quoted => self.parse_static_shape_arg(quoted, "ones")?,
+            };
             let (reg, ty) = self.emitter.emit_ones(&shape);
             Ok((reg, ty))
         } else {
