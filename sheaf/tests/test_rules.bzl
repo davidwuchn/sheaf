@@ -55,14 +55,17 @@ def sheaf_program_test(name, expression, data = [], device = "cpu", **kwargs):
         **kwargs
     )
 
-def sheaf_integration_test(name, data = []):
+def sheaf_integration_test(name, data = [], env = None):
+    test_env = {"RUST_TEST_THREADS": "1"}
+    if env:
+        test_env.update(env)
     rust_test(
         name = name,
         srcs = [name + ".rs"],
         aliases = aliases(package_name = _CARGO_PACKAGE),
         data = data,
         edition = crate_edition(package_name = _CARGO_PACKAGE),
-        env = {"RUST_TEST_THREADS": "1"},
+        env = test_env,
         rustc_env = {
             "CARGO_MANIFEST_DIR": "sheaf",
         },
