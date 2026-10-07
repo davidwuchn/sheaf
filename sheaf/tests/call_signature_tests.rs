@@ -266,6 +266,46 @@ fn invalid_call_signatures() {
 }
 
 #[test]
+fn invalid_allocation_arguments() {
+    let cases = [
+        ("fractional-shape", "(zeros '[2.5])", "dimension"),
+        ("negative-shape", "(zeros '[-1])", "dimension"),
+        ("shape-overflow", "(ones '[9223372036854775807 2])", "memory"),
+        ("shape-byte-overflow", "(ones '[2305843009213693952])", "memory"),
+        ("empty-shape-overflow", "(zeros '[0 2305843009213693951 2])", "memory"),
+        ("fractional-tensor-shape", "(zeros [2.5])", "dimension"),
+        ("negative-tensor-shape", "(zeros [-1])", "dimension"),
+        ("nonfinite-shape", "(zeros [(exp 1000)])", "dimension"),
+        ("shape-rank", "(zeros [[2 3]])", "numeric vector"),
+        ("boolean-shape", "(let [dims [1 0] :bool] (zeros dims))", "numeric vector"),
+        ("normal-negative-shape", "(random-normal (random-key 1) '[-1])", "dimension"),
+        ("uniform-fractional-shape", "(random-uniform (random-key 1) '[2.5])", "dimension"),
+        ("randint-shape-overflow", "(random-randint (random-key 1) '[9223372036854775807 2] 0 10)", "memory"),
+        ("normal-invalid-key", "(random-normal \"bad\" '[2])", "PRNG key"),
+        ("uniform-short-key", "(random-uniform [1] '[2])", "PRNG key"),
+        ("randint-key-rank", "(random-randint [[1 2]] '[2] 0 10)", "PRNG key"),
+        ("split-fractional-key", "(random-split [1.5 2.0])", "PRNG key"),
+        ("split-short-list-key", "(random-split '[1])", "PRNG key"),
+        ("choice-invalid-key", "(choice \"bad\" 3)", "PRNG key"),
+        ("split-negative-count", "(random-split (random-key 1) -1)", "nonnegative"),
+        ("split-fractional-count", "(random-split (random-key 1) 2.5)", "integer"),
+        ("split-overflow", "(random-split (random-key 1) 9223372036854775807)", "memory"),
+    ];
+    let mut errors = Vec::new();
+    for (name, source, diagnostic) in cases {
+        let observed = match interpreter_only().eval(source) {
+            Ok(value) => Err(Failure::new(
+                FailureKind::InvalidCallAccepted, format!("returned {value:?}"),
+            )),
+            Err(error) if error.to_string().contains(diagnostic) => Ok(()),
+            Err(error) => Err(Failure::new(FailureKind::WrongDiagnostic, error.to_string())),
+        };
+        record(&mut errors, name, "allocation validation", Expectation::Pass, observed);
+    }
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+}
+
+#[test]
 fn valid_call_signatures() {
     let cases = [
         ("keyword-as-data", "(get {:axis 3} :axis)", "3", Expectation::Pass),
@@ -306,6 +346,12 @@ fn valid_call_signatures() {
         ("or-short-circuit", "(or true (zeros))", "true", Expectation::Pass),
         ("split-default", "(len (random-split (random-key 42)))", "2", Expectation::Pass),
         ("eye-default", "(eye 2)", "[[1.0 0.0] [0.0 1.0]]", Expectation::Pass),
+        ("scalar-shape", "(zeros '[])", "0.0", Expectation::Pass),
+        ("empty-shape", "(shape (zeros '[2 0]))", "[2.0 0.0]", Expectation::Pass),
+        ("integral-float-shape", "(zeros '[2.0])", "[0.0 0.0]", Expectation::Pass),
+        ("split-zero", "(len (random-split (random-key 1) 0))", "0", Expectation::Pass),
+        ("split-integral-scalar", "(len (random-split (random-key 1) 3.0))", "3", Expectation::Pass),
+        ("integer-key", "(random-uniform 42 '[2])", "(random-uniform '[42 0] '[2])", Expectation::Pass),
         (
             "first-class-random-normal",
             "(apply random-normal [(random-key 42) '[2]])",

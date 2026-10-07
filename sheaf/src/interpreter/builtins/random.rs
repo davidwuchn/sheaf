@@ -27,20 +27,21 @@ fn builtin_random_key(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     Ok(seed_to_key(seed))
 }
 
-fn key_to_seed(key: &Value) -> u64 {
-    match key {
-        Value::Tensor { data, .. } if data.len() >= 2 => {
+fn key_to_seed(key: &Value) -> Result<u64, crate::core::error::SheafError> {
+    let key = key.ensure_host()?;
+    match &key {
+        Value::Tensor { data, dtype } if data.shape() == [2] && *dtype != Dtype::Bool
+            && data.iter().all(|&word| word.is_finite() && word.fract() == 0.0) => {
             let lo = data[IxDyn(&[0])] as u64;
             let hi = data[IxDyn(&[1])] as u64;
-            lo | (hi << 32)
+            Ok(lo | (hi << 32))
         }
-        Value::List(items) => {
-            let lo = items.first().and_then(|v| if let Value::Int(n) = v { Some(*n as u64) } else { None }).unwrap_or(0);
-            let hi = items.get(1).and_then(|v| if let Value::Int(n) = v { Some(*n as u64) } else { None }).unwrap_or(0);
-            lo | (hi << 32)
-        }
-        Value::Int(n) => *n as u64,
-        _ => 42,
+        Value::List(items) => match items.as_slice() {
+            [Value::Int(lo), Value::Int(hi)] => Ok(*lo as u64 | ((*hi as u64) << 32)),
+            _ => Err(runtime_error("expected a PRNG key with two integer words")),
+        },
+        Value::Int(n) => Ok(*n as u64),
+        _ => Err(runtime_error(format!("expected a PRNG key, got {}", key.type_name()))),
     }
 }
 
@@ -48,16 +49,24 @@ fn builtin_random_split(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.is_empty() || args.len() > 2 {
         return Err(runtime_error("random-split: expected (random-split key) or (random-split key n)"));
     }
-    let seed = key_to_seed(&args[0]);
+    let seed = key_to_seed(&args[0])?;
     let n = if args.len() == 2 {
         match &args[1] {
-            Value::Int(n) => *n as usize,
+            Value::Int(n) => usize::try_from(*n)
+                .map_err(|_| runtime_error("random-split: count must be nonnegative"))?,
+            Value::Float(n) => checked_dimension(*n as f64)
+                .map_err(|error| runtime_error(format!("random-split: count: {error}")))?,
             _ => return Err(runtime_error("random-split: n must be an integer")),
         }
     } else {
         2
     };
-    let mut keys = Vec::with_capacity(n);
+    if n > isize::MAX as usize / std::mem::size_of::<Value>() {
+        return Err(runtime_error("random-split: count exceeds addressable memory"));
+    }
+    let mut keys = Vec::new();
+    keys.try_reserve_exact(n)
+        .map_err(|_| runtime_error("random-split: cannot allocate keys"))?;
     for i in 0..n {
         let child_seed = seed.wrapping_add(i as u64).wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         keys.push(seed_to_key(child_seed));
@@ -78,8 +87,8 @@ fn builtin_random_normal(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 2 {
         return Err(runtime_error("random-normal: expected (random-normal key shape)"));
     }
-    let mut state = key_to_seed(&args[0]);
-    let shape = parse_shape(&args[1])?;
+    let mut state = key_to_seed(&args[0])?;
+    let shape = shape_from_value(&args[1])?;
     let n: usize = shape.iter().product();
     let mut data = Vec::with_capacity(n);
     let mut i = 0;
@@ -102,8 +111,8 @@ fn builtin_random_uniform(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 2 {
         return Err(runtime_error("random-uniform: expected (random-uniform key shape)"));
     }
-    let mut state = key_to_seed(&args[0]);
-    let shape = parse_shape(&args[1])?;
+    let mut state = key_to_seed(&args[0])?;
+    let shape = shape_from_value(&args[1])?;
     let n: usize = shape.iter().product();
     let data: Vec<f32> = (0..n).map(|_| splitmix64(&mut state)).collect();
     let arr = ArrayD::from_shape_vec(IxDyn(&shape), data)
@@ -115,8 +124,8 @@ fn builtin_random_randint(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     if args.len() != 4 {
         return Err(runtime_error("random-randint: expected (random-randint key shape low high)"));
     }
-    let mut state = key_to_seed(&args[0]);
-    let shape = parse_shape(&args[1])?;
+    let mut state = key_to_seed(&args[0])?;
+    let shape = shape_from_value(&args[1])?;
     let low = match &args[2] {
         Value::Int(n) => *n,
         Value::Float(f) => *f as i64,
@@ -144,27 +153,11 @@ fn builtin_random_randint(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     Ok(Value::tensor_i32(arr))
 }
 
-fn parse_shape(val: &Value) -> Result<Vec<usize>, crate::core::error::SheafError> {
-    match val {
-        Value::List(items) => items.iter().map(|v| match v {
-            Value::Int(n) => Ok(*n as usize),
-            Value::Float(f) => Ok(*f as usize),
-            Value::String(s) if s.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) => Err(runtime_error(format!(
-                "Invalid shape: expected integer, got symbol '{}'.\n  = hint: Variables inside quotes are never evaluated. Use [{}] (unquoted) or extract from tensor with (shape t).",
-                s, s
-            ))),
-            v => Err(runtime_error(format!("Invalid shape: expected integer, got {}", v.type_name()))),
-        }).collect(),
-        Value::Tensor { data, .. } => data.iter().map(|&x| Ok(x as usize)).collect(),
-        v => Err(runtime_error(format!("Invalid shape: expected list or tensor, got {}", v.type_name()))),
-    }
-}
-
 fn builtin_choice(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if args.len() < 2 {
         return Err(runtime_error("choice: expected (choice key n :p probs)"));
     }
-    let seed = key_to_seed(&args[0]);
+    let seed = key_to_seed(&args[0])?;
     let n = match &args[1] {
         Value::Int(n) => *n as usize,
         Value::Float(f) => *f as usize,
