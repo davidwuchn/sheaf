@@ -383,6 +383,38 @@ fn invalid_save_does_not_write_files() {
 }
 
 #[test]
+fn invalid_tensor_index_and_axis_arguments() {
+    let cases = [
+        ("first-scalar", "(first (reshape [1.0] '[]))", "with an axis"),
+        ("second-scalar", "(second (reshape [1.0] '[]))", "with an axis"),
+        ("last-scalar", "(last (reshape [1.0] '[]))", "with an axis"),
+        ("nth-scalar", "(nth (reshape [1.0] '[]) 0)", "with an axis"),
+        ("first-empty", "(first (zeros '[0 2]))", "empty tensor"),
+        ("second-short", "(second [1.0])", "too short"),
+        ("last-empty", "(last (zeros '[0]))", "empty tensor"),
+        ("nth-empty", "(nth (zeros '[0]) 0)", "out of bounds"),
+        ("concat-positive-axis", "(concat [1.0] [2.0] :axis 1)", "out of bounds"),
+        ("concat-negative-axis", "(concat [1.0] [2.0] :axis -2)", "out of bounds"),
+        ("concat-scalar", "(concat (reshape [1.0] '[]) (reshape [2.0] '[]))", "out of bounds"),
+        ("flip-positional-axis", "(flip [1.0 2.0] 1)", "out of bounds"),
+        ("flip-negative-axis", "(flip [1.0 2.0] -2)", "out of bounds"),
+        ("flip-scalar-axis", "(flip (reshape [1.0] '[]) 0)", "0-dimensional"),
+    ];
+    let mut errors = Vec::new();
+    for (name, source, diagnostic) in cases {
+        let observed = match interpreter_only().eval(source) {
+            Ok(value) => Err(Failure::new(
+                FailureKind::InvalidCallAccepted, format!("returned {value:?}"),
+            )),
+            Err(error) if error.to_string().contains(diagnostic) => Ok(()),
+            Err(error) => Err(Failure::new(FailureKind::WrongDiagnostic, error.to_string())),
+        };
+        record(&mut errors, name, "tensor validation", Expectation::Pass, observed);
+    }
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+}
+
+#[test]
 fn valid_call_signatures() {
     let cases = [
         ("keyword-as-data", "(get {:axis 3} :axis)", "3", Expectation::Pass),
@@ -423,6 +455,17 @@ fn valid_call_signatures() {
         ("or-short-circuit", "(or true (zeros))", "true", Expectation::Pass),
         ("split-default", "(len (random-split (random-key 42)))", "2", Expectation::Pass),
         ("eye-default", "(eye 2)", "[[1.0 0.0] [0.0 1.0]]", Expectation::Pass),
+        ("first-vector", "(first [1.0 2.0])", "1.0", Expectation::Pass),
+        ("second-vector", "(second [1.0 2.0])", "2.0", Expectation::Pass),
+        ("last-vector", "(last [1.0 2.0])", "2.0", Expectation::Pass),
+        ("nth-negative-index", "(nth [1.0 2.0] -1)", "2.0", Expectation::Pass),
+        ("first-f16-row", "(let [x [[1.0 2.0] [3.0 4.0]] :f16] (first x))", "(let [x [1.0 2.0] :f16] x)", Expectation::Pass),
+        ("concat-lists", "(concat '[1 2] '[3 4])", "'[1 2 3 4]", Expectation::Pass),
+        ("concat-list-axis", "(concat '[1 2] '[3 4] :axis 0)", "(cast (tensor '[1.0 2.0 3.0 4.0]) :i32)", Expectation::Pass),
+        ("concat-negative-axis", "(concat [[1.0 2.0]] [[3.0 4.0]] :axis -1)", "[[1.0 2.0 3.0 4.0]]", Expectation::Pass),
+        ("concat-f16", "(let [x [1.0] :f16 y [2.0] :f16] (concat x y :axis -1))", "(let [x [1.0 2.0] :f16] x)", Expectation::Pass),
+        ("flip-positional-axis", "(flip [[1.0 2.0] [3.0 4.0]] 1)", "[[2.0 1.0] [4.0 3.0]]", Expectation::Pass),
+        ("flip-named-axis", "(flip [[1.0 2.0] [3.0 4.0]] :axis 1)", "[[2.0 1.0] [4.0 3.0]]", Expectation::Pass),
         ("upper", "(str-call \"upper\" \"abc\")", "\"ABC\"", Expectation::Pass),
         ("string-coercion", "(str-call \"upper\" 42)", "\"42\"", Expectation::Pass),
         ("replace", "(str-call \"replace\" \"abc\" \"b\" \"x\")", "\"axc\"", Expectation::Pass),
@@ -644,6 +687,33 @@ impl CompiledCall {
 }
 
 #[test]
+fn indexing_device_tensors() {
+    initialize_device();
+    let mut interpreter = interpreter_only();
+    interpreter.eval("(defn signature_index_input [x] x)").unwrap();
+    let input = interpreter.eval("[1.0 2.0]").unwrap();
+    let device = compile_call(&interpreter, "signature_index_input", std::slice::from_ref(&input))
+        .expect("compile identity").execute(&[input]).expect("execute identity");
+    assert!(matches!(device, Value::DeviceBuffer(_)), "expected a device tensor");
+    interpreter.env_mut().set_global("signature_device_input", device);
+    for (name, index, expected) in [
+        ("first", None, "1.0"),
+        ("second", None, "2.0"),
+        ("last", None, "2.0"),
+        ("nth", Some(-1), "2.0"),
+    ] {
+        let mut args = vec![CompiledExpr::Symbol("signature_device_input".to_string())];
+        if let Some(index) = index {
+            args.push(CompiledExpr::Integer(index));
+        }
+        let call = CompiledExpr::FunctionCall { name: name.to_string(), args, loc: None };
+        let actual = sheaf_compiler::interpreter::eval(&call, interpreter.env_mut()).unwrap();
+        let expected = interpreter.eval(expected).unwrap();
+        compare_values(&actual, &expected, name).unwrap();
+    }
+}
+
+#[test]
 fn tensor_operation_signatures() {
     initialize_device();
     let cases = [
@@ -651,6 +721,24 @@ fn tensor_operation_signatures() {
             name: "broadcast", params: "x y", args: &["[[1.0] [2.0]]", "[[3.0 4.0]]"],
             body: "(+ x y)", expected: "[[4.0 5.0] [5.0 6.0]]",
             interpreted: Expectation::Pass, compilation: Expectation::Pass,
+            compiled: Expectation::Pass,
+        },
+        TensorCase {
+            name: "concat_negative_axis", params: "x y",
+            args: &["[[1.0 2.0]]", "[[3.0 4.0]]"],
+            body: "(concat x y :axis -1)", expected: "[[1.0 2.0 3.0 4.0]]",
+            interpreted: Expectation::Pass, compilation: Expectation::Pass,
+            compiled: Expectation::Pass,
+        },
+        TensorCase {
+            name: "flip_positional_axis", params: "x", args: &["[[1.0 2.0] [3.0 4.0]]"],
+            body: "(flip x 1)", expected: "[[2.0 1.0] [4.0 3.0]]",
+            interpreted: Expectation::Pass,
+            compilation: Expectation::KnownFailure {
+                kind: FailureKind::Compilation,
+                reason: "codegen does not support flip with a positional axis yet",
+                detail_contains: "Function call not yet supported: flip (arity 2)",
+            },
             compiled: Expectation::Pass,
         },
         TensorCase {

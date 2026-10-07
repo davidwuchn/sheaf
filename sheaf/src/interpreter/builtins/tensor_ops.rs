@@ -76,8 +76,17 @@ fn builtin_transpose(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
 }
 
 fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
-    let axis = get_axis(kw).unwrap_or(0) as usize;
+    let axis_raw = get_axis(kw).unwrap_or(0);
     let has_axis_kw = kw.contains_key("axis");
+    let resolve_axis = |rank: usize| -> Result<usize, crate::core::error::SheafError> {
+        let axis = if axis_raw < 0 { rank as i64 + axis_raw } else { axis_raw };
+        if axis < 0 || axis >= rank as i64 {
+            return Err(runtime_error(format!(
+                "concat: axis {axis_raw} out of bounds for {rank}D tensor"
+            )));
+        }
+        Ok(axis as usize)
+    };
 
     let maybe_arrays: Option<Vec<(ArrayD<f32>, Dtype)>> = args.iter().map(list_to_tensor).collect();
 
@@ -85,6 +94,7 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
         && (has_axis_kw || args.iter().any(|a| matches!(a, Value::Tensor { .. })))
     {
         let dtype = arrays[0].1;
+        let axis = resolve_axis(arrays[0].0.ndim())?;
         if arrays.iter().any(|(_, candidate)| *candidate != dtype) {
             return Err(runtime_error("concat: dtype mismatch"));
         }
@@ -120,6 +130,7 @@ fn builtin_concat(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     let arrays: Vec<ArrayD<f32>> = args.iter().map(|a| {
         to_array(a).map(|(arr, _)| arr.into_owned())
     }).collect::<Result<Vec<_>, _>>()?;
+    let axis = resolve_axis(arrays[0].ndim())?;
     let views: Vec<ndarray::ArrayViewD<f32>> = arrays.iter().map(|a| a.view()).collect();
     let result = ndarray::concatenate(ndarray::Axis(axis), &views)
         .map_err(|e| runtime_error(e.to_string()))?;
@@ -600,7 +611,9 @@ fn builtin_flip(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if arr.is_empty() {
         return Ok(Value::Tensor { data: Arc::new(arr.into_owned()), dtype: dt });
     }
-    let axis = if let Some(ax) = get_axis(kw) {
+    let axis = if let Some(ax) = get_axis(kw)
+        .or_else(|| args.get(1).and_then(Value::to_f64).map(|axis| axis as i64))
+    {
         let ndim = arr.ndim();
         if ndim == 0 {
             return Err(runtime_error("flip: cannot flip a 0-dimensional tensor along an axis"));

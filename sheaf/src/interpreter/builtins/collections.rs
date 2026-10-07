@@ -33,7 +33,9 @@ fn builtin_first(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::List(items) | Value::Tuple(items) => items.first().cloned().ok_or_else(|| runtime_error("first: empty list")),
         Value::Tensor { data, dtype } => {
-            if data.shape()[0] == 0 {
+            let length = data.shape().first().copied()
+                .ok_or_else(|| runtime_error("first: expected a tensor with an axis"))?;
+            if length == 0 {
                 return Err(runtime_error("first: empty tensor"));
         }
             let sliced = data.index_axis(ndarray::Axis(0), 0).to_owned();
@@ -51,7 +53,9 @@ fn builtin_second(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::List(items) | Value::Tuple(items) => items.get(1).cloned().ok_or_else(|| runtime_error("second: list too short")),
         Value::Tensor { data, dtype } => {
-            if data.shape()[0] < 2 {
+            let length = data.shape().first().copied()
+                .ok_or_else(|| runtime_error("second: expected a tensor with an axis"))?;
+            if length < 2 {
                 return Err(runtime_error("second: tensor too short (need at least 2 elements on axis 0)"));
         }
             let sliced = data.index_axis(ndarray::Axis(0), 1).to_owned();
@@ -69,7 +73,8 @@ fn builtin_last(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::List(items) => items.last().cloned().ok_or_else(|| runtime_error("last: empty list")),
         Value::Tensor { data, dtype } => {
-            let n = data.shape()[0];
+            let n = data.shape().first().copied()
+                .ok_or_else(|| runtime_error("last: expected a tensor with an axis"))?;
             if n == 0 {
                 return Err(runtime_error("last: empty tensor"));
         }
@@ -102,7 +107,8 @@ fn builtin_nth(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             Ok(items[idx].clone())
         }
             Value::Tensor { data, dtype } => {
-                let dim0 = data.shape()[0];
+                let dim0 = data.shape().first().copied()
+                    .ok_or_else(|| runtime_error("nth: expected a tensor with an axis"))?;
                 let idx = resolve_idx(f, dim0)?;
                 let sliced = data.index_axis(ndarray::Axis(0), idx).to_owned();
             Ok(indexed_tensor_value(sliced, *dtype))
