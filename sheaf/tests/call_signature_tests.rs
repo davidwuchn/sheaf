@@ -306,6 +306,83 @@ fn invalid_allocation_arguments() {
 }
 
 #[test]
+fn invalid_io_string_and_time_arguments() {
+    let cases = [
+        ("entropy-extra", "(io \"entropy\" 1)", "argument"),
+        ("read-missing-path", "(io \"read\")", "argument"),
+        ("read-extra", "(io \"read\" \"absent-signature-fixture.txt\" 1)", "argument"),
+        ("exists-extra", "(io \"exists\" \"absent-signature-fixture.txt\" 1)", "argument"),
+        ("load-extra", "(io \"load\" \"absent-signature-fixture.json\" 1)", "argument"),
+        ("save-missing-value", "(io \"save\" \"absent-signature-fixture.json\")", "argument"),
+        ("io-path-type", "(io \"exists\" 1)", "path string"),
+        ("io-verb-type", "(io 1)", "string verb"),
+        ("io-unknown-verb", "(io \"not-an-io-operation\")", "unknown verb"),
+        ("upper-extra", "(str-call \"upper\" \"abc\" 1)", "argument"),
+        ("lower-extra", "(str-call \"lower\" \"ABC\" 1)", "argument"),
+        ("trim-extra", "(str-call \"trim\" \" abc \" 1)", "argument"),
+        ("startswith-extra", "(str-call \"startswith\" \"abc\" \"a\" 1)", "argument"),
+        ("endswith-extra", "(str-call \"endswith\" \"abc\" \"c\" 1)", "argument"),
+        ("contains-extra", "(str-call \"contains\" \"abc\" \"b\" 1)", "argument"),
+        ("split-extra", "(str-call \"split\" \"a,b\" \",\" 1)", "argument"),
+        ("replace-missing", "(str-call \"replace\" \"abc\" \"b\")", "expected"),
+        ("replace-extra", "(str-call \"replace\" \"abc\" \"b\" \"x\" 1)", "expected"),
+        ("computed-method-extra", "(let [method \"upper\"] (str-call method \"abc\" 1))", "argument"),
+        ("time-extra", "(time 1)", "argument"),
+    ];
+    let mut errors = Vec::new();
+    for (name, source, diagnostic) in cases {
+        let observed = match interpreter_only().eval(source) {
+            Ok(value) => Err(Failure::new(
+                FailureKind::InvalidCallAccepted, format!("returned {value:?}"),
+            )),
+            Err(error) if error.to_string().contains(diagnostic) => Ok(()),
+            Err(error) => Err(Failure::new(FailureKind::WrongDiagnostic, error.to_string())),
+        };
+        record(&mut errors, name, "argument validation", Expectation::Pass, observed);
+    }
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+}
+
+#[test]
+fn invalid_save_does_not_write_files() {
+    struct ScratchDirectory(std::path::PathBuf);
+    impl Drop for ScratchDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let mut scratch = None;
+    for attempt in 0..128 {
+        let path = std::env::temp_dir().join(format!(
+            "sheaf-signature-io-{}-{attempt}", std::process::id()
+        ));
+        match std::fs::create_dir(&path) {
+            Ok(()) => { scratch = Some(ScratchDirectory(path)); break; }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => panic!("create test directory: {error}"),
+        }
+    }
+    let scratch = scratch.expect("unused test directory");
+    let existing = scratch.0.join("existing.json");
+    std::fs::write(&existing, b"original contents").unwrap();
+    let fresh = scratch.0.join("new-parent/new.json");
+    for path in [&existing, &fresh] {
+        let literal = serde_json::to_string(&path.to_string_lossy()).unwrap();
+        let source = format!("(io \"save\" {literal} 42 99)");
+        let error = interpreter_only().eval(&source).expect_err("reject extra argument");
+        assert!(error.to_string().contains("argument"), "{error}");
+        assert_eq!(std::fs::read(&existing).unwrap(), b"original contents");
+        assert!(!fresh.parent().unwrap().exists(), "invalid save created a directory");
+    }
+    let literal = serde_json::to_string(&fresh.to_string_lossy()).unwrap();
+    let mut interpreter = interpreter_only();
+    interpreter.eval(&format!("(io \"save\" {literal} {{:answer 42}})")).unwrap();
+    let loaded = interpreter.eval(&format!("(io \"load\" {literal})")).unwrap();
+    let expected = interpreter.eval("{:answer 42}").unwrap();
+    compare_values(&loaded, &expected, "round trip").unwrap();
+}
+
+#[test]
 fn valid_call_signatures() {
     let cases = [
         ("keyword-as-data", "(get {:axis 3} :axis)", "3", Expectation::Pass),
@@ -346,6 +423,15 @@ fn valid_call_signatures() {
         ("or-short-circuit", "(or true (zeros))", "true", Expectation::Pass),
         ("split-default", "(len (random-split (random-key 42)))", "2", Expectation::Pass),
         ("eye-default", "(eye 2)", "[[1.0 0.0] [0.0 1.0]]", Expectation::Pass),
+        ("upper", "(str-call \"upper\" \"abc\")", "\"ABC\"", Expectation::Pass),
+        ("string-coercion", "(str-call \"upper\" 42)", "\"42\"", Expectation::Pass),
+        ("replace", "(str-call \"replace\" \"abc\" \"b\" \"x\")", "\"axc\"", Expectation::Pass),
+        ("string-format", "(str-call \"format\" \"{} {}\" 1 2)", "\"1 2\"", Expectation::Pass),
+        ("split-default-separator", "(str-call \"split\" \"a b\")", "'[\"a\" \"b\"]", Expectation::Pass),
+        ("split-separator", "(str-call \"split\" \"a,b\" \",\")", "'[\"a\" \"b\"]", Expectation::Pass),
+        ("contains-default-pattern", "(str-call \"contains\" \"abc\")", "true", Expectation::Pass),
+        ("time-zero-arguments", "(>= (time) 0)", "true", Expectation::Pass),
+        ("unexecuted-time-call", "(if false (time 1) 7)", "7", Expectation::Pass),
         ("scalar-shape", "(zeros '[])", "0.0", Expectation::Pass),
         ("empty-shape", "(shape (zeros '[2 0]))", "[2.0 0.0]", Expectation::Pass),
         ("integral-float-shape", "(zeros '[2.0])", "[0.0 0.0]", Expectation::Pass),

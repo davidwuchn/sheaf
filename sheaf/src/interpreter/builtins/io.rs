@@ -121,6 +121,17 @@ fn builtin_str_call(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
         Value::String(s) => s.as_str(),
         _ => return Err(runtime_error("str-call: first arg must be a string method name")),
     };
+    match method {
+        "upper" | "lower" | "trim" if args.len() != 2 => {
+            return Err(arity_error(&format!("str-call {method}"), 2, args.len()));
+        }
+        "startswith" | "endswith" | "contains" | "split" if args.len() > 3 => {
+            return Err(runtime_error(format!(
+                "str-call {method}: expected 2 or 3 arguments, got {}", args.len()
+            )));
+        }
+        _ => {}
+    }
     let s = match &args[1] {
         Value::String(s) => s.clone(),
         other => format!("{}", other),
@@ -170,6 +181,9 @@ fn builtin_io(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     };
     match verb {
         "entropy" => {
+            if args.len() != 1 {
+                return Err(arity_error("io entropy", 1, args.len()));
+            }
             let mut bytes = [0u8; 8];
             getrandom::getrandom(&mut bytes).map_err(|e| {
                 runtime_error(format!("io: entropy: {}", e))
@@ -178,6 +192,9 @@ fn builtin_io(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             Ok(Value::Int(seed))
         }
         "read" => {
+            if args.len() != 2 {
+                return Err(arity_error("io read", 2, args.len()));
+            }
             let path = match args.get(1) {
                 Some(Value::String(s)) => s,
                 _ => return Err(runtime_error("io read: expected path string")),
@@ -187,6 +204,9 @@ fn builtin_io(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             Ok(Value::String(contents))
         }
         "exists" => {
+            if args.len() != 2 {
+                return Err(arity_error("io exists", 2, args.len()));
+            }
             let path = match args.get(1) {
                 Some(Value::String(s)) => s,
                 _ => return Err(runtime_error("io exists: expected path string")),
@@ -194,6 +214,9 @@ fn builtin_io(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             Ok(Value::Bool(std::path::Path::new(path).exists()))
         }
         "save" => {
+            if args.len() != 3 {
+                return Err(arity_error("io save", 3, args.len()));
+            }
             let path = match args.get(1) {
                 Some(Value::String(s)) => s,
                 _ => return Err(runtime_error("io save: expected path string")),
@@ -221,6 +244,9 @@ fn builtin_io(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
             Ok(Value::Nil)
         }
         "load" => {
+            if args.len() != 2 {
+                return Err(arity_error("io load", 2, args.len()));
+            }
             let path = match args.get(1) {
                 Some(Value::String(s)) => s,
                 _ => return Err(runtime_error("io load: expected path string")),
@@ -357,7 +383,10 @@ fn builtin_gensym(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     Ok(Value::String(format!("{}{}", prefix, hash)))
 }
 
-fn builtin_time_ns(_args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+fn builtin_time_ns(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
+    if !args.is_empty() {
+        return Err(arity_error("time", 0, args.len()));
+    }
     use std::time::Instant;
     // Return monotonic time in seconds (f32 has ~0.01ms precision for durations < 1h)
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
