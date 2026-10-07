@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn register(env: &mut Env) {
-    env.set_builtin("tanh", builtin_tanh);
+    register_native_builtin(env, OpId::Tanh, builtin_tanh);
 }
 
 fn builtin_tanh(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {

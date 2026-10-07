@@ -2,14 +2,13 @@ use super::*;
 use std::sync::Arc;
 
 pub(super) fn register(env: &mut Env) {
-    env.set_builtin("print", builtin_print);
-    env.set_builtin("println", builtin_print);
-    env.set_builtin("str", builtin_str);
-    env.set_builtin("str-call", builtin_str_call);
-    env.set_builtin("io", builtin_io);
-    env.set_builtin("gensym", builtin_gensym);
-    env.set_builtin("symbol?", builtin_symbol_q);
-    env.set_builtin("time", builtin_time_ns);
+    register_native_builtin(env, OpId::Print, builtin_print);
+    register_native_builtin(env, OpId::Str, builtin_str);
+    register_native_builtin(env, OpId::StrCall, builtin_str_call);
+    register_native_builtin(env, OpId::Io, builtin_io);
+    register_native_builtin(env, OpId::Gensym, builtin_gensym);
+    register_native_builtin(env, OpId::SymbolPredicate, builtin_symbol_q);
+    register_native_builtin(env, OpId::Time, builtin_time_ns);
 }
 
 fn builtin_print(args: &[Value], kw: &BTreeMap<String, Value>) -> R {

@@ -2,20 +2,19 @@ use super::*;
 use std::sync::Arc;
 
 pub(super) fn register(env: &mut Env) {
-    env.set_builtin("reshape", builtin_reshape);
-    env.set_builtin("transpose", builtin_transpose);
-    env.set_builtin("tr", builtin_transpose);
-    env.set_builtin("concat", builtin_concat);
-    env.set_builtin("slice", builtin_slice);
-    env.set_builtin("get", builtin_get);
-    env.set_builtin("where", builtin_where);
-    env.set_builtin("roll", builtin_roll);
-    env.set_builtin("index-update", builtin_index_update);
-    env.set_builtin("swapaxes", builtin_swapaxes);
-    env.set_builtin("dynamic-slice", builtin_dynamic_slice);
-    env.set_builtin("dynamic-update-slice", builtin_dynamic_update_slice);
-    env.set_builtin("tensor-split", builtin_tensor_split);
-    env.set_builtin("flip", builtin_flip);
+    register_native_builtin(env, OpId::Reshape, builtin_reshape);
+    register_native_builtin(env, OpId::Transpose, builtin_transpose);
+    register_native_builtin(env, OpId::Concat, builtin_concat);
+    register_native_builtin(env, OpId::Slice, builtin_slice);
+    register_native_builtin(env, OpId::Get, builtin_get);
+    register_native_builtin(env, OpId::Where, builtin_where);
+    register_native_builtin(env, OpId::Roll, builtin_roll);
+    register_native_builtin(env, OpId::IndexUpdate, builtin_index_update);
+    register_native_builtin(env, OpId::Swapaxes, builtin_swapaxes);
+    register_native_builtin(env, OpId::DynamicSlice, builtin_dynamic_slice);
+    register_native_builtin(env, OpId::DynamicUpdateSlice, builtin_dynamic_update_slice);
+    register_native_builtin(env, OpId::TensorSplit, builtin_tensor_split);
+    register_native_builtin(env, OpId::Flip, builtin_flip);
 }
 
 fn builtin_reshape(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {

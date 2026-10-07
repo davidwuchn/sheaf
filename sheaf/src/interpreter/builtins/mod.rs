@@ -17,8 +17,9 @@ mod random;
 mod losses;
 
 use crate::core::error::SheafError;
+use crate::core::signature::OpId;
 use crate::interpreter::env::{arity_error, runtime_error, Env};
-use crate::interpreter::value::{Dtype, Value};
+use crate::interpreter::value::{BuiltinFnPtr, Dtype, Value};
 use ndarray::{ArrayD, Dimension, IxDyn};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -39,7 +40,13 @@ pub fn register_builtins(env: &mut Env) {
     io::register(env);
     random::register(env);
     losses::register(env);
-    env.set_builtin("stop-gradient", builtin_stop_gradient);
+    register_native_builtin(env, OpId::StopGradient, builtin_stop_gradient);
+}
+
+fn register_native_builtin(env: &mut Env, op: OpId, func: BuiltinFnPtr) {
+    for name in std::iter::once(op.name()).chain(op.aliases().iter().copied()) {
+        env.set_builtin(name, func);
+    }
 }
 
 fn builtin_stop_gradient(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {

@@ -1,24 +1,24 @@
 use super::*;
 
 pub(super) fn register(env: &mut Env) {
-    env.set_builtin("first", builtin_first);
-    env.set_builtin("second", builtin_second);
-    env.set_builtin("last", builtin_last);
-    env.set_builtin("rest", builtin_rest);
-    env.set_builtin("nth", builtin_nth);
-    env.set_builtin("cons", builtin_cons);
-    env.set_builtin("append", builtin_append);
-    env.set_builtin("empty?", builtin_empty);
-    env.set_builtin("get-in", builtin_get_in);
-    env.set_builtin("assoc", builtin_assoc);
-    env.set_builtin("dissoc", builtin_dissoc);
-    env.set_builtin("merge", builtin_merge);
-    env.set_builtin("keys", builtin_keys);
-    env.set_builtin("vals", builtin_vals);
-    env.set_builtin("dict", builtin_dict);
-    env.set_builtin("sort", builtin_sort);
-    env.set_builtin("chars", builtin_chars);
-    env.set_builtin("index-of", builtin_index_of);
+    register_native_builtin(env, OpId::First, builtin_first);
+    register_native_builtin(env, OpId::Second, builtin_second);
+    register_native_builtin(env, OpId::Last, builtin_last);
+    register_native_builtin(env, OpId::Rest, builtin_rest);
+    register_native_builtin(env, OpId::Nth, builtin_nth);
+    register_native_builtin(env, OpId::Cons, builtin_cons);
+    register_native_builtin(env, OpId::Append, builtin_append);
+    register_native_builtin(env, OpId::Empty, builtin_empty);
+    register_native_builtin(env, OpId::GetIn, builtin_get_in);
+    register_native_builtin(env, OpId::Assoc, builtin_assoc);
+    register_native_builtin(env, OpId::Dissoc, builtin_dissoc);
+    register_native_builtin(env, OpId::Merge, builtin_merge);
+    register_native_builtin(env, OpId::Keys, builtin_keys);
+    register_native_builtin(env, OpId::Vals, builtin_vals);
+    register_native_builtin(env, OpId::Dict, builtin_dict);
+    register_native_builtin(env, OpId::Sort, builtin_sort);
+    register_native_builtin(env, OpId::Chars, builtin_chars);
+    register_native_builtin(env, OpId::IndexOf, builtin_index_of);
 }
 
 fn indexed_tensor_value(data: ArrayD<f32>, dtype: Dtype) -> Value {

@@ -2,13 +2,13 @@ use super::*;
 use std::sync::Arc;
 
 pub(super) fn register(env: &mut Env) {
-    env.set_builtin("random-key", builtin_random_key);
-    env.set_builtin("random-split", builtin_random_split);
-    env.set_builtin("random-normal", builtin_random_normal);
-    env.set_builtin("random-uniform", builtin_random_uniform);
-    env.set_builtin("random-randint", builtin_random_randint);
-    env.set_builtin("choice", builtin_choice);
-    env.set_builtin("top_k", builtin_top_k);
+    register_native_builtin(env, OpId::RandomKey, builtin_random_key);
+    register_native_builtin(env, OpId::RandomSplit, builtin_random_split);
+    register_native_builtin(env, OpId::RandomNormal, builtin_random_normal);
+    register_native_builtin(env, OpId::RandomUniform, builtin_random_uniform);
+    register_native_builtin(env, OpId::RandomRandint, builtin_random_randint);
+    register_native_builtin(env, OpId::Choice, builtin_choice);
+    register_native_builtin(env, OpId::TopK, builtin_top_k);
 }
 
 fn seed_to_key(seed: u64) -> Value {

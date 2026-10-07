@@ -2,7 +2,7 @@ use super::*;
 use std::sync::Arc;
 
 pub(super) fn register(env: &mut Env) {
-    env.set_builtin("tree-map-zeros", builtin_tree_map_zeros);
+    register_native_builtin(env, OpId::TreeMapZeros, builtin_tree_map_zeros);
 }
 
 pub fn tree_zeros(val: &Value) -> Value {

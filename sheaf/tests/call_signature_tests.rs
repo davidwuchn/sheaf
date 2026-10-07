@@ -425,6 +425,9 @@ fn valid_call_signatures() {
         ),
         ("local-shadows-builtin", "(let [count (fn [x] (+ x 1))] (count 2))", "3", Expectation::Pass),
         ("indirect-alias", "(apply count '[[:a :b]])", "2", Expectation::Pass),
+        ("indirect-sin", "(apply sin '[1.0])", "(sin 1.0)", Expectation::Pass),
+        ("indirect-round", "(apply round '[1.5])", "(round 1.5)", Expectation::Pass),
+        ("indirect-random-split", "(len (apply random-split [(random-key 1) 3]))", "3", Expectation::Pass),
         (
             "computed-keyword-value",
             "(let [a 0] (sum [[1.0 2.0] [3.0 4.0]] :axis a))",
@@ -485,11 +488,7 @@ fn valid_call_signatures() {
             "first-class-random-normal",
             "(apply random-normal [(random-key 42) '[2]])",
             "(random-normal (random-key 42) '[2])",
-            Expectation::KnownFailure {
-                kind: FailureKind::Execution,
-                reason: "registered random-normal builtin is not a resolvable function value",
-                detail_contains: "Undefined symbol: random-normal",
-            },
+            Expectation::Pass,
         ),
     ];
     let mut errors = Vec::new();
@@ -503,6 +502,40 @@ fn valid_call_signatures() {
         record(&mut errors, name, "valid call", expectation, result);
     }
     assert!(errors.is_empty(), "{}", errors.join("\n"));
+}
+
+#[test]
+fn builtin_registration_uses_catalogue_names_and_aliases() {
+    use sheaf_compiler::core::signature::OpId;
+    use sheaf_compiler::interpreter::{builtins::register_builtins, env::Env};
+
+    let mut env = Env::new();
+    register_builtins(&mut env);
+    for name in env.all_names() {
+        let op = OpId::resolve(&name).unwrap_or_else(|| panic!("uncatalogued builtin: {name}"));
+        let Value::BuiltinFn { func: canonical, .. } = env.get(op.name()).unwrap() else {
+            panic!("{} is not registered as a builtin", op.name());
+        };
+        for alias in op.aliases() {
+            let Value::BuiltinFn { func, .. } = env.get(alias).unwrap() else {
+                panic!("{alias} is not registered as a builtin");
+            };
+            assert!(std::ptr::fn_addr_eq(canonical, func), "{alias} uses a different implementation");
+        }
+    }
+    for &op in OpId::ALL {
+        match op {
+            // Higher-order and short-circuit operations use interpreter dispatch.
+            OpId::Map | OpId::Filter | OpId::Reduce | OpId::Scan | OpId::Apply
+            | OpId::Find | OpId::TreeMap | OpId::TreeReduce | OpId::Flatten
+            | OpId::Vmap | OpId::And | OpId::Or | OpId::ValueAndGrad | OpId::ScanVjp => {}
+            // These helpers currently exist only in generated compiler IR.
+            OpId::Negate | OpId::Broadcast | OpId::OnesLike | OpId::SumToShape
+            | OpId::SliceGrad => {}
+            _ => assert!(matches!(env.get(op.name()), Ok(Value::BuiltinFn { .. })),
+                "{} has no interpreter implementation", op.name()),
+        }
+    }
 }
 
 #[test]

@@ -17,17 +17,17 @@ fn resolve_axis(axis: i64, ndim: usize) -> Result<usize, crate::core::error::She
 }
 
 pub(super) fn register(env: &mut Env) {
-    env.set_builtin("sum", builtin_sum);
-    env.set_builtin("mean", builtin_mean);
-    env.set_builtin("product", builtin_product);
-    env.set_builtin("min", builtin_min);
-    env.set_builtin("max", builtin_max);
-    env.set_builtin("minimum", builtin_minimum);
-    env.set_builtin("maximum", builtin_maximum);
-    env.set_builtin("argmax", builtin_argmax);
-    env.set_builtin("argmin", builtin_argmin);
-    env.set_builtin("var", builtin_var);
-    env.set_builtin("normalize", builtin_normalize);
+    register_native_builtin(env, OpId::Sum, builtin_sum);
+    register_native_builtin(env, OpId::Mean, builtin_mean);
+    register_native_builtin(env, OpId::Product, builtin_product);
+    register_native_builtin(env, OpId::Min, builtin_min);
+    register_native_builtin(env, OpId::Max, builtin_max);
+    register_native_builtin(env, OpId::Minimum, builtin_minimum);
+    register_native_builtin(env, OpId::Maximum, builtin_maximum);
+    register_native_builtin(env, OpId::Argmax, builtin_argmax);
+    register_native_builtin(env, OpId::Argmin, builtin_argmin);
+    register_native_builtin(env, OpId::Var, builtin_var);
+    register_native_builtin(env, OpId::Normalize, builtin_normalize);
 }
 
 fn keepdims(kw: &BTreeMap<String, Value>) -> bool {

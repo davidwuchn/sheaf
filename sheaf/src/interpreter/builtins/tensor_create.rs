@@ -1,16 +1,16 @@
 use super::*;
 
 pub(super) fn register(env: &mut Env) {
-    env.set_builtin("zeros", builtin_zeros);
-    env.set_builtin("ones", builtin_ones);
-    env.set_builtin("arange", builtin_arange);
-    env.set_builtin("eye", builtin_eye);
-    env.set_builtin("one-hot", builtin_one_hot);
-    env.set_builtin("tril", builtin_tril);
-    env.set_builtin("tensor", builtin_tensor);
-    env.set_builtin("range", builtin_range);
-    env.set_builtin("cast", builtin_cast);
-    env.set_builtin("__cast-like", builtin_cast_like);
+    register_native_builtin(env, OpId::Zeros, builtin_zeros);
+    register_native_builtin(env, OpId::Ones, builtin_ones);
+    register_native_builtin(env, OpId::Arange, builtin_arange);
+    register_native_builtin(env, OpId::Eye, builtin_eye);
+    register_native_builtin(env, OpId::OneHot, builtin_one_hot);
+    register_native_builtin(env, OpId::Tril, builtin_tril);
+    register_native_builtin(env, OpId::Tensor, builtin_tensor);
+    register_native_builtin(env, OpId::Range, builtin_range);
+    register_native_builtin(env, OpId::Cast, builtin_cast);
+    register_native_builtin(env, OpId::CastLike, builtin_cast_like);
 }
 
 fn builtin_zeros(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {

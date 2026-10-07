@@ -15,6 +15,7 @@ pub mod macro_engine;
 pub mod parser;
 pub mod prelude;
 pub mod shape;
+pub mod signature;
 #[cfg(not(sheaf_frontend))]
 pub mod trace;
 
