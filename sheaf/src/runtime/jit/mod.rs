@@ -1230,6 +1230,110 @@ mod cache_key_tests {
     }
 
     #[test]
+    fn indexed_parameter_shape_compiles() {
+        for index in [0, -2] {
+            let source = format!(
+                "(defn regression-indexed-shape [params] \
+                   (let [w (get-in params [:head :W]) n (get (shape w) {index})] \
+                     (zeros [n 3])))"
+            );
+            let params = Value::Dict(std::collections::BTreeMap::from([(
+                "head".to_string(),
+                Value::Dict(std::collections::BTreeMap::from([(
+                    "W".to_string(), tensor_f32(vec![2, 1], 0.0),
+                )])),
+            )]));
+            let outcome = compile_jit_case(&source, "regression-indexed-shape", &[params]);
+            assert!(matches!(outcome, JitCompileOutcome::Compiled(_)), "{outcome:?}");
+        }
+    }
+
+    #[test]
+    fn quoted_tensor_creation_shapes_compile() {
+        for operation in ["zeros", "ones"] {
+            let source = format!(
+                "(defn regression-quoted-shape [x] (+ x ({operation} '[2 3])))"
+            );
+            let outcome = compile_jit_case(
+                &source, "regression-quoted-shape", &[tensor_f32(vec![2, 3], 0.0)],
+            );
+            assert!(matches!(outcome, JitCompileOutcome::Compiled(_)), "{outcome:?}");
+        }
+    }
+
+    #[test]
+    fn tensor_creation_cache_keys_include_configuration_dimensions() {
+        let mut context = crate::CompilerContext::new();
+        for form in crate::parse(
+            "(defn regression-config-shape [key config] \
+               (let [d (get config :d)] (random-normal key [2 d])))",
+            "<jit-regression>",
+        ).unwrap() {
+            context.compile(&form).unwrap();
+        }
+        let func = context.registry.get("regression-config-shape").unwrap();
+        let args = |d| vec![
+            tensor_f32(vec![2], 0.0),
+            Value::Dict(std::collections::BTreeMap::from([("d".to_string(), Value::Int(d))])),
+        ];
+        let first = cache_key_for_function(func, &args(3), &context.registry).unwrap();
+        let second = cache_key_for_function(func, &args(5), &context.registry).unwrap();
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn hydra_growth_compiles_across_layer_counts_and_widths() {
+        let source = "(defn regression-grow-hydra [params key config] \
+            (let [D (get config :d_model) \
+                  head-w (get-in params [:head :W]) \
+                  in_dim (get (shape head-w) 0) \
+                  keys (random-split key) k1 (get keys 0) k2 (get keys 1) \
+                  new-layer {:W (random-normal k1 [in_dim D]) :b (zeros [D])} \
+                  new-head {:W (random-normal k2 [D 1]) :b (zeros '[1])}] \
+              {:head new-head :layers (append (get params :layers) new-layer)}))";
+        let mut interpreter = crate::interpreter::eval::Interpreter::new();
+        interpreter.eval(source).unwrap();
+        interpreter.eval(
+            "(def growth-key (random-key 42)) \
+             (def growth-params-0 {:head {:W (zeros '[2 1]) :b (zeros '[1])} :layers '[]})"
+        ).unwrap();
+        let key = interpreter.eval("growth-key").unwrap();
+        let mut input_width = 2;
+        for (layer_count, width) in [3, 5, 5].into_iter().enumerate() {
+            let previous = format!("growth-params-{layer_count}");
+            let current = format!("growth-params-{}", layer_count + 1);
+            let params = interpreter.eval(&previous).unwrap();
+            let config = Value::Dict(std::collections::BTreeMap::from([
+                ("d_model".to_string(), Value::Int(width)),
+            ]));
+            let outcome = compile_jit_case(
+                source, "regression-grow-hydra", &[params, key.clone(), config],
+            );
+            assert!(matches!(outcome, JitCompileOutcome::Compiled(_)), "{outcome:?}");
+            interpreter.eval(&format!(
+                "(def {current} (regression-grow-hydra {previous} growth-key {{:d_model {width}}}))"
+            )).unwrap();
+            let count = interpreter.eval(&format!("(len (get {current} :layers))")).unwrap();
+            assert!(matches!(count, Value::Int(n) if n == layer_count as i64 + 1));
+            for (path, expected) in [
+                (format!("[:layers {layer_count} :W]"), vec![input_width, width as usize]),
+                (format!("[:layers {layer_count} :b]"), vec![width as usize]),
+                ("[:head :W]".to_string(), vec![width as usize, 1]),
+                ("[:head :b]".to_string(), vec![1]),
+            ] {
+                let value = interpreter.eval(&format!("(get-in {current} {path})"))
+                    .unwrap().ensure_host().unwrap();
+                let Value::Tensor { data, .. } = value else {
+                    panic!("expected tensor at {path}, got {value:?}");
+                };
+                assert_eq!(data.shape(), expected);
+                assert!(data.iter().all(|value| value.is_finite()));
+            }
+            input_width = width as usize;
+        }
+    }
+
+    #[test]
     fn append_to_list_compiles_and_returns_a_list() {
         let outcome = compile_jit_case(
             "(defn regression-append [x] (append [] x))",

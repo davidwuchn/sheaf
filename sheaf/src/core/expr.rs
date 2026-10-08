@@ -232,27 +232,13 @@ fn lower_quasiquote(node: &SheafValue) -> SheafValue {
 }
 
 fn is_builtin_name(name: &str) -> bool {
+    if crate::core::signature::OpId::resolve(name).is_some_and(|op| op.is_public()) {
+        return true;
+    }
+    // These stdlib names are also accepted while compiling the prelude.
     matches!(name,
-        "+" | "-" | "*" | "/" | "//" | "mod" | "%" | "**"
-        | "abs" | "exp" | "log" | "sqrt" | "@"
-        | "=" | "==" | "!=" | "<" | ">" | "<=" | ">="
-        | "not" | "and" | "or"
-        | "shape" | "ndim" | "len" | "count"
-        | "int" | "float" | "str"
-        | "relu" | "leaky-relu" | "sigmoid" | "tanh" | "gelu" | "selu" | "celu" | "silu"
-        | "softmax" | "log-softmax"
-        | "sum" | "mean" | "product" | "min" | "max" | "minimum" | "maximum"
-        | "argmax" | "argmin"
-        | "zeros" | "ones" | "arange" | "eye" | "one-hot" | "tril"
-        | "reshape" | "transpose" | "tr" | "concat" | "slice" | "where" | "roll" | "index-update"
-        | "first" | "second" | "last" | "rest" | "nth" | "cons" | "append" | "empty?"
-        | "get" | "get-in" | "assoc" | "dissoc" | "merge" | "keys" | "vals" | "dict"
-        | "map" | "filter" | "reduce" | "scan" | "apply" | "find"
-        | "tensor" | "range" | "swapaxes" | "var" | "normalize" | "index-of"
-        | "gensym" | "symbol?"
-        | "einsum" | "append-and-roll"
-        | "dynamic-slice" | "dynamic-update-slice" | "mse-loss" | "mae-loss"
-        | "tree-map" | "tree-map-zeros" | "tree-reduce" | "flatten"
+        "relu" | "leaky-relu" | "sigmoid" | "gelu" | "selu" | "celu" | "silu"
+        | "softmax" | "log-softmax" | "mse-loss" | "mae-loss"
     )
 }
 

@@ -17,8 +17,9 @@ mod random;
 mod losses;
 
 use crate::core::error::SheafError;
+use crate::core::signature::OpId;
 use crate::interpreter::env::{arity_error, runtime_error, Env};
-use crate::interpreter::value::{Dtype, Value};
+use crate::interpreter::value::{BuiltinFnPtr, Dtype, Value};
 use ndarray::{ArrayD, Dimension, IxDyn};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -39,7 +40,13 @@ pub fn register_builtins(env: &mut Env) {
     io::register(env);
     random::register(env);
     losses::register(env);
-    env.set_builtin("stop-gradient", builtin_stop_gradient);
+    register_native_builtin(env, OpId::StopGradient, builtin_stop_gradient);
+}
+
+fn register_native_builtin(env: &mut Env, op: OpId, func: BuiltinFnPtr) {
+    for name in std::iter::once(op.name()).chain(op.aliases().iter().copied()) {
+        env.set_builtin(name, func);
+    }
 }
 
 fn builtin_stop_gradient(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
@@ -459,12 +466,25 @@ fn argreduce_along_axis(arr: &ArrayD<f32>, axis: usize, cmp: fn(f32, f32) -> boo
     ArrayD::from_shape_vec(IxDyn(&new_shape), result_data).unwrap()
 }
 
+fn checked_dimension(number: f64) -> Result<usize, crate::core::error::SheafError> {
+    if !number.is_finite() || number.fract() != 0.0 || number < 0.0 {
+        return Err(runtime_error(format!(
+            "invalid shape dimension {number}: expected a nonnegative integer"
+        )));
+    }
+    if number >= isize::MAX as f64 {
+        return Err(runtime_error("shape dimension exceeds addressable memory"));
+    }
+    Ok(number as usize)
+}
+
 fn shape_from_value(val: &Value) -> Result<Vec<usize>, crate::core::error::SheafError> {
-    match val {
+    let shape: Vec<usize> = match val {
         Value::List(items) => {
             items.iter().map(|v| match v {
-                Value::Int(n) => Ok(*n as usize),
-                Value::Float(f) => Ok(*f as usize),
+                Value::Int(n) => usize::try_from(*n)
+                    .map_err(|_| runtime_error(format!("invalid shape dimension {n}"))),
+                Value::Float(f) => checked_dimension(*f as f64),
                 Value::BuiltinFn { name, .. } => Err(runtime_error(format!(
                     "shape must contain integers, got function '{}'.\n  = hint: Arithmetic inside vectors needs parentheses: e.g, [(* 2 n)], not [* 2 n]",
                     name
@@ -479,11 +499,22 @@ fn shape_from_value(val: &Value) -> Result<Vec<usize>, crate::core::error::Sheaf
                 ))),
             }).collect()
         }
-        Value::Tensor { data, .. } => {
-            Ok(data.iter().map(|&x| x as usize).collect())
+        Value::Tensor { data, dtype } if data.ndim() == 1 && *dtype != Dtype::Bool => {
+            data.iter().map(|&x| checked_dimension(x as f64)).collect()
         }
-        _ => Err(runtime_error(format!("Expected shape list, got {}", val.type_name()))),
-    }
+        _ => Err(runtime_error(format!("Expected shape list or numeric vector, got {}", val.type_name()))),
+    }?;
+    let max_elements = isize::MAX as usize / std::mem::size_of::<f32>();
+    shape.iter().try_fold(1usize, |size, &dimension| {
+        if dimension > max_elements {
+            return Err(runtime_error("shape dimension exceeds addressable memory"));
+        }
+        // Empty arrays still need strides that fit in addressable memory.
+        size.checked_mul(dimension.max(1))
+            .filter(|&size| size <= max_elements)
+            .ok_or_else(|| runtime_error("shape exceeds addressable memory"))
+    })?;
+    Ok(shape)
 }
 
 fn list_to_tensor(v: &Value) -> Option<(ArrayD<f32>, Dtype)> {

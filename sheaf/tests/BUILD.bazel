@@ -20,6 +20,14 @@ rust_test(
     ],
 )
 
+sheaf_integration_test(
+    name = "call_signature_tests",
+    data = ["//sheaf:bin", "@iree_compiler//:iree-compile"],
+    env = {
+        "IREE_COMPILE": "$(rootpath @iree_compiler//:iree-compile)",
+        "SHEAF_TEST_BINARY": "$(rootpath //sheaf:bin)",
+    },
+)
 sheaf_integration_test(name = "compiler_tests")
 sheaf_integration_test(
     name = "interpreter_tests",
@@ -152,6 +160,7 @@ sheaf_program_test(
 test_suite(
     name = "all",
     tests = [
+        ":call_signature_tests",
         ":compiler_tests",
         ":regression_clevr",
         ":regression_clevr_training",

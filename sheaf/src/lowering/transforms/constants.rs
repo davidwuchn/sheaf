@@ -773,11 +773,16 @@ fn extract_numeric(expr: &CompiledExpr) -> Option<f64> {
 
 /// Shape-bearing operations and the argument positions that require compile-time integers.
 const SHAPE_BEARING_OPS: &[(&str, &[usize])] = &[
+    ("zeros", &[0]),
+    ("ones", &[0]),
+    ("eye", &[0, 1]),
+    ("random-normal", &[1]),
+    ("random-uniform", &[1]),
+    ("random-randint", &[1, 2, 3]),
     ("reshape", &[1]),           // dimensions
     ("slice", &[1, 2]),          // start_indices, limit_indices
     ("dynamic-slice", &[1, 2]),  // start_indices, limit_indices
     ("one-hot", &[1]),           // num_classes
-    ("random-randint", &[2, 3]), // low, high
     ("random-split", &[1]),      // N
     ("repeat", &[1]),            // count
 ];
@@ -788,13 +793,19 @@ fn resolve_to_gte<'a>(
     locals: &'a HashMap<String, crate::core::expr::CompiledExpr>,
 ) -> Option<(&'a str, &'a Vec<usize>)> {
     use crate::core::expr::CompiledExpr;
-    match e {
-        CompiledExpr::GetTupleElement { param, indices } => Some((param, indices)),
-        CompiledExpr::Symbol(name) => {
-            let resolved = locals.get(name)?;
-            resolve_to_gte(resolved, locals)
+    let mut current = e;
+    let mut visited = std::collections::HashSet::new();
+    loop {
+        match current {
+            CompiledExpr::GetTupleElement { param, indices } => return Some((param, indices)),
+            CompiledExpr::Symbol(name) => {
+                if !visited.insert(name.as_str()) {
+                    return None;
+                }
+                current = locals.get(name)?;
+            }
+            _ => return None,
         }
-        _ => None,
     }
 }
 
@@ -1016,6 +1027,43 @@ mod shape_classifier_tests {
             "let-aliased shape scalar must be detected, got {:?}",
             gtes
         );
+    }
+
+    #[test]
+    fn cyclic_shape_aliases_do_not_recurse() {
+        let body = let_(
+            vec![("d", sym("d"))],
+            call("zeros", vec![CompiledExpr::Vector(vec![sym("d")])]),
+        );
+        assert!(collect_shape_gtes(&body).is_empty());
+        let body = let_(
+            vec![("a", sym("b")), ("b", sym("a"))],
+            call("zeros", vec![CompiledExpr::Vector(vec![sym("a")])]),
+        );
+        assert!(collect_shape_gtes(&body).is_empty());
+    }
+
+    #[test]
+    fn tensor_creation_shapes_capture_configuration_scalars() {
+        for (name, prefix) in [
+            ("zeros", vec![]),
+            ("ones", vec![]),
+            ("random-normal", vec![sym("key")]),
+            ("random-uniform", vec![sym("key")]),
+            ("random-randint", vec![sym("key")]),
+        ] {
+            let mut args = prefix;
+            args.push(CompiledExpr::Vector(vec![CompiledExpr::Integer(2), sym("d")]));
+            if name == "random-randint" {
+                args.extend([CompiledExpr::Integer(0), CompiledExpr::Integer(10)]);
+            }
+            let body = let_(vec![("d", gte("cfg", 0))], call(name, args));
+            assert_eq!(
+                collect_shape_gtes(&body),
+                std::collections::HashSet::from([("cfg".to_string(), vec![0])]),
+                "{name}",
+            );
+        }
     }
 
     #[test]

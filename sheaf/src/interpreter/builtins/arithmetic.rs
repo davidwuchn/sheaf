@@ -2,30 +2,29 @@ use super::*;
 use std::sync::Arc;
 
 pub(super) fn register(env: &mut Env) {
-    env.set_builtin("+", builtin_add);
-    env.set_builtin("-", builtin_sub);
-    env.set_builtin("*", builtin_mul);
-    env.set_builtin("/", builtin_div);
-    env.set_builtin("//", builtin_floor_div);
-    env.set_builtin("mod", builtin_mod);
-    env.set_builtin("%", builtin_mod);
-    env.set_builtin("**", builtin_pow);
-    env.set_builtin("abs", builtin_abs);
-    env.set_builtin("ash", builtin_ash);
-    env.set_builtin("exp", builtin_exp);
-    env.set_builtin("log", builtin_log);
-    env.set_builtin("sqrt", builtin_sqrt);
-    env.set_builtin("round", builtin_round);
-    env.set_builtin("ceil", builtin_ceil);
-    env.set_builtin("floor", builtin_floor);
-    env.set_builtin("sin", builtin_sin);
-    env.set_builtin("cos", builtin_cos);
-    env.set_builtin("tan", builtin_tan);
-    env.set_builtin("@", builtin_matmul);
-    env.set_builtin("@-grad-lhs", builtin_matmul_grad_lhs);
-    env.set_builtin("@-grad-rhs", builtin_matmul_grad_rhs);
-    env.set_builtin("einsum", builtin_einsum);
-    env.set_builtin("append-and-roll", builtin_append_and_roll);
+    register_native_builtin(env, OpId::Add, builtin_add);
+    register_native_builtin(env, OpId::Subtract, builtin_sub);
+    register_native_builtin(env, OpId::Multiply, builtin_mul);
+    register_native_builtin(env, OpId::Divide, builtin_div);
+    register_native_builtin(env, OpId::FloorDivide, builtin_floor_div);
+    register_native_builtin(env, OpId::Modulo, builtin_mod);
+    register_native_builtin(env, OpId::Power, builtin_pow);
+    register_native_builtin(env, OpId::Abs, builtin_abs);
+    register_native_builtin(env, OpId::ArithmeticShift, builtin_ash);
+    register_native_builtin(env, OpId::Exp, builtin_exp);
+    register_native_builtin(env, OpId::Log, builtin_log);
+    register_native_builtin(env, OpId::Sqrt, builtin_sqrt);
+    register_native_builtin(env, OpId::Round, builtin_round);
+    register_native_builtin(env, OpId::Ceil, builtin_ceil);
+    register_native_builtin(env, OpId::Floor, builtin_floor);
+    register_native_builtin(env, OpId::Sin, builtin_sin);
+    register_native_builtin(env, OpId::Cos, builtin_cos);
+    register_native_builtin(env, OpId::Tan, builtin_tan);
+    register_native_builtin(env, OpId::Matmul, builtin_matmul);
+    register_native_builtin(env, OpId::MatmulGradLhs, builtin_matmul_grad_lhs);
+    register_native_builtin(env, OpId::MatmulGradRhs, builtin_matmul_grad_rhs);
+    register_native_builtin(env, OpId::Einsum, builtin_einsum);
+    register_native_builtin(env, OpId::AppendAndRoll, builtin_append_and_roll);
 }
 
 fn builtin_add(args: &[Value], kw: &BTreeMap<String, Value>) -> R {

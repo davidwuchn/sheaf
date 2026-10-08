@@ -1,20 +1,19 @@
 use super::*;
 
 pub(super) fn register(env: &mut Env) {
-    env.set_builtin("=", builtin_eq);
-    env.set_builtin("==", builtin_elem_eq);
-    env.set_builtin("!=", builtin_neq);
-    env.set_builtin("<", builtin_lt);
-    env.set_builtin(">", builtin_gt);
-    env.set_builtin("<=", builtin_le);
-    env.set_builtin(">=", builtin_ge);
-    env.set_builtin("not", builtin_not);
-    env.set_builtin("shape", builtin_shape);
-    env.set_builtin("ndim", builtin_ndim);
-    env.set_builtin("len", builtin_len);
-    env.set_builtin("count", builtin_len);
-    env.set_builtin("int", builtin_int);
-    env.set_builtin("float", builtin_float);
+    register_native_builtin(env, OpId::Equal, builtin_eq);
+    register_native_builtin(env, OpId::ElementEqual, builtin_elem_eq);
+    register_native_builtin(env, OpId::NotEqual, builtin_neq);
+    register_native_builtin(env, OpId::Less, builtin_lt);
+    register_native_builtin(env, OpId::Greater, builtin_gt);
+    register_native_builtin(env, OpId::LessEqual, builtin_le);
+    register_native_builtin(env, OpId::GreaterEqual, builtin_ge);
+    register_native_builtin(env, OpId::Not, builtin_not);
+    register_native_builtin(env, OpId::Shape, builtin_shape);
+    register_native_builtin(env, OpId::Ndim, builtin_ndim);
+    register_native_builtin(env, OpId::Len, builtin_len);
+    register_native_builtin(env, OpId::Int, builtin_int);
+    register_native_builtin(env, OpId::Float, builtin_float);
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
