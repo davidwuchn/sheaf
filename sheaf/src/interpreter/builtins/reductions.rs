@@ -77,7 +77,11 @@ fn builtin_product(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
     if let Some(axis) = get_axis(kw) {
         let ax = resolve_axis(axis, arr.ndim())?;
         let result = reduce_along_axis(&arr, ax, |v| v.iter().product());
-        Ok(tensor_with_dtype(result, dt))
+        if keepdims(kw) {
+            Ok(tensor_with_dtype(result.insert_axis(ndarray::Axis(ax)), dt))
+        } else {
+            Ok(tensor_with_dtype(result, dt))
+        }
     } else {
         Ok(reduced_scalar(&args[0], arr.iter().product::<f32>(), dt))
     }
