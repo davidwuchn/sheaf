@@ -205,10 +205,7 @@ pub fn value_to_stablehlo_type(val: &Value) -> SheafResult<StableHLOType> {
             if items.is_empty() {
                 return Ok(StableHLOType::Tuple(vec![], None));
             }
-            if items
-                .iter()
-                .all(|v| matches!(v, Value::Float(_) | Value::Int(_)))
-            {
+            if val.numeric_list_elements().is_some() {
                 Ok(StableHLOType::f32_tensor(vec![items.len() as i64]))
             } else {
                 let tys: SheafResult<Vec<StableHLOType>> =

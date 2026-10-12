@@ -25,15 +25,7 @@ fn count_one_value(val: &Value) -> usize {
     match val {
         Value::Dict(map) => map.values().map(count_one_value).sum(),
         Value::Tuple(elems) => elems.iter().map(count_one_value).sum(),
-        // List of all scalars -> single tensor f32[N] (matches value_to_stablehlo_type)
-        // Empty list -> 0 leaves (consistent with flatten_value and trace.rs)
-        Value::List(elems)
-            if !elems.is_empty() && elems
-                .iter()
-                .all(|v| matches!(v, Value::Float(_) | Value::Int(_))) =>
-        {
-            1
-        }
+        Value::List(_) if val.numeric_list_elements().is_some() => 1,
         Value::List(elems) => elems.iter().map(count_one_value).sum(),
         Value::Tensor { .. } | Value::Float(_) | Value::Int(_) | Value::Bool(_)
         | Value::DeviceBuffer(_) => 1,
@@ -104,6 +96,9 @@ fn collect_value_shapes(val: &Value, out: &mut Vec<Vec<i64>>) {
             for v in map.values() {
                 collect_value_shapes(v, out);
             }
+        }
+        Value::List(values) if val.numeric_list_elements().is_some() => {
+            out.push(vec![values.len() as i64]);
         }
         Value::Tuple(elems) | Value::List(elems) => {
             for v in elems {

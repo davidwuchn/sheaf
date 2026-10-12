@@ -100,6 +100,15 @@ pub(super) unsafe fn value_to_buffer_view(
                 };
                 value_to_buffer_view(device, allocator, &tensor)
             }
+            Value::List(values) if val.numeric_list_elements().is_some() => {
+                let values: Result<Vec<f32>, _> = values.iter()
+                    .map(|value| value.to_f32().ok_or_else(|| iree_err("invalid numeric list element")))
+                    .collect();
+                let values = values?;
+                let tensor = Value::tensor_f32(ArrayD::from_shape_vec(vec![values.len()], values)
+                    .map_err(|error| iree_err(&format!("numeric list shape: {error}")))?);
+                value_to_buffer_view(device, allocator, &tensor)
+            }
             Value::DeviceBuffer(db) => {
                 // Return a retained reference.
                 iree_hal_buffer_view_retain(db.buffer_view());
@@ -214,6 +223,10 @@ fn flatten_value<'a>(val: &'a Value, out: &mut Vec<&'a Value>) -> Result<(), She
             }
             Ok(())
         }
+        Value::List(_) if val.numeric_list_elements().is_some() => {
+            out.push(val);
+            Ok(())
+        }
         Value::Tuple(elems) | Value::List(elems) => {
             for v in elems {
                 flatten_value(v, out)?;
@@ -298,6 +311,56 @@ mod tests {
     use crate::lowering::stablehlo::StableHLOType;
     use ndarray::{ArrayD, IxDyn};
     use std::sync::Arc;
+
+    #[test]
+    fn numeric_lists_match_their_inferred_tensor_abi() {
+        let device = std::env::var("SHEAF_SIGNATURE_DEVICE").unwrap_or_else(|_| "cpu".to_string());
+        crate::core::config::init(0, Some(device), false);
+        let mut compiler = crate::core::expr::CompilerContext::new();
+        let ast = crate::core::parse(
+            "(defn reduce-list [x xs] (reduce (fn [c n] (+ c n)) x xs))", "<list-abi>",
+        ).unwrap();
+        compiler.compile(&ast[0]).unwrap();
+        let definition = compiler.registry.get("reduce-list").unwrap();
+        let session = crate::runtime::iree_session::shared_session().unwrap();
+        let mut jit = crate::runtime::jit::JitCompiler::new();
+        for (values, expected) in [
+            (vec![Value::Int(1), Value::Int(2), Value::Int(3)], 6.0),
+            (vec![Value::Int(2), Value::Int(3), Value::Int(4)], 9.0),
+            (vec![Value::Float(1.0), Value::Float(2.0), Value::Float(3.0)], 6.0),
+            (vec![Value::Int(1), Value::Float(2.5), Value::Int(3)], 6.5),
+        ] {
+            let args = [Value::tensor_f32(ArrayD::zeros(IxDyn(&[2]))), Value::List(values)];
+            let types = args.iter().map(crate::core::trace::value_to_stablehlo_type)
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            assert!(crate::runtime::signature::args_match_signature(&args, &types));
+            assert!(crate::runtime::signature::check_shapes_match(&args, &types).is_ok());
+            assert_eq!(super::flatten_values(&args).unwrap().len(), 2);
+            let outcome = jit.try_jit_compile(definition, &args, &compiler.registry, &session);
+            assert!(matches!(outcome, crate::runtime::jit::JitCompileOutcome::Compiled(_)), "{outcome:?}");
+            let module = jit.module_for_args(definition, &args).unwrap();
+            let result = session.call_typed_device(
+                &format!("{}.reduce_list", module.module_name), &args, &module.sig.return_type,
+            ).unwrap().ensure_host().unwrap();
+            let Value::Tensor { data, .. } = result else { panic!("expected tensor result") };
+            assert_eq!(data.shape(), &[2]);
+            assert!(data.iter().all(|value| (*value - expected).abs() < 1e-6));
+        }
+    }
+
+    #[test]
+    fn structured_lists_and_tuples_keep_their_separate_leaves() {
+        for value in [
+            Value::Tuple(vec![Value::Int(1), Value::Int(2)]),
+            Value::List(vec![Value::Bool(false), Value::Bool(true)]),
+            Value::List(Vec::new()),
+        ] {
+            let ty = crate::core::trace::value_to_stablehlo_type(&value).unwrap();
+            assert!(crate::runtime::signature::check_shapes_match(std::slice::from_ref(&value), &[ty]).is_ok());
+            let expected = crate::runtime::signature::count_arg_tensors(std::slice::from_ref(&value));
+            assert_eq!(super::flatten_values(&[value]).unwrap().len(), expected);
+        }
+    }
 
     #[test]
     fn rejects_unsupported_values_without_a_buffer_view() {

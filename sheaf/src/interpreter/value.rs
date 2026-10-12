@@ -135,6 +135,14 @@ impl Value {
         }
     }
 
+    pub(crate) fn numeric_list_elements(&self) -> Option<&[Value]> {
+        match self {
+            Value::List(values) if !values.is_empty()
+                && values.iter().all(|value| matches!(value, Value::Int(_) | Value::Float(_))) => Some(values),
+            _ => None,
+        }
+    }
+
     pub fn tensor(data: ArrayD<f32>, dtype: Dtype) -> Self {
         Value::Tensor { data: Arc::new(data), dtype }
     }
