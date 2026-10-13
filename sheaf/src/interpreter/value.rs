@@ -143,6 +143,14 @@ impl Value {
         }
     }
 
+    pub(crate) fn tensor_element(value: f32, dtype: Dtype) -> Self {
+        match dtype {
+            Dtype::I32 | Dtype::I64 => Value::Int(value as i64),
+            Dtype::Bool => Value::Bool(value != 0.0),
+            _ => Value::Float(value),
+        }
+    }
+
     pub fn tensor(data: ArrayD<f32>, dtype: Dtype) -> Self {
         Value::Tensor { data: Arc::new(data), dtype }
     }

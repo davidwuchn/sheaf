@@ -232,11 +232,7 @@ fn builtin_get(args: &[Value], kw: &BTreeMap<String, Value>) -> R {
             if let Some(f) = args[1].to_f64() {
                 let idx = resolve_idx(f, data.shape()[0])?;
                 let sliced = data.index_axis(ndarray::Axis(0), idx).to_owned();
-                return if sliced.shape().is_empty() {
-                    Ok(Value::Float(as_scalar(&sliced)))
-                } else {
-                    Ok(tensor_with_dtype(sliced, *dtype))
-                };
+                return Ok(indexed_tensor_value(sliced, *dtype));
             }
             if let Value::Tensor { data: idx_data, .. } = &args[1] {
                 let row_shape = &data.shape()[1..];

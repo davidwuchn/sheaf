@@ -103,6 +103,14 @@ fn tensor_with_dtype(data: ArrayD<f32>, dtype: Dtype) -> Value {
     Value::Tensor { data: Arc::new(data), dtype }
 }
 
+fn indexed_tensor_value(data: ArrayD<f32>, dtype: Dtype) -> Value {
+    if data.shape().is_empty() {
+        Value::tensor_element(as_scalar(&data), dtype)
+    } else {
+        tensor_with_dtype(data, dtype)
+    }
+}
+
 fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
     crate::core::shape::broadcast_shapes(a, b).ok()
 }
@@ -569,4 +577,41 @@ fn cmp_op(args: &[Value], op: fn(f32, f32) -> f32, _dt: Dtype) -> R {
 
 fn bool_tensor(data: ArrayD<f32>) -> Value {
     Value::Tensor { data: Arc::new(data), dtype: Dtype::Bool }
+}
+
+#[cfg(test)]
+#[test]
+fn indexed_tensors_preserve_scalar_types_and_row_dtypes() {
+    let mut env = Env::new();
+    register_builtins(&mut env);
+    for dtype in [Dtype::I32, Dtype::I64, Dtype::Bool, Dtype::F16, Dtype::BF16, Dtype::F32, Dtype::F64] {
+        for shape in [&[3][..], &[3, 1][..]] {
+            let source = Value::tensor(ArrayD::from_shape_vec(IxDyn(shape), vec![0., 1., 0.]).unwrap(), dtype);
+            for (name, index, expected) in [
+                ("first", None, 0.), ("second", None, 1.), ("last", None, 0.),
+                ("nth", Some(1), 1.), ("nth", Some(-1), 0.),
+                ("get", Some(1), 1.), ("get", Some(-1), 0.),
+                ("get-in", Some(1), 1.), ("get-in", Some(-1), 0.),
+            ] {
+                let mut args = vec![source.clone()];
+                if let Some(index) = index {
+                    let index = Value::Int(index);
+                    args.push(if name == "get-in" { Value::List(vec![index]) } else { index });
+                }
+                let Value::BuiltinFn { func, .. } = env.get(name).unwrap() else { panic!("expected builtin") };
+                let result = func(&args, &BTreeMap::new()).unwrap();
+                match (shape.len(), &result) {
+                    (1, Value::Int(value)) if dtype.is_integer() => assert_eq!(*value, expected as i64),
+                    (1, Value::Bool(value)) if dtype == Dtype::Bool => assert_eq!(*value, expected != 0.),
+                    (1, Value::Float(value)) if dtype.is_float() => assert_eq!(*value, expected),
+                    (2, Value::Tensor { data, dtype: actual }) => {
+                        assert_eq!(*actual, dtype);
+                        assert_eq!(data.shape(), &[1]);
+                        assert_eq!(data[[0]], expected);
+                    }
+                    _ => panic!("{name} {dtype} {shape:?}: unexpected result {result:?}"),
+                }
+            }
+        }
+    }
 }

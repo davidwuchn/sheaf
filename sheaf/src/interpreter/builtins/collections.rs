@@ -21,14 +21,6 @@ pub(super) fn register(env: &mut Env) {
     register_native_builtin(env, OpId::IndexOf, builtin_index_of);
 }
 
-fn indexed_tensor_value(data: ArrayD<f32>, dtype: Dtype) -> Value {
-    if data.shape().is_empty() {
-        Value::Float(as_scalar(&data))
-    } else {
-        tensor_with_dtype(data, dtype)
-    }
-}
-
 fn builtin_first(args: &[Value], _kw: &BTreeMap<String, Value>) -> R {
     match &args[0] {
         Value::List(items) | Value::Tuple(items) => items.first().cloned().ok_or_else(|| runtime_error("first: empty list")),

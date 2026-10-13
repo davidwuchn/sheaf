@@ -29,7 +29,7 @@ pub(super) fn eval_map(args: &[Value], env: &mut Env) -> Result<Value, SheafErro
                 // 1D: iterate over scalar elements
                 let mut results = Vec::with_capacity(data.len());
                 for &x in data.iter() {
-                    results.push(call_function(func, &[Value::Float(x)], env)?);
+                    results.push(call_function(func, &[Value::tensor_element(x, *dtype)], env)?);
                 }
                 Ok(Value::List(results))
             } else {
@@ -83,15 +83,15 @@ pub(super) fn eval_reduce(args: &[Value], env: &mut Env) -> Result<Value, SheafE
                 }
                 items[0].clone()
             }
-            Value::Tensor { data, .. } => {
+            Value::Tensor { data, dtype } => {
                 if data.is_empty() {
                     return Err(runtime_error("reduce: cannot reduce empty tensor without init"));
                 }
                 if data.ndim() == 1 {
-                    Value::Float(data[[0]])
+                    Value::tensor_element(data[[0]], *dtype)
                 } else {
                     let first = data.index_axis(ndarray::Axis(0), 0).to_owned();
-                    Value::tensor_f32(first)
+                    Value::tensor(first, *dtype)
                 }
             }
             Value::Dict(map) => {
@@ -111,17 +111,17 @@ pub(super) fn eval_reduce(args: &[Value], env: &mut Env) -> Result<Value, SheafE
             }
             Ok(acc)
         }
-        Value::Tensor { data, .. } => {
+        Value::Tensor { data, dtype } => {
             if data.ndim() == 1 {
                 let iter = data.iter().skip(if skip_first { 1 } else { 0 });
                 for &x in iter {
-                    acc = call_function(func, &[acc, Value::Float(x)], env)?;
+                    acc = call_function(func, &[acc, Value::tensor_element(x, *dtype)], env)?;
                 }
             } else {
                 let start = if skip_first { 1 } else { 0 };
                 for i in start..data.shape()[0] {
                     let row = data.index_axis(ndarray::Axis(0), i).to_owned();
-                    acc = call_function(func, &[acc, Value::tensor_f32(row)], env)?;
+                    acc = call_function(func, &[acc, Value::tensor(row, *dtype)], env)?;
                 }
             }
             Ok(acc)
@@ -156,16 +156,16 @@ pub(super) fn eval_scan(args: &[Value], env: &mut Env) -> Result<Value, SheafErr
     let step = |func: &Value, carry: Value, x: Value, env: &mut Env|
         -> Result<(Value, Value), SheafError>
     {
-        let carry_is_scalar = matches!(&carry, Value::Float(_) | Value::Int(_));
+        let carry_is_scalar = matches!(&carry, Value::Float(_) | Value::Int(_) | Value::Bool(_));
         let result = call_function(func, &[carry, x], env)?;
         match &result {
             Value::List(items) | Value::Tuple(items) if items.len() == 2 => {
                 Ok((items[0].clone(), items[1].clone()))
             }
-            Value::Tensor { data, .. }
+            Value::Tensor { data, dtype }
                 if data.ndim() == 1 && data.shape()[0] == 2 && carry_is_scalar =>
             {
-                Ok((Value::Float(data[[0]]), Value::Float(data[[1]])))
+                Ok((Value::tensor_element(data[[0]], *dtype), Value::tensor_element(data[[1]], *dtype)))
             }
             Value::Tensor { data, .. } if data.ndim() == 1 && data.shape()[0] == 2 => {
                 Err(runtime_error(
@@ -173,10 +173,10 @@ pub(super) fn eval_scan(args: &[Value], env: &mut Env) -> Result<Value, SheafErr
                      return a list/tuple [new-carry output] instead",
                 ))
             }
-            Value::Tensor { data, .. } if data.ndim() >= 2 && data.shape()[0] == 2 => {
+            Value::Tensor { data, dtype } if data.ndim() >= 2 && data.shape()[0] == 2 => {
                 let carry = data.index_axis(ndarray::Axis(0), 0).to_owned();
                 let output = data.index_axis(ndarray::Axis(0), 1).to_owned();
-                Ok((Value::tensor_f32(carry), Value::tensor_f32(output)))
+                Ok((Value::tensor(carry, *dtype), Value::tensor(output, *dtype)))
             }
             _ => Err(runtime_error("scan: fn must return [new-carry output]")),
         }
@@ -191,17 +191,17 @@ pub(super) fn eval_scan(args: &[Value], env: &mut Env) -> Result<Value, SheafErr
             }
             Ok(Value::Tuple(vec![carry, Value::List(outputs)]))
         }
-        Value::Tensor { data, .. } => {
+        Value::Tensor { data, dtype } => {
             if data.ndim() == 1 {
                 for &x in data.iter() {
-                    let (new_carry, output) = step(func, carry, Value::Float(x), env)?;
+                    let (new_carry, output) = step(func, carry, Value::tensor_element(x, *dtype), env)?;
                     carry = new_carry;
                     outputs.push(output);
                 }
             } else {
                 for i in 0..data.shape()[0] {
                     let row = data.index_axis(ndarray::Axis(0), i).to_owned();
-                    let (new_carry, output) = step(func, carry, Value::tensor_f32(row), env)?;
+                    let (new_carry, output) = step(func, carry, Value::tensor(row, *dtype), env)?;
                     carry = new_carry;
                     outputs.push(output);
                 }
@@ -244,11 +244,11 @@ pub(crate) fn slice_dict(
         // Materialize DeviceBuffer to host tensor before slicing
         let host_val = val.ensure_host_cow()?;
         let sliced = match &*host_val {
-            Value::Tensor { data, .. } => {
+            Value::Tensor { data, dtype } => {
                 if data.ndim() == 1 {
-                    Value::Float(data[[i]])
+                    Value::tensor_element(data[[i]], *dtype)
                 } else {
-                    Value::tensor_f32(data.index_axis(ndarray::Axis(0), i).to_owned())
+                    Value::tensor(data.index_axis(ndarray::Axis(0), i).to_owned(), *dtype)
                 }
             }
             other => other.clone(),
@@ -265,8 +265,8 @@ pub(super) fn eval_apply(args: &[Value], env: &mut Env) -> Result<Value, SheafEr
     let func = &args[0];
     match &args[1] {
         Value::List(items) => call_function(func, items, env),
-        Value::Tensor { data, .. } => {
-            let call_args: Vec<Value> = data.iter().map(|&x| Value::Float(x)).collect();
+        Value::Tensor { data, dtype } => {
+            let call_args: Vec<Value> = data.iter().map(|&x| Value::tensor_element(x, *dtype)).collect();
             call_function(func, &call_args, env)
         }
         other => Err(runtime_error(format!("apply: expected a list or a tensor, got {}", other.type_name()))),
@@ -497,5 +497,97 @@ pub(super) fn eval_vmap_call(
         Ok(Value::Tensor { data: Arc::new(arr), dtype: value::Dtype::F32 })
     } else {
         Ok(Value::List(results))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::expr::CompiledExpr;
+    use crate::interpreter::value::Dtype;
+
+    #[test]
+    fn tensor_iteration_preserves_scalar_types_and_row_dtypes() {
+        fn function(params: &[&str], body: CompiledExpr, closure: Vec<(String, Value)>) -> Value {
+            Value::Function {
+                name: None,
+                params: params.iter().map(|name| (*name).to_string()).collect(),
+                body,
+                closure,
+            }
+        }
+        fn element(value: &Value, dtype: Dtype, expected: i64) {
+            match (dtype, value) {
+                (Dtype::I32 | Dtype::I64, Value::Int(actual)) => assert_eq!(*actual, expected),
+                (Dtype::Bool, Value::Bool(actual)) => assert_eq!(*actual, expected != 0),
+                (Dtype::F16 | Dtype::BF16 | Dtype::F32 | Dtype::F64, Value::Float(actual)) => {
+                    assert_eq!(*actual, expected as f32);
+                }
+                _ => panic!("{dtype}: unexpected element {value:?}"),
+            }
+        }
+        let mut env = Env::new();
+        let identity = function(&["n"], CompiledExpr::Symbol("n".to_string()), vec![]);
+        let last = function(&["a", "n"], CompiledExpr::Symbol("n".to_string()), vec![]);
+        let pair = function(&["a", "n"], CompiledExpr::Tuple(vec![
+            CompiledExpr::Symbol("n".to_string()), CompiledExpr::Symbol("n".to_string()),
+        ]), vec![]);
+        let arguments = function(&["a", "b", "c"], CompiledExpr::Tuple(vec![
+            CompiledExpr::Symbol("a".to_string()), CompiledExpr::Symbol("b".to_string()),
+            CompiledExpr::Symbol("c".to_string()),
+        ]), vec![]);
+        for dtype in [Dtype::I32, Dtype::I64, Dtype::Bool, Dtype::F16, Dtype::BF16, Dtype::F32, Dtype::F64] {
+            let array = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[3]), vec![0., 1., 0.]).unwrap();
+            let data = Value::tensor(array, dtype);
+            let Value::List(mapped) = eval_map(&[identity.clone(), data.clone()], &mut env).unwrap()
+                else { panic!("expected map list") };
+            assert_eq!(mapped.len(), 3);
+            for (value, expected) in mapped.iter().zip([0, 1, 0]) {
+                element(value, dtype, expected);
+            }
+            for args in [vec![last.clone(), data.clone()], vec![last.clone(), Value::Int(7), data.clone()]] {
+                element(&eval_reduce(&args, &mut env).unwrap(), dtype, 0);
+            }
+            let Value::Tuple(scanned) = eval_scan(&[pair.clone(), Value::Int(7), data.clone()], &mut env).unwrap()
+                else { panic!("expected scan tuple") };
+            element(&scanned[0], dtype, 0);
+            let Value::List(outputs) = &scanned[1] else { panic!("expected scan outputs") };
+            assert_eq!(outputs.len(), 3);
+            for (value, expected) in outputs.iter().zip([0, 1, 0]) {
+                element(value, dtype, expected);
+            }
+            let Value::Tuple(applied) = eval_apply(&[arguments.clone(), data.clone()], &mut env).unwrap()
+                else { panic!("expected apply tuple") };
+            assert_eq!(applied.len(), 3);
+            for (value, expected) in applied.iter().zip([0, 1, 0]) {
+                element(value, dtype, expected);
+            }
+            let dict = BTreeMap::from([("n".to_string(), data)]);
+            let Value::Dict(slice) = slice_dict(&dict, 1).unwrap() else { panic!("expected dict") };
+            element(&slice["n"], dtype, 1);
+
+            let rows = Value::tensor(ndarray::ArrayD::zeros(ndarray::IxDyn(&[2, 3])), dtype);
+            let pair_tensor = function(&["a", "n"], CompiledExpr::Symbol("rows".to_string()),
+                vec![("rows".to_string(), rows.clone())]);
+            let Value::Tuple(scanned) = eval_scan(&[pair_tensor, rows.clone(), rows.clone()], &mut env).unwrap()
+                else { panic!("expected scan tuple") };
+            let reduced = eval_reduce(&[last.clone(), rows.clone()], &mut env).unwrap();
+            let Value::List(mapped) = eval_map(&[identity.clone(), rows.clone()], &mut env).unwrap()
+                else { panic!("expected map list") };
+            let Value::List(outputs) = &scanned[1] else { panic!("expected scan outputs") };
+            let row_dict = BTreeMap::from([("row".to_string(), rows.clone())]);
+            let Value::Dict(slice) = slice_dict(&row_dict, 0).unwrap() else { panic!("expected dict") };
+            for value in [&scanned[0], &reduced, &mapped[0], &outputs[0], &slice["row"]] {
+                let Value::Tensor { data, dtype: actual } = value else { panic!("expected tensor") };
+                assert_eq!(*actual, dtype);
+                assert_eq!(data.shape(), &[3]);
+            }
+            let scalar_pair = Value::tensor(ndarray::ArrayD::zeros(ndarray::IxDyn(&[2])), dtype);
+            let step = function(&["a", "n"], CompiledExpr::Symbol("pair".to_string()),
+                vec![("pair".to_string(), scalar_pair)]);
+            let Value::Tuple(scanned) = eval_scan(&[step, Value::Bool(false), rows], &mut env).unwrap()
+                else { panic!("expected scan tuple") };
+            element(&scanned[0], dtype, 0);
+        }
     }
 }
