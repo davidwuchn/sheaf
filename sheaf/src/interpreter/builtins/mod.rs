@@ -557,26 +557,63 @@ fn cmp_op(args: &[Value], op: fn(f32, f32) -> f32, _dt: Dtype) -> R {
     if args.len() != 2 { return Err(runtime_error(format!("Comparison: expected 2 arguments, got {}", args.len()))); }
     let (a, _) = to_array(&args[0])?;
     let (b, _) = to_array(&args[1])?;
-    if a.ndim() == 0 && b.ndim() != 0 {
-        let scalar = as_scalar(&a);
-        let result = b.mapv(|x| op(scalar, x));
-        return Ok(bool_tensor(result));
-    }
-    if b.ndim() == 0 && a.ndim() != 0 {
-        let scalar = as_scalar(&b);
-        let result = a.mapv(|x| op(x, scalar));
-        return Ok(bool_tensor(result));
-    }
     if a.ndim() == 0 && b.ndim() == 0 {
-        let r = op(as_scalar(&a), as_scalar(&b));
-        return Ok(Value::Bool(r != 0.0));
+        return Ok(Value::Bool(op(as_scalar(&a), as_scalar(&b)) != 0.0));
     }
-    let result = ndarray::Zip::from(&*a).and(&*b).map_collect(|&a, &b| op(a, b));
+    let shape = crate::core::shape::broadcast_shapes(a.shape(), b.shape())
+        .map_err(|_| runtime_error(format!("comparison: incompatible shapes {:?} and {:?}", a.shape(), b.shape())))?;
+    let a = a.broadcast(IxDyn(&shape)).ok_or_else(|| runtime_error("comparison: cannot broadcast left operand"))?;
+    let b = b.broadcast(IxDyn(&shape)).ok_or_else(|| runtime_error("comparison: cannot broadcast right operand"))?;
+    let result = ndarray::Zip::from(a).and(b).map_collect(|&a, &b| op(a, b));
     Ok(bool_tensor(result))
 }
 
 fn bool_tensor(data: ArrayD<f32>) -> Value {
     Value::Tensor { data: Arc::new(data), dtype: Dtype::Bool }
+}
+
+#[cfg(test)]
+#[test]
+fn comparisons_broadcast_without_panicking() {
+    let mut env = Env::new();
+    register_builtins(&mut env);
+    for name in ["==", "!=", "<", ">", "<=", ">="] {
+        let Value::BuiltinFn { func, .. } = env.get(name).unwrap() else { panic!("expected builtin") };
+        for (lhs_shape, lhs_data, rhs_shape, rhs_data, shape) in [
+            (vec![2, 1], vec![0., 2.], vec![1, 3], vec![0., 1., 2.], vec![2, 3]),
+            (vec![2, 1], vec![0., 2.], vec![3], vec![0., 1., 2.], vec![2, 3]),
+            (vec![], vec![0.], vec![3], vec![0., 1., 2.], vec![3]),
+            (vec![3], vec![0., 1., 2.], vec![], vec![0.], vec![3]),
+            (vec![3], vec![0., 1., 2.], vec![3], vec![2., 1., 0.], vec![3]),
+            (vec![0, 3], vec![], vec![1, 3], vec![0., 1., 2.], vec![0, 3]),
+        ] {
+            let lhs = ArrayD::from_shape_vec(IxDyn(&lhs_shape), lhs_data).unwrap();
+            let rhs = ArrayD::from_shape_vec(IxDyn(&rhs_shape), rhs_data).unwrap();
+            let args = [Value::tensor_f32(lhs.clone()), Value::tensor_f32(rhs.clone())];
+            let Value::Tensor { data, dtype } = func(&args, &BTreeMap::new()).unwrap()
+                else { panic!("{name}: expected boolean tensor") };
+            assert_eq!(dtype, Dtype::Bool);
+            assert_eq!(data.shape(), shape);
+            let lhs = lhs.broadcast(IxDyn(&shape)).unwrap();
+            let rhs = rhs.broadcast(IxDyn(&shape)).unwrap();
+            for ((actual, a), b) in data.iter().zip(lhs.iter()).zip(rhs.iter()) {
+                let expected = match name {
+                    "==" => a == b, "!=" => a != b, "<" => a < b,
+                    ">" => a > b, "<=" => a <= b, ">=" => a >= b,
+                    _ => unreachable!(),
+                };
+                assert_eq!(*actual, if expected { 1. } else { 0. }, "{name}");
+            }
+        }
+        let args = [Value::Int(0), Value::Int(1)];
+        assert!(matches!(func(&args, &BTreeMap::new()).unwrap(), Value::Bool(_)));
+        let lhs = Value::tensor_f32(ArrayD::zeros(IxDyn(&[2])));
+        let rhs = Value::tensor_f32(ArrayD::zeros(IxDyn(&[3])));
+        for args in [[lhs.clone(), rhs.clone()], [rhs, lhs]] {
+            let error = func(&args, &BTreeMap::new()).unwrap_err().to_string();
+            assert!(error.contains("comparison: incompatible shapes"), "{name}: {error}");
+        }
+    }
 }
 
 #[cfg(test)]
