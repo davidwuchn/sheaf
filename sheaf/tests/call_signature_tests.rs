@@ -720,6 +720,28 @@ impl CompiledCall {
 }
 
 #[test]
+fn offset_ranges_compile_to_vmfb() {
+    initialize_device();
+    let mut interpreter = interpreter_only();
+    for (name, source, expected) in [
+        ("range_positive", "(range 2 5)", "[2.0 3.0 4.0]"),
+        ("range_negative", "(range -2 1)", "[-2.0 -1.0 0.0]"),
+        ("range_zero", "(range 0 3)", "[0.0 1.0 2.0]"),
+        ("range_singleton", "(range 4 5)", "[4.0]"),
+        ("arange_positive", "(arange 2 5)", "[2.0 3.0 4.0]"),
+        ("arange_zero", "(arange 3)", "[0.0 1.0 2.0]"),
+    ] {
+        interpreter.eval(&format!("(defn {name} [unused] (cast {source} :f32))")).unwrap();
+        let expected = interpreter.eval(expected).unwrap();
+        let interpreted = interpreter.eval(&format!("({name} [0.0])")).unwrap();
+        compare_values(&interpreted, &expected, &format!("{name}/interpreter")).unwrap();
+        let args = [interpreter.eval("[0.0]").unwrap()];
+        let compiled = compile_call(&interpreter, name, &args).unwrap().execute(&args).unwrap();
+        compare_values(&compiled, &expected, &format!("{name}/VMFB")).unwrap();
+    }
+}
+
+#[test]
 fn indexing_device_tensors() {
     initialize_device();
     let mut interpreter = interpreter_only();

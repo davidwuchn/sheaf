@@ -348,7 +348,7 @@ impl<'a> CodeGenerator<'a> {
                 }
                 let start_reg = self.emitter.emit_constant_f32(start as f64);
                 let start_ty = StableHLOType::scalar_f32();
-                Ok(self.emitter.emit_binop("add", &iota_reg, &start_reg, &iota_ty, &start_ty))
+                Ok(self.emitter.emit_binop("+", &iota_reg, &start_reg, &iota_ty, &start_ty))
             } else {
                 Err(SheafError::Compile {
                     message: "range expects integer arguments".to_string(),
