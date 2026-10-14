@@ -49,7 +49,8 @@ pub fn format_error(error: &SheafError) -> String {
                 parts.push(format!("  = hint: {}", hint));
             }
         }
-        SheafError::Compile { message, location } => {
+        SheafError::Compile { message, location }
+        | SheafError::InvalidSourceForm { message, location } => {
             parts.push(format!("error: {}", message));
             parts.push(format!(
                 " --> {}:{}",

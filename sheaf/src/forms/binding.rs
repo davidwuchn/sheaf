@@ -9,6 +9,39 @@ use crate::core::error::{SheafError, SheafResult, SourceLocation};
 use crate::core::macro_engine::MacroDef;
 use crate::forms::base::{SpecialForm, check_min_arity, expect_symbol, expect_vector};
 
+fn validate_function_body(expr: &SheafValue) -> SheafResult<()> {
+    match expr {
+        SheafValue::List(values, loc) => {
+            if let Some(SheafValue::Symbol(name, _)) = values.first() {
+                let message = match name.as_str() {
+                    "quote" | "quasiquote" => return Ok(()),
+                    "def" => Some("def is not allowed in a function body; define globals at module level"),
+                    "defn" => Some("defn is not allowed in a function body; define functions at module level"),
+                    "fn" if matches!(values.get(1), Some(SheafValue::Symbol(_, _))) => {
+                        Some("named fn is not supported, use defn at top level for recursion")
+                    }
+                    _ => None,
+                };
+                if let Some(message) = message {
+                    return Err(SheafError::InvalidSourceForm {
+                        message: message.to_string(), location: loc.clone(),
+                    });
+                }
+            }
+            values.iter().try_for_each(validate_function_body)
+        }
+        SheafValue::Vector(values, _) => values.iter().try_for_each(validate_function_body),
+        SheafValue::Dict(values, _) => values.iter().try_for_each(|(key, value)| {
+            validate_function_body(key)?;
+            validate_function_body(value)
+        }),
+        SheafValue::Unquote(value, _) | SheafValue::UnquoteSplicing(value, _) => {
+            validate_function_body(value)
+        }
+        _ => Ok(()),
+    }
+}
+
 /// defn - Function definition: (defn name [params] body)
 pub struct DefnForm;
 
@@ -23,6 +56,12 @@ impl SpecialForm for DefnForm {
         args: &[SheafValue],
         loc: &SourceLocation,
     ) -> SheafResult<CompiledExpr> {
+        if compiler.function_depth > 0 {
+            return Err(SheafError::InvalidSourceForm {
+                message: "defn is not allowed in a function body; define functions at module level".to_string(),
+                location: loc.clone(),
+            });
+        }
         // (defn name [params] body)
         check_min_arity("defn", args, 3, loc)?;
 
@@ -174,7 +213,10 @@ impl SpecialForm for DefnForm {
         // symbols only available at macro expansion time (e.g., transform-layer
         // uses bare `p` as AST data). In that case, register with body_compiled: None;
         // the mini-eval can still call the function via its AST body.
-        let compile_result = compiler.compile(&body_ast);
+        compiler.function_depth += 1;
+        let compile_result = validate_function_body(&body_ast)
+            .and_then(|()| compiler.compile(&body_ast));
+        compiler.function_depth -= 1;
 
         // Restore local scope (must happen even if compile failed)
         compiler.local_vars = saved_locals;
@@ -226,6 +268,7 @@ impl SpecialForm for DefnForm {
 
                 (Some(body_compiled), signature, known_param_types, None)
             }
+            Err(error @ SheafError::InvalidSourceForm { .. }) => return Err(error),
             Err(_) => {
                 // Body compilation failed -- register as AST-only function.
                 // The mini-eval can still call it via its AST body (macro helpers).
@@ -266,6 +309,12 @@ impl SpecialForm for DefForm {
         args: &[SheafValue],
         loc: &SourceLocation,
     ) -> SheafResult<CompiledExpr> {
+        if compiler.function_depth > 0 {
+            return Err(SheafError::InvalidSourceForm {
+                message: "def is not allowed in a function body; define globals at module level".to_string(),
+                location: loc.clone(),
+            });
+        }
         check_min_arity("def", args, 2, loc)?;
 
         let name = expect_symbol(&args[0], "def name", loc)?;
@@ -454,6 +503,12 @@ impl SpecialForm for FnForm {
         args: &[SheafValue],
         loc: &SourceLocation,
     ) -> SheafResult<CompiledExpr> {
+        if matches!(args.first(), Some(SheafValue::Symbol(_, _))) {
+            return Err(SheafError::InvalidSourceForm {
+                message: "named fn is not supported, use defn at top level for recursion".to_string(),
+                location: loc.clone(),
+            });
+        }
         // (fn [params] body)
         check_min_arity("fn", args, 2, loc)?;
 
@@ -480,18 +535,18 @@ impl SpecialForm for FnForm {
             );
         }
 
-        let body = if args.len() == 2 {
-            compiler.compile(&args[1])?
-        } else {
-            // Multiple body expressions -> implicit do
-            let exprs: SheafResult<Vec<CompiledExpr>> =
-                args[1..].iter().map(|e| compiler.compile(e)).collect();
-            CompiledExpr::Do(exprs?)
-        };
-
+        compiler.function_depth += 1;
+        let result = args[1..].iter().try_for_each(validate_function_body).and_then(|()| {
+            if args.len() == 2 {
+                compiler.compile(&args[1])
+            } else {
+                args[1..].iter().map(|expr| compiler.compile(expr))
+                    .collect::<SheafResult<Vec<_>>>().map(CompiledExpr::Do)
+            }
+        });
+        compiler.function_depth -= 1;
         compiler.local_vars = saved_locals;
-
-        Ok(CompiledExpr::Lambda {
+        result.map(|body| CompiledExpr::Lambda {
             params: param_names,
             body: Box::new(body),
         })
@@ -501,6 +556,53 @@ impl SpecialForm for FnForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_function_forms_are_not_retained_as_ast_helpers() {
+        for (source, expected) in [
+            ("(fn self [n] n)", "named fn is not supported"),
+            ("(defn outer [] (fn self [n] n))", "named fn is not supported"),
+            ("(fn [x] (def hidden x))", "def is not allowed in a function body"),
+            ("(defn outer [x] (def hidden x))", "def is not allowed in a function body"),
+            ("(defn outer [] (get) (def hidden 1))", "def is not allowed in a function body"),
+            ("(defn outer [] (get) (defn inner [] 1))", "defn is not allowed"),
+            ("(defn outer [] (get) (fn self [n] n))", "named fn is not supported"),
+            ("(fn [x] (defn inner [] x))", "defn is not allowed in a function body"),
+            ("(defn outer [] (if false (defn inner [] 1) 2))", "defn is not allowed"),
+            ("(defmacro define-x [] '(def hidden 1)) (fn [x] (define-x))", "def is not allowed"),
+        ] {
+            let mut compiler = CompilerContext::new();
+            let parsed = crate::core::parse(source, "<source-forms>").unwrap();
+            let error = parsed.iter().try_for_each(|expr| compiler.compile(expr).map(|_| ())).unwrap_err();
+            assert!(matches!(error, SheafError::InvalidSourceForm { .. }), "{error}");
+            assert!(error.short_message().contains(expected), "{error}");
+            assert!(crate::core::error_format::format_error(&error).contains(expected));
+            assert_eq!(compiler.function_depth, 0);
+            assert!(compiler.local_vars.is_empty());
+            for name in ["outer", "inner", "hidden"] {
+                assert!(!compiler.registry.contains_key(name));
+                assert!(!compiler.env.contains_key(name));
+            }
+            let valid = crate::core::parse("(defn valid [x] x)", "<source-forms>").unwrap();
+            compiler.compile(&valid[0]).unwrap();
+        }
+    }
+
+    #[test]
+    fn quoted_definitions_and_macro_helpers_remain_valid() {
+        let mut compiler = CompilerContext::new();
+        for source in [
+            "(fn [] '(def x 1))", "(fn [] (quote (defn x [] 1)))",
+            "(defn helper [x] macro-data)",
+            "(defmacro identity-macro [x] x)", "(fn [x] (identity-macro x))",
+        ] {
+            let parsed = crate::core::parse(source, "<source-forms>").unwrap();
+            compiler.compile(&parsed[0]).unwrap();
+            assert_eq!(compiler.function_depth, 0);
+            assert!(compiler.local_vars.is_empty());
+        }
+        assert_eq!(compiler.registry["helper"].body.as_symbol(), Some("macro-data"));
+    }
 
     #[test]
     fn test_defn_form_name() {

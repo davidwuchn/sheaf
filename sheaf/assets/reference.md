@@ -1962,6 +1962,12 @@ Binds a global name to an immutable value. The value is evaluated once at
 definition time. Redefinition is not allowed. Use `def` for constants,
 configuration, and shared data that does not change.
 
+In Sheaf, a global name is bound exactly once. This differs from Clojure, where
+a `defn` inside a function redefines the var each time the function runs.
+
+For this reason, `def` and `defn` are only allowed at top level, including
+inside a top-level `let` or `do`. They are rejected inside a function body.
+
 ```sheaf
 (def scale 2.0)
 (defn double [x] (* x scale))
@@ -2006,6 +2012,8 @@ Defines an anonymous function (lambda) that captures no external state (pure
 function). It is primarily used for short-lived transformations, mapping
 operations, or as arguments to higher-order functions like `map` or `vmap`.
 Multiple body expressions are supported (implicit `do`).
+
+Unlike Clojure, `fn` cannot be named: `(fn self [n] ...)` is rejected.
 
 ```sheaf
 ((fn [x] (+ x 1)) 10)         ; => 11

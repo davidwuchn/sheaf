@@ -62,6 +62,11 @@ pub enum SheafError {
     },
     /// IO error
     Io(String),
+    /// Invalid source forms cannot be retained as AST-only macro helpers.
+    InvalidSourceForm {
+        message: String,
+        location: SourceLocation,
+    },
 }
 
 impl fmt::Display for SheafError {
@@ -74,7 +79,8 @@ impl fmt::Display for SheafError {
                     location.filename, location.line, message
                 )
             }
-            SheafError::Compile { message, location } => {
+            SheafError::Compile { message, location }
+            | SheafError::InvalidSourceForm { message, location } => {
                 write!(
                     f,
                     "{}:{}: compile error: {}",
@@ -132,6 +138,10 @@ impl SheafError {
                 message,
                 location: loc.clone(),
             },
+            SheafError::InvalidSourceForm { message, .. } => SheafError::InvalidSourceForm {
+                message,
+                location: loc.clone(),
+            },
             SheafError::Runtime { message, .. } => SheafError::Runtime {
                 message,
                 location: Some(loc.clone()),
@@ -149,7 +159,8 @@ impl SheafError {
         match self {
             SheafError::Parse { message, .. }
             | SheafError::Compile { message, .. }
-            | SheafError::Runtime { message, .. } => Cow::Borrowed(message),
+            | SheafError::Runtime { message, .. }
+            | SheafError::InvalidSourceForm { message, .. } => Cow::Borrowed(message),
             SheafError::AutodiffMissingRule { operation, .. } => Cow::Owned(format!(
                 "no differentiation rule for operation '{}'",
                 operation

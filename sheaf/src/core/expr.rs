@@ -56,6 +56,7 @@ pub struct CompilerContext {
 
     /// Local variables (for let bindings, function params)
     pub local_vars: HashMap<String, SheafValue>,
+    pub(crate) function_depth: usize,
 
     /// Parameter type registry (structured dict layouts)
     pub param_types: HashMap<String, ParamLayout>,
@@ -269,6 +270,7 @@ impl CompilerContext {
             env: Self::init_env(),
             registry: HashMap::new(),
             local_vars: HashMap::new(),
+            function_depth: 0,
             param_types: HashMap::new(),
             param_scope: HashMap::new(),
             load_path: Self::default_load_path(),
