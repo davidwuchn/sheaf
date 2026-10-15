@@ -720,6 +720,31 @@ impl CompiledCall {
 }
 
 #[test]
+fn tuple_argument_layouts_survive_vmfb_roundtrips() {
+    initialize_device();
+    let mut interpreter = interpreter_only();
+    interpreter.eval("(defn tuple_layout_identity [x] x)").unwrap();
+    let value = Value::Tuple(vec![
+        Value::Dict(BTreeMap::from([
+            ("x".to_string(), Value::List(vec![interpreter.eval("[1.0 2.0]").unwrap()])),
+        ])),
+        Value::Tuple(vec![interpreter.eval("[3.0]").unwrap()]),
+    ]);
+    interpreter.env_mut().set("tuple_layout_input", value.clone());
+    let expression = CompiledExpr::FunctionCall { name: "tuple_layout_identity".to_string(),
+        args: vec![CompiledExpr::Symbol("tuple_layout_input".to_string())], loc: None };
+    let interpreted = sheaf_compiler::interpreter::eval(&expression, interpreter.env_mut()).unwrap();
+    compare_values(&interpreted, &value, "tuple/interpreter").unwrap();
+    let call = compile_call(&interpreter, "tuple_layout_identity", std::slice::from_ref(&value)).unwrap();
+    let has_tuple_layout = call.signature.arg_type_layouts.iter().any(|(_, layout)| {
+        matches!(layout, sheaf_compiler::core::inference::ValueLayout::Tuple(_))
+    });
+    let compiled = call.execute(std::slice::from_ref(&value)).unwrap();
+    compare_values(&compiled, &value, "tuple/VMFB").unwrap();
+    assert!(has_tuple_layout);
+}
+
+#[test]
 fn offset_ranges_compile_to_vmfb() {
     initialize_device();
     let mut interpreter = interpreter_only();

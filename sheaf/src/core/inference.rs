@@ -72,6 +72,9 @@ impl ValueLayout {
             Value::List(items) => {
                 ValueLayout::List(items.iter().map(ValueLayout::from_value).collect())
             }
+            Value::Tuple(items) => {
+                ValueLayout::Tuple(items.iter().map(ValueLayout::from_value).collect())
+            }
             _ => ValueLayout::Leaf,
         }
     }
@@ -773,6 +776,35 @@ mod tests {
             args,
             loc: None,
         }
+    }
+
+    #[cfg(not(sheaf_frontend))]
+    #[test]
+    fn tuple_layouts_preserve_nested_containers() {
+        use crate::interpreter::value::Value;
+        use ValueLayout::{Dict, Leaf, List, Tuple};
+        let value = Value::Tuple(vec![
+            Value::Dict(std::collections::BTreeMap::from([
+                ("x".to_string(), Value::List(vec![Value::Float(1.0)])),
+            ])),
+            Value::Tuple(vec![Value::Float(2.0)]),
+            Value::Tuple(vec![]),
+        ]);
+        let expected = Tuple(vec![
+            Dict(vec![("x".to_string(), List(vec![Leaf]))]), Tuple(vec![Leaf]), Tuple(vec![]),
+        ]);
+        let layout = ValueLayout::from_value(&value);
+        assert_eq!(layout, expected);
+        let flat = Value::Tuple(vec![
+            Value::Tuple(vec![Value::Tuple(vec![Value::Float(1.0)])]),
+            Value::Tuple(vec![Value::Float(2.0)]), Value::Tuple(vec![]),
+        ]);
+        let Value::Tuple(restored) = layout.reconstruct(flat) else { panic!("expected tuple") };
+        let Value::Dict(fields) = &restored[0] else { panic!("expected nested dict") };
+        let Value::List(items) = &fields["x"] else { panic!("expected nested list") };
+        assert!(matches!(items.as_slice(), [Value::Float(1.0)]));
+        assert!(matches!(&restored[1], Value::Tuple(items) if matches!(items.as_slice(), [Value::Float(2.0)])));
+        assert!(matches!(&restored[2], Value::Tuple(items) if items.is_empty()));
     }
 
     #[test]
