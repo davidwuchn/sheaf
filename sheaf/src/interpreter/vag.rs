@@ -50,7 +50,7 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
         }
     }
 
-    use crate::autodiff::{collect_free_vars, collect_function_call_names, contains_undiffable_ops, grad_simplified, inline_function_calls};
+    use crate::autodiff::{collect_free_vars, contains_undiffable_ops, grad_simplified, inline_function_calls};
 
     if let Value::Function { params: fn_params, body, closure, .. } = func
         && fn_params.len() == 1 {
@@ -62,8 +62,7 @@ pub(super) fn eval_value_and_grad_call(func: &Value, params: &Value, env: &mut E
         // augment from the env so that inlining can resolve calls like (model x p).
         let mut free_set = std::collections::HashSet::new();
         collect_free_vars(body, &mut free_set);
-        let mut call_names = std::collections::HashSet::new();
-        collect_function_call_names(body, &mut call_names);
+        let call_names = crate::lowering::call_graph::direct_callees(body);
         // Function calls that are NOT in the registry may be closure variables
         for name in &call_names {
             if !env.registry.contains_key(name.as_str()) {

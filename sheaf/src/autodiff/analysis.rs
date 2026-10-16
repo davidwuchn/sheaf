@@ -65,55 +65,6 @@ pub fn collect_free_vars(expr: &CompiledExpr, out: &mut HashSet<String>) {
     }
 }
 
-/// Collect all function call target names in a CompiledExpr.
-pub fn collect_function_call_names(expr: &CompiledExpr, out: &mut HashSet<String>) {
-    match expr {
-        CompiledExpr::FunctionCall { name, args, .. } => {
-            out.insert(name.clone());
-            for a in args {
-                collect_function_call_names(a, out);
-            }
-        }
-        CompiledExpr::Let { bindings, body } => {
-            for (_, v) in bindings {
-                collect_function_call_names(v, out);
-            }
-            collect_function_call_names(body, out);
-        }
-        CompiledExpr::Do(exprs) => {
-            for e in exprs {
-                collect_function_call_names(e, out);
-            }
-        }
-        CompiledExpr::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_function_call_names(condition, out);
-            collect_function_call_names(then_branch, out);
-            if let Some(e) = else_branch {
-                collect_function_call_names(e, out);
-            }
-        }
-        CompiledExpr::Lambda { body, .. } => {
-            collect_function_call_names(body, out);
-        }
-        CompiledExpr::LambdaCall { callee, args } => {
-            collect_function_call_names(callee, out);
-            for a in args {
-                collect_function_call_names(a, out);
-            }
-        }
-        CompiledExpr::Vector(elems) => {
-            for e in elems {
-                collect_function_call_names(e, out);
-            }
-        }
-        _ => {}
-    }
-}
-
 /// Return whether an autodiff expression may depend on `symbol`.
 ///
 /// This analysis models lexical bindings only. It does not model global
@@ -351,6 +302,29 @@ mod tests {
             args,
             loc: None,
         }
+    }
+
+    #[test]
+    fn shared_call_analysis_covers_containers_and_loops() {
+        let target = |name: &str| CompiledExpr::FunctionCall {
+            name: name.to_string(), args: vec![], loc: None,
+        };
+        let body = CompiledExpr::Tuple(vec![
+            CompiledExpr::Dict(vec![(target("key"), target("value"))]),
+            CompiledExpr::Repeat {
+                index_var: "i".to_string(), count: Box::new(target("count")),
+                acc_var: "a".to_string(), acc_init: Box::new(target("initial")),
+                body: Box::new(target("step")),
+            },
+            CompiledExpr::While {
+                condition: Box::new(target("condition")), acc_var: "a".to_string(),
+                acc_init: Box::new(target("while_initial")), body: Box::new(target("while_step")),
+            },
+            CompiledExpr::FunctionRef("not_called".to_string()),
+        ]);
+        let expected = ["key", "value", "count", "initial", "step", "condition", "while_initial", "while_step"]
+            .into_iter().map(str::to_string).collect::<std::collections::HashSet<_>>();
+        assert_eq!(crate::lowering::call_graph::direct_callees(&body), expected);
     }
 
     #[test]
