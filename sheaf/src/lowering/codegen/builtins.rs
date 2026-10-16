@@ -179,23 +179,17 @@ impl<'a> CodeGenerator<'a> {
                 return Ok((reg, ty));
             }
 
-            let extra = from_shape.len().saturating_sub(target_shape.len());
-            for _ in 0..extra {
-                let (r, t) = self.emitter.emit_reduce_sum(&reg, &ty, 0, false);
-                reg = r;
-                ty = t;
-            }
-
-            let cur_shape = ty.shape().to_vec();
-            for (i, (&cur_d, &tgt_d)) in
-                cur_shape.iter().zip(target_shape.iter()).enumerate().rev()
-            {
-                if tgt_d == 1 && cur_d > 1 {
-                    let (r, t) =
-                        self.emitter.emit_reduce_sum(&reg, &ty, i as i64, true);
-                    reg = r;
-                    ty = t;
-                }
+            let axes = crate::core::shape::sum_to_shape_axes(&from_shape, &target_shape)
+                .map_err(|_| SheafError::Compile {
+                    message: format!("sum_to_shape: cannot reduce {from_shape:?} to {target_shape:?}"),
+                    location: crate::core::error::SourceLocation::unknown(),
+                })?;
+            let extra = from_shape.len() - target_shape.len();
+            for axis in axes.into_iter().rev() {
+                let (reduced, reduced_type) =
+                    self.emitter.emit_reduce_sum(&reg, &ty, axis as i64, axis >= extra);
+                reg = reduced;
+                ty = reduced_type;
             }
 
             Ok((reg, ty))

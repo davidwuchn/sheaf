@@ -51,9 +51,57 @@ where
     Ok(reversed)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SumToShapeError<Dimension> {
+    Rank { source: usize, target: usize },
+    Dimension { axis_from_right: usize, source: Dimension, target: Dimension },
+}
+
+/// Validate a broadcast adjoint contraction and return axes in the source shape.
+pub fn sum_to_shape_axes<Dimension>(
+    source: &[Dimension],
+    target: &[Dimension],
+) -> Result<Vec<usize>, SumToShapeError<Dimension>>
+where
+    Dimension: Copy + Eq + From<u8>,
+{
+    if target.len() > source.len() {
+        return Err(SumToShapeError::Rank { source: source.len(), target: target.len() });
+    }
+    let rank = source.len();
+    let extra = rank - target.len();
+    let mut axes: Vec<_> = (0..extra).collect();
+    for (index, (&source, &target)) in source[extra..].iter().zip(target).enumerate() {
+        if source == target {
+            continue;
+        }
+        if target != Dimension::from(1) {
+            return Err(SumToShapeError::Dimension {
+                axis_from_right: rank - 1 - extra - index,
+                source,
+                target,
+            });
+        }
+        axes.push(extra + index);
+    }
+    Ok(axes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{BroadcastError, broadcast_shapes};
+
+    #[test]
+    fn adjoint_contraction_requires_a_broadcast_suffix() {
+        use super::sum_to_shape_axes;
+        assert_eq!(sum_to_shape_axes(&[2usize, 3, 4], &[1, 4]), Ok(vec![0, 1]));
+        assert_eq!(sum_to_shape_axes(&[2usize, 3], &[]), Ok(vec![0, 1]));
+        assert_eq!(sum_to_shape_axes(&[2usize, 1], &[2]), Err(super::SumToShapeError::Dimension {
+            axis_from_right: 0, source: 1, target: 2,
+        }));
+        assert!(sum_to_shape_axes(&[2usize], &[1, 2]).is_err());
+        assert_eq!(sum_to_shape_axes(&[0usize, 3], &[1, 3]), Ok(vec![0]));
+    }
 
     #[test]
     fn broadcasts_trailing_dimensions() {

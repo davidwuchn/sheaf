@@ -720,6 +720,53 @@ impl CompiledCall {
 }
 
 #[test]
+fn broadcast_gradient_reductions_match_their_target_shapes() {
+    initialize_device();
+    let mut interpreter = interpreter_only();
+    let session = shared_session().unwrap();
+    for (index, (source, target, expected)) in [
+        (vec![2, 3, 4], vec![1, 4], Some(6.0)),
+        (vec![2, 3], vec![], Some(6.0)),
+        (vec![2, 1, 3], vec![1, 3], Some(2.0)),
+        (vec![2, 3], vec![2, 3], Some(1.0)),
+        (vec![0, 3], vec![1, 3], Some(0.0)),
+        (vec![2, 1], vec![2], None),
+        (vec![2], vec![1, 2], None),
+    ].into_iter().enumerate() {
+        let name = format!("reduce_broadcast_{index}");
+        interpreter.eval(&format!("(defn {name} [x] x)")).unwrap();
+        let mut function = interpreter.registry_get(&name).unwrap().clone();
+        let shape = target.iter().map(ToString::to_string).collect::<Vec<_>>().join(" ");
+        function.body = sheaf_compiler::parse(
+            &format!("(sum_to_shape x [{shape}])"), "<broadcast-gradient>",
+        ).unwrap().remove(0);
+        function.signature = None;
+        function.body_compiled = Some(CompiledExpr::FunctionCall {
+            name: "sum_to_shape".to_string(), loc: None,
+            args: vec![CompiledExpr::Symbol("x".to_string()), CompiledExpr::Vector(
+                target.iter().map(|&dim| CompiledExpr::Integer(dim as i64)).collect(),
+            )],
+        });
+        let args = [Value::tensor_f32(ndarray::ArrayD::ones(ndarray::IxDyn(&source)))];
+        let mut jit = JitCompiler::new();
+        let outcome = jit.try_jit_compile(&function, &args, &interpreter.env().registry, &session);
+        let Some(expected) = expected else {
+            let JitCompileOutcome::Failed(reason) = outcome else { panic!("expected rejection: {outcome:?}") };
+            assert!(reason.contains("sum_to_shape: cannot reduce"), "{reason}");
+            continue;
+        };
+        let JitCompileOutcome::Compiled(signature) = outcome else { panic!("expected compilation: {outcome:?}") };
+        assert_eq!(signature.return_type.shape(), target.iter().map(|&dim| dim as i64).collect::<Vec<_>>());
+        let key = cache_key_for_function(&function, &args, &interpreter.env().registry).unwrap();
+        let call = CompiledCall { session: session.clone(), signature,
+            qualified_name: format!("{}.{}", module_name_for(&name, &key), name) };
+        let actual = call.execute(&args).unwrap();
+        let expected = Value::tensor_f32(ndarray::ArrayD::from_elem(ndarray::IxDyn(&target), expected));
+        compare_values(&actual, &expected, "broadcast gradient/VMFB").unwrap();
+    }
+}
+
+#[test]
 fn tuple_argument_layouts_survive_vmfb_roundtrips() {
     initialize_device();
     let mut interpreter = interpreter_only();
