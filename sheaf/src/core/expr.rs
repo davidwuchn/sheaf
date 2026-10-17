@@ -722,6 +722,42 @@ pub enum CompiledExpr {
 }
 
 impl CompiledExpr {
+    /// Visit direct child expressions without cloning them.
+    pub fn for_each_child<'a>(&'a self, mut visit: impl FnMut(&'a CompiledExpr)) {
+        match self {
+            Self::FunctionCall { args, .. } => args.iter().for_each(&mut visit),
+            Self::Let { bindings, body } => {
+                for (_, value) in bindings { visit(value); }
+                visit(body);
+            }
+            Self::Do(exprs) | Self::Vector(exprs) | Self::Tuple(exprs) => exprs.iter().for_each(&mut visit),
+            Self::If { condition, then_branch, else_branch } => {
+                visit(condition);
+                visit(then_branch);
+                if let Some(branch) = else_branch { visit(branch); }
+            }
+            Self::Lambda { body, .. } => visit(body),
+            Self::LambdaCall { callee, args } => {
+                visit(callee);
+                args.iter().for_each(&mut visit);
+            }
+            Self::Dict(pairs) => {
+                for (key, value) in pairs { visit(key); visit(value); }
+            }
+            Self::Repeat { count, acc_init, body, .. } => {
+                visit(count); visit(acc_init); visit(body);
+            }
+            Self::While { condition, acc_init, body, .. } => {
+                visit(condition); visit(acc_init); visit(body);
+            }
+            Self::Guard { expr, .. } => visit(expr),
+            Self::Def { value, .. } => visit(value),
+            Self::Integer(_) | Self::Float(_) | Self::Boolean(_) | Self::Nil
+            | Self::String(_) | Self::Keyword(_) | Self::Symbol(_) | Self::FunctionRef(_)
+            | Self::Quoted(_) | Self::GetTupleElement { .. } | Self::ValueAndGrad { .. } => {}
+        }
+    }
+
     pub fn map_children(&self, mut f: impl FnMut(&CompiledExpr) -> CompiledExpr) -> CompiledExpr {
         match self {
             CompiledExpr::Integer(_)

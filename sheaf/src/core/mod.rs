@@ -4,6 +4,7 @@
 //! Core compiler components
 
 pub mod ast;
+pub mod bindings;
 pub mod color;
 pub mod config;
 pub mod dtype;

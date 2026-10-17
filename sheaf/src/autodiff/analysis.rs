@@ -8,61 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Collect all symbol names referenced in a CompiledExpr (not bound by inner let/lambda).
 pub fn collect_free_vars(expr: &CompiledExpr, out: &mut HashSet<String>) {
-    match expr {
-        CompiledExpr::Symbol(name) => {
-            out.insert(name.clone());
-        }
-        CompiledExpr::FunctionCall { args, .. } => {
-            for a in args {
-                collect_free_vars(a, out);
-            }
-        }
-        CompiledExpr::Let { bindings, body } => {
-            for (_, v) in bindings {
-                collect_free_vars(v, out);
-            }
-            collect_free_vars(body, out);
-        }
-        CompiledExpr::Do(exprs) => {
-            for e in exprs {
-                collect_free_vars(e, out);
-            }
-        }
-        CompiledExpr::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_free_vars(condition, out);
-            collect_free_vars(then_branch, out);
-            if let Some(e) = else_branch {
-                collect_free_vars(e, out);
-            }
-        }
-        CompiledExpr::Lambda { params, body } => {
-            let mut inner = HashSet::new();
-            collect_free_vars(body, &mut inner);
-            for p in params {
-                inner.remove(p.as_str());
-            }
-            out.extend(inner);
-        }
-        CompiledExpr::LambdaCall { callee, args } => {
-            collect_free_vars(callee, out);
-            for a in args {
-                collect_free_vars(a, out);
-            }
-        }
-        CompiledExpr::GetTupleElement { param, .. } => {
-            out.insert(param.clone());
-        }
-        CompiledExpr::Vector(elems) => {
-            for e in elems {
-                collect_free_vars(e, out);
-            }
-        }
-        _ => {}
-    }
+    out.extend(crate::core::bindings::free_locals(expr));
 }
 
 /// Return whether an autodiff expression may depend on `symbol`.
@@ -302,6 +248,17 @@ mod tests {
             args,
             loc: None,
         }
+    }
+
+    #[test]
+    fn free_variable_collection_respects_local_bindings() {
+        let expr = CompiledExpr::Let {
+            bindings: vec![(BindingPattern::Simple("local".into()), CompiledExpr::Float(1.0))],
+            body: Box::new(CompiledExpr::Do(vec![symbol("local"), symbol("outside")])),
+        };
+        let mut names = std::collections::HashSet::from(["caller".to_string()]);
+        super::collect_free_vars(&expr, &mut names);
+        assert_eq!(names, ["caller", "outside"].into_iter().map(str::to_string).collect());
     }
 
     #[test]
