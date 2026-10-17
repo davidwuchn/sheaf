@@ -1070,8 +1070,8 @@ mod cache_key_tests {
     }
 
     #[test]
-    fn preserves_structured_autodiff_output_errors_in_vag_outcome() {
-        let compiler = JitCompiler {
+    fn structured_vag_errors_do_not_hide_compiler_failures() {
+        let mut compiler = JitCompiler {
             iree_compile_path: None,
             target_backend: "llvm-cpu".to_string(),
             failed_definitions: HashMap::new(),
@@ -1090,6 +1090,20 @@ mod cache_key_tests {
             compiler.classify_vag_skip(),
             JitVagOutcome::Success(Err(SheafError::AutodiffMissingGradientOutput { symbol }))
                 if symbol == "p_0"
+        ));
+        compiler.last_vag_error = Some(SheafError::InvalidShapeDimension {
+            message: "reshape: shape dimension is float (64.0), expected an integer".to_string(),
+            location: SourceLocation::unknown(),
+        });
+        assert!(matches!(
+            compiler.classify_vag_skip(),
+            JitVagOutcome::Success(Err(SheafError::InvalidShapeDimension { .. }))
+        ));
+        compiler.last_vag_error = None;
+        compiler.last_vag_fail_reason = Some("codegen: internal panic".to_string());
+        assert!(matches!(
+            compiler.classify_vag_skip(),
+            JitVagOutcome::Bug(reason) if reason == "codegen: internal panic"
         ));
     }
 

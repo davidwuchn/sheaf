@@ -172,7 +172,7 @@ impl<'a> CodeGenerator<'a> {
     ) -> SheafResult<(Register, StableHLOType)> {
         let (mut reg, mut ty) = self.generate(&args[0])?;
         if let CompiledExpr::Vector(shape_elems) = &args[1] {
-            let target_shape = self.parse_shape_vec(shape_elems)?;
+            let target_shape = self.parse_shape_vec("sum_to_shape", shape_elems)?;
             let from_shape = ty.shape().to_vec();
 
             if from_shape == target_shape {
@@ -209,7 +209,7 @@ impl<'a> CodeGenerator<'a> {
         if let (CompiledExpr::Vector(shape_elems), CompiledExpr::Integer(start)) =
             (&args[1], &args[2])
         {
-            let target_shape = self.parse_shape_vec(shape_elems)?;
+            let target_shape = self.parse_shape_vec("slice_grad", shape_elems)?;
             let adj_shape = adj_ty.shape().to_vec();
 
             let axis = adj_shape

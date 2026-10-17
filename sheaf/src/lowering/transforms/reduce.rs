@@ -45,7 +45,7 @@ fn unroll_reduces_rec(
     let_env: &HashMap<String, CompiledExpr>,
 ) -> CompiledExpr {
     match expr {
-        CompiledExpr::FunctionCall { name, args, .. } if name == "reduce" && args.len() == 3 => {
+        CompiledExpr::FunctionCall { name, args, loc } if name == "reduce" && args.len() == 3 => {
             let (carry_p, elem_p, body) = match &args[0] {
                 CompiledExpr::Lambda { params, body } if params.len() == 2 => {
                     (&params[0], &params[1], body.as_ref())
@@ -57,7 +57,7 @@ fn unroll_reduces_rec(
                             .iter()
                             .map(|a| unroll_reduces_rec(a, param_types, let_env))
                             .collect(),
-                        loc: None,
+                        loc: loc.clone(),
                     };
                 }
             };
@@ -95,7 +95,7 @@ fn unroll_reduces_rec(
                     return CompiledExpr::FunctionCall {
                         name: name.clone(),
                         args: vec![args[0].clone(), init, coll],
-                        loc: None,
+                        loc: loc.clone(),
                     };
                 }
             };
@@ -162,13 +162,13 @@ fn unroll_reduces_rec(
             }
         }
 
-        CompiledExpr::FunctionCall { name, args, .. } => CompiledExpr::FunctionCall {
+        CompiledExpr::FunctionCall { name, args, loc } => CompiledExpr::FunctionCall {
             name: name.clone(),
             args: args
                 .iter()
                 .map(|a| unroll_reduces_rec(a, param_types, let_env))
                 .collect(),
-            loc: None,
+            loc: loc.clone(),
         },
         CompiledExpr::Let { bindings, body } => {
             let mut new_env = let_env.clone();

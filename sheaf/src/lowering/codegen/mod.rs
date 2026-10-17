@@ -17,7 +17,7 @@ mod tests;
 use crate::lowering::stablehlo::{Register, StableHLOEmitter, StableHLOType};
 use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::core::inference::ValueLayout;
-use crate::core::error::{SheafError, SheafResult};
+use crate::core::error::{SheafError, SheafResult, SourceLocation};
 pub(crate) use helpers::{
     try_flatten_to_constant, TupleLeaf, collect_tuple_references, collect_tuple_type_leaves,
     expand_tuple_to_symbols,
@@ -398,7 +398,11 @@ impl<'a> CodeGenerator<'a> {
                 Ok((current_reg, current_ty))
             }
 
-            CompiledExpr::FunctionCall { name, args, .. } => self.generate_function_call(name, args),
+            CompiledExpr::FunctionCall { name, args, loc } => self.generate_function_call(name, args)
+                .map_err(|error| match loc {
+                    Some(location) => error.with_fallback_location(location),
+                    None => error,
+                }),
 
     CompiledExpr::Let { bindings, body } => {
         let saved_bindings = self.bindings.clone();
@@ -572,10 +576,18 @@ impl<'a> CodeGenerator<'a> {
         }
     }
 
-    fn parse_shape_vec(&self, elems: &[CompiledExpr]) -> SheafResult<Vec<i64>> {
+    fn parse_shape_vec(&self, operation: &str, elems: &[CompiledExpr]) -> SheafResult<Vec<i64>> {
         elems.iter().map(|e| match e {
             CompiledExpr::Integer(n) => Ok(*n),
             CompiledExpr::Float(f) if *f == f.floor() => Ok(*f as i64),
+            CompiledExpr::Float(value) => Err(SheafError::InvalidShapeDimension {
+                message: format!("{operation}: shape dimension is float ({value:?}), expected an integer"),
+                location: SourceLocation::unknown(),
+            }),
+            CompiledExpr::Boolean(value) => Err(SheafError::InvalidShapeDimension {
+                message: format!("{operation}: shape dimension is bool ({value}), expected an integer"),
+                location: SourceLocation::unknown(),
+            }),
             CompiledExpr::Symbol(name) => {
                 if let Some(&(reg, _)) = self.bindings.get(name.as_str()) {
                     if let Some(v) = self.emitter.known_scalar_value(&reg) {

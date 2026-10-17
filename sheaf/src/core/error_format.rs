@@ -50,7 +50,8 @@ pub fn format_error(error: &SheafError) -> String {
             }
         }
         SheafError::Compile { message, location }
-        | SheafError::InvalidSourceForm { message, location } => {
+        | SheafError::InvalidSourceForm { message, location }
+        | SheafError::InvalidShapeDimension { message, location } => {
             parts.push(format!("error: {}", message));
             parts.push(format!(
                 " --> {}:{}",
@@ -243,15 +244,15 @@ fn get_compile_hint(message: &str) -> Option<String> {
         return None; // message already contains usage info
     }
 
-    // Shape quote reminder
-    if message.contains("shape") && message.contains("must be") {
-        return Some(
-            "Shape arguments must be static. Quote your shape: (zeros '[3 4]) rather than (zeros [3 4])"
-                .to_string(),
-        );
-    }
+    get_shape_hint(message)
+}
 
-    None
+fn get_shape_hint(message: &str) -> Option<String> {
+    if message.contains("shape") && message.contains("integer") && message.contains("float") {
+        Some("Use // for integer division, or convert explicitly with (int ...).".to_string())
+    } else {
+        None
+    }
 }
 
 fn get_runtime_hint(message: &str) -> Option<String> {
@@ -291,11 +292,8 @@ fn get_runtime_hint(message: &str) -> Option<String> {
         );
     }
 
-    // Shape errors
-    if message.contains("shape") && message.contains("must be") {
-        return Some(
-            "Quote shape arguments: (zeros '[3 4]) rather than (zeros [3 4])".to_string(),
-        );
+    if let Some(hint) = get_shape_hint(message) {
+        return Some(hint);
     }
 
     // Index out of bounds

@@ -776,10 +776,10 @@ impl CompiledExpr {
             CompiledExpr::Dict(pairs) => CompiledExpr::Dict(
                 pairs.iter().map(|(k, v)| (f(k), f(v))).collect(),
             ),
-            CompiledExpr::FunctionCall { name, args, .. } => CompiledExpr::FunctionCall {
+            CompiledExpr::FunctionCall { name, args, loc } => CompiledExpr::FunctionCall {
                 name: name.clone(),
                 args: args.iter().map(&mut f).collect(),
-                loc: None,
+                loc: loc.clone(),
             },
             CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
                 bindings: bindings.iter().map(|(k, v)| (k.clone(), f(v))).collect(),

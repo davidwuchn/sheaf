@@ -34,6 +34,7 @@ fn preserves_structured_vag_error(error: &crate::core::error::SheafError) -> boo
         error,
         crate::core::error::SheafError::AutodiffMissingGradientOutput { .. }
             | crate::core::error::SheafError::AutodiffMissingRule { .. }
+            | crate::core::error::SheafError::InvalidShapeDimension { .. }
     )
 }
 

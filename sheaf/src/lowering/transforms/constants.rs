@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Damien Boureille
 // Licensed under the MIT License.
 
+use crate::core::error::SourceLocation;
 use crate::core::expr::{BindingPattern, CompiledExpr};
 use crate::interpreter::value::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -33,7 +34,7 @@ fn resolve_constants_rec(
             }
         }
         CompiledExpr::Symbol(name) => locals.get(name).cloned().unwrap_or_else(|| expr.clone()),
-        CompiledExpr::FunctionCall { name, args, .. } if name == "shape" && args.len() == 1 => {
+        CompiledExpr::FunctionCall { name, args, loc } if name == "shape" && args.len() == 1 => {
             let shape_from_sym = match &args[0] {
                 CompiledExpr::Symbol(s) => shapes.get(s.as_str()).cloned(),
                 _ => None,
@@ -54,10 +55,10 @@ fn resolve_constants_rec(
                     .iter()
                     .map(|a| resolve_constants_rec(a, constants, locals, shapes, skip_lambda))
                     .collect(),
-                loc: None,
+                loc: loc.clone(),
             }
         }
-        CompiledExpr::FunctionCall { name, args, .. } if name == "get" && args.len() == 2 => {
+        CompiledExpr::FunctionCall { name, args, loc } if name == "get" && args.len() == 2 => {
             let recv = resolve_constants_rec(&args[0], constants, locals, shapes, skip_lambda);
             let idx = resolve_constants_rec(&args[1], constants, locals, shapes, skip_lambda);
             if let (CompiledExpr::Vector(elems), CompiledExpr::Integer(i)) = (&recv, &idx) {
@@ -70,10 +71,10 @@ fn resolve_constants_rec(
             CompiledExpr::FunctionCall {
                 name: name.clone(),
                 args: vec![recv, idx],
-                loc: None,
+                loc: loc.clone(),
             }
         }
-        CompiledExpr::FunctionCall { name, args, .. } if name == "cons" && args.len() == 2 => {
+        CompiledExpr::FunctionCall { name, args, loc } if name == "cons" && args.len() == 2 => {
             let head = resolve_constants_rec(&args[0], constants, locals, shapes, skip_lambda);
             let tail = resolve_constants_rec(&args[1], constants, locals, shapes, skip_lambda);
             let tail_elems = match &tail {
@@ -109,11 +110,11 @@ fn resolve_constants_rec(
                 CompiledExpr::FunctionCall {
                     name: name.clone(),
                     args: vec![head, tail],
-                    loc: None,
+                    loc: loc.clone(),
                 }
             }
         }
-        CompiledExpr::FunctionCall { name, args, .. } if name == "int" && args.len() == 1 => {
+        CompiledExpr::FunctionCall { name, args, loc } if name == "int" && args.len() == 1 => {
             let inner = resolve_constants_rec(&args[0], constants, locals, shapes, skip_lambda);
             match &inner {
                 CompiledExpr::Integer(_) => inner,
@@ -121,17 +122,17 @@ fn resolve_constants_rec(
                 _ => CompiledExpr::FunctionCall {
                     name: name.clone(),
                     args: vec![inner],
-                    loc: None,
+                    loc: loc.clone(),
                 },
             }
         }
-        CompiledExpr::FunctionCall { name, args, .. }
+        CompiledExpr::FunctionCall { name, args, loc }
             if (name == "first" || name == "last") && args.len() == 1 =>
         {
             let recv = resolve_constants_rec(&args[0], constants, locals, shapes, skip_lambda);
-            push_first_last(name, recv)
+            push_first_last(name, recv, loc.clone())
         }
-        CompiledExpr::FunctionCall { name, args, .. } => {
+        CompiledExpr::FunctionCall { name, args, loc } => {
             let resolved: Vec<_> = args
                 .iter()
                 .map(|a| resolve_constants_rec(a, constants, locals, shapes, skip_lambda))
@@ -139,7 +140,7 @@ fn resolve_constants_rec(
             try_fold_arithmetic(name, &resolved).unwrap_or_else(|| CompiledExpr::FunctionCall {
                 name: name.clone(),
                 args: resolved,
-                loc: None,
+                loc: loc.clone(),
             })
         }
         CompiledExpr::Let { bindings, body } => {
@@ -468,7 +469,7 @@ fn extract_scalars_rec(
     }
 }
 
-fn push_first_last(name: &str, expr: CompiledExpr) -> CompiledExpr {
+fn push_first_last(name: &str, expr: CompiledExpr, loc: Option<SourceLocation>) -> CompiledExpr {
     match expr {
         CompiledExpr::Vector(elems) => if name == "first" {
             elems.into_iter().next()
@@ -478,12 +479,12 @@ fn push_first_last(name: &str, expr: CompiledExpr) -> CompiledExpr {
         .unwrap_or_else(|| CompiledExpr::Vector(vec![])),
         CompiledExpr::Let { bindings, body } => CompiledExpr::Let {
             bindings,
-            body: Box::new(push_first_last(name, *body)),
+            body: Box::new(push_first_last(name, *body, loc)),
         },
         other => CompiledExpr::FunctionCall {
             name: name.to_string(),
             args: vec![other],
-            loc: None,
+            loc,
         },
     }
 }

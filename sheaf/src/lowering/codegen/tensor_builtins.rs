@@ -55,7 +55,7 @@ impl<'a> CodeGenerator<'a> {
     fn gen_zeros(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
         if matches!(&args[0], CompiledExpr::Vector(_) | CompiledExpr::Quoted(_)) {
             let shape = match &args[0] {
-                CompiledExpr::Vector(elems) => self.parse_shape_vec(elems)?,
+                CompiledExpr::Vector(elems) => self.parse_shape_vec("zeros", elems)?,
                 quoted => self.parse_static_shape_arg(quoted, "zeros")?,
             };
             let (reg, ty) = self.emitter.emit_zeros(&shape);
@@ -71,7 +71,7 @@ impl<'a> CodeGenerator<'a> {
     fn gen_ones(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
         if matches!(&args[0], CompiledExpr::Vector(_) | CompiledExpr::Quoted(_)) {
             let shape = match &args[0] {
-                CompiledExpr::Vector(elems) => self.parse_shape_vec(elems)?,
+                CompiledExpr::Vector(elems) => self.parse_shape_vec("ones", elems)?,
                 quoted => self.parse_static_shape_arg(quoted, "ones")?,
             };
             let (reg, ty) = self.emitter.emit_ones(&shape);
@@ -156,7 +156,7 @@ impl<'a> CodeGenerator<'a> {
                 location: crate::core::error::SourceLocation::unknown(),
             });
         };
-        let mut new_shape = self.parse_shape_vec(shape_elems)?;
+        let mut new_shape = self.parse_shape_vec("reshape", shape_elems)?;
         if let Some(neg_idx) = new_shape.iter().position(|&d| d < 0) {
             let input_size: i64 = operand_ty.shape().iter().product();
             let known_size: i64 = new_shape.iter().filter(|&&d| d > 0).product();
@@ -224,7 +224,7 @@ impl<'a> CodeGenerator<'a> {
     fn gen_broadcast(&mut self, args: &[CompiledExpr]) -> SheafResult<(Register, StableHLOType)> {
         let (operand_reg, operand_ty) = self.generate(&args[0])?;
         if let CompiledExpr::Vector(shape_elems) = &args[1] {
-            let target_shape = self.parse_shape_vec(shape_elems)?;
+            let target_shape = self.parse_shape_vec("broadcast", shape_elems)?;
             let target_ty = StableHLOType::tensor(
                 target_shape,
                 operand_ty.element_type().unwrap(),
@@ -784,7 +784,7 @@ impl<'a> CodeGenerator<'a> {
         &mut self, name: &str, args: &[CompiledExpr],
     ) -> SheafResult<(Register, StableHLOType, Vec<i64>)> {
         let shape = match &args[1] {
-            CompiledExpr::Vector(elements) => self.parse_shape_vec(elements)?,
+            CompiledExpr::Vector(elements) => self.parse_shape_vec(name, elements)?,
             CompiledExpr::Quoted(_) => self.parse_static_shape_arg(&args[1], name)?,
             _ => return Err(SheafError::Compile {
                 message: format!("{name} expects a vector shape argument"),

@@ -26,7 +26,7 @@ fn lower_inlined_gets_rec(
     reverse: &HashMap<(String, Vec<usize>), Vec<String>>,
 ) -> CompiledExpr {
     match expr {
-        CompiledExpr::FunctionCall { name, args, .. }
+        CompiledExpr::FunctionCall { name, args, loc }
             if (name == "get" || name == "get-in") && args.len() >= 2 =>
         {
             if let CompiledExpr::Symbol(alias) = &args[0]
@@ -127,7 +127,7 @@ fn lower_inlined_gets_rec(
             CompiledExpr::FunctionCall {
                 name: name.clone(),
                 args: resolved_args,
-                loc: None,
+                loc: loc.clone(),
             }
         }
         CompiledExpr::Let { bindings, body } => {
@@ -165,13 +165,13 @@ fn lower_inlined_gets_rec(
                 body: Box::new(lower_inlined_gets_rec(body, index_maps, aliases, reverse)),
             }
         }
-        CompiledExpr::FunctionCall { name, args, .. } => CompiledExpr::FunctionCall {
+        CompiledExpr::FunctionCall { name, args, loc } => CompiledExpr::FunctionCall {
             name: name.clone(),
             args: args
                 .iter()
                 .map(|a| lower_inlined_gets_rec(a, index_maps, aliases, reverse))
                 .collect(),
-            loc: None,
+            loc: loc.clone(),
         },
         CompiledExpr::Do(exprs) => CompiledExpr::Do(
             exprs

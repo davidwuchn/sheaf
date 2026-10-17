@@ -81,6 +81,36 @@ fn record(
     }
 }
 
+#[test]
+fn vag_shape_diagnostic_keeps_the_inlined_reshape_location() {
+    use sheaf_compiler::core::error::SheafError;
+    use sheaf_compiler::core::error_format::{format_error, register_source};
+
+    initialize_device();
+    let source = "(defn location-inner [x]\n  (sum\n    (reshape x [(/ 129 2)])))\n\
+        (defn location-outer [x]\n  (reduce (fn [acc item] (+ acc (location-inner item))) 0.0 [x]))\n\
+        ((value-and-grad (fn [p] (location-outer (get p :w)))) {:w (ones [64])})";
+    for shape in ["[(/ 129 2)]", "'[64.5]"] {
+        let source = source.replace("[(/ 129 2)]", shape);
+        register_source("<repl>", &source);
+        let error = Interpreter::new().eval(&source).unwrap_err();
+        let SheafError::InvalidShapeDimension { ref location, .. } = error else {
+            panic!("expected an invalid shape dimension: {error:?}");
+        };
+        assert_eq!(location.filename.as_ref(), "<repl>");
+        assert_eq!(location.line, 3);
+        assert_eq!(location.column, 5);
+        let formatted = format_error(&error);
+        assert!(formatted.contains("float (64.5)"), "{formatted}");
+        assert!(formatted.contains(&format!("(reshape x {shape})")), "{formatted}");
+        assert!(formatted.contains("Use // for integer division"), "{formatted}");
+        assert!(formatted.contains("^"), "{formatted}");
+        assert!(!formatted.contains("<unknown>"), "{formatted}");
+        assert!(!formatted.contains("This is a bug in Sheaf"), "{formatted}");
+        assert!(!formatted.contains("Quote"), "{formatted}");
+    }
+}
+
 fn initialize_device() {
     let device = std::env::var("SHEAF_SIGNATURE_DEVICE").unwrap_or_else(|_| "cpu".to_string());
     config::init(0, Some(device), false);

@@ -67,6 +67,11 @@ pub enum SheafError {
         message: String,
         location: SourceLocation,
     },
+    /// A shape argument has a non-integer source type.
+    InvalidShapeDimension {
+        message: String,
+        location: SourceLocation,
+    },
 }
 
 impl fmt::Display for SheafError {
@@ -80,7 +85,8 @@ impl fmt::Display for SheafError {
                 )
             }
             SheafError::Compile { message, location }
-            | SheafError::InvalidSourceForm { message, location } => {
+            | SheafError::InvalidSourceForm { message, location }
+            | SheafError::InvalidShapeDimension { message, location } => {
                 write!(
                     f,
                     "{}:{}: compile error: {}",
@@ -142,6 +148,10 @@ impl SheafError {
                 message,
                 location: loc.clone(),
             },
+            SheafError::InvalidShapeDimension { message, .. } => SheafError::InvalidShapeDimension {
+                message,
+                location: loc.clone(),
+            },
             SheafError::Runtime { message, .. } => SheafError::Runtime {
                 message,
                 location: Some(loc.clone()),
@@ -154,13 +164,31 @@ impl SheafError {
         }
     }
 
+    /// Keep the original location when an outer expression adds context.
+    pub fn with_fallback_location(self, loc: &SourceLocation) -> Self {
+        let existing = match &self {
+            SheafError::Compile { location, .. }
+            | SheafError::InvalidSourceForm { location, .. }
+            | SheafError::InvalidShapeDimension { location, .. } => Some(location),
+            SheafError::Runtime { location, .. }
+            | SheafError::AutodiffMissingRule { location, .. } => location.as_ref(),
+            _ => return self,
+        };
+        if existing.is_none_or(|location| location.line == 0) {
+            self.with_location(loc)
+        } else {
+            self
+        }
+    }
+
     /// Return just the message, without location or error-kind prefix.
     pub fn short_message(&self) -> Cow<'_, str> {
         match self {
             SheafError::Parse { message, .. }
             | SheafError::Compile { message, .. }
             | SheafError::Runtime { message, .. }
-            | SheafError::InvalidSourceForm { message, .. } => Cow::Borrowed(message),
+            | SheafError::InvalidSourceForm { message, .. }
+            | SheafError::InvalidShapeDimension { message, .. } => Cow::Borrowed(message),
             SheafError::AutodiffMissingRule { operation, .. } => Cow::Owned(format!(
                 "no differentiation rule for operation '{}'",
                 operation
@@ -184,6 +212,20 @@ mod tests {
     use super::{SheafError, SourceLocation};
     use crate::core::error_format::format_error;
     use std::rc::Rc;
+
+    #[test]
+    fn fallback_location_keeps_the_innermost_known_source() {
+        let inner = SourceLocation::new(3, 5, Rc::from("model.shf"));
+        let outer = SourceLocation::new(12, 1, Rc::from("train.shf"));
+        let error = SheafError::InvalidShapeDimension {
+            message: "reshape: invalid shape dimension".into(),
+            location: SourceLocation::unknown(),
+        }.with_fallback_location(&inner).with_fallback_location(&outer);
+        assert!(matches!(error, SheafError::InvalidShapeDimension { location, .. } if location == inner));
+        let error = SheafError::Runtime { message: "invalid argument".into(), location: None }
+            .with_fallback_location(&outer);
+        assert!(matches!(error, SheafError::Runtime { location: Some(location), .. } if location == outer));
+    }
 
     #[test]
     fn autodiff_missing_rule_preserves_its_diagnostic_contract() {
