@@ -111,6 +111,23 @@ fn vag_shape_diagnostic_keeps_the_inlined_reshape_location() {
     }
 }
 
+#[test]
+fn assoc_can_add_a_field_in_a_direct_vmfb() {
+    initialize_device();
+    let mut interpreter = interpreter_only();
+    for (name, body) in [
+        ("fusion_assoc", "(assoc state :loss (sum x))"),
+        ("fusion_assoc_order", "(assoc state :z x :a (sum x) :params (* 2 (get state :params)) :a (+ 1 (sum x)))"),
+        ("fusion_assoc_get", "(let [u (assoc state :loss (sum x))] (+ (get u :loss) (sum (get state :params))))"),
+    ] {
+        interpreter.eval(&format!("(defn {name} [state x] {body})")).unwrap();
+        let args = [interpreter.eval("{:params [1.0 2.0]}").unwrap(), interpreter.eval("[2.0 3.0]").unwrap()];
+        let expected = interpreter.eval(&format!("({name} {{:params [1.0 2.0]}} [2.0 3.0])")).unwrap();
+        let compiled = compile_call(&interpreter, name, &args).unwrap().execute(&args).unwrap();
+        compare_values(&compiled, &expected, "new assoc field/VMFB").unwrap();
+    }
+}
+
 fn initialize_device() {
     let device = std::env::var("SHEAF_SIGNATURE_DEVICE").unwrap_or_else(|_| "cpu".to_string());
     config::init(0, Some(device), false);

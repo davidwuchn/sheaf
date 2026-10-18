@@ -448,9 +448,9 @@ impl<'a> CodeGenerator<'a> {
             }
         };
         let layout_key = sym_name.clone().or_else(|| self.layout_key_map.get(&base_reg).cloned());
-        let layout = layout_key
-            .as_ref()
-            .and_then(|k| self.tuple_key_layouts.get(k).cloned());
+        let layout = keys.as_ref().map(|keys| keys.iter().enumerate()
+            .map(|(index, key)| (key.clone(), index)).collect())
+            .or_else(|| layout_key.as_ref().and_then(|k| self.tuple_key_layouts.get(k).cloned()));
         let layout = match layout {
             Some(l) => l,
             None => {
@@ -460,8 +460,15 @@ impl<'a> CodeGenerator<'a> {
                 })
             }
         };
-        let mut replacements: std::collections::HashMap<usize, (Register, StableHLOType)> =
-            std::collections::HashMap::new();
+        let mut fields = std::collections::BTreeMap::new();
+        for (key, index) in &layout {
+            let ty = elems.get(*index).ok_or_else(|| SheafError::Compile {
+                message: "assoc: tuple layout index out of bounds".to_string(),
+                location: crate::core::error::SourceLocation::unknown(),
+            })?;
+            let reg = self.emitter.emit_get_tuple_element(&base_reg, &base_ty, *index, ty);
+            fields.insert(key.clone(), (reg, ty.clone()));
+        }
         let mut i = 1;
         while i + 1 < args.len() {
             let key_name = match &args[i] {
@@ -473,35 +480,14 @@ impl<'a> CodeGenerator<'a> {
                     })
                 }
             };
-            let idx = match layout.get(&key_name) {
-                Some(&idx) => idx,
-                None => {
-                    return Err(SheafError::Compile {
-                        message: format!("assoc: unknown key {:?}", key_name),
-                        location: crate::core::error::SourceLocation::unknown(),
-                    })
-                }
-            };
             let (val_reg, val_ty) = self.generate(&args[i + 1])?;
-            replacements.insert(idx, (val_reg, val_ty));
+            fields.insert(key_name, (val_reg, val_ty));
             i += 2;
         }
-        let mut new_regs = Vec::new();
-        let mut new_tys = Vec::new();
-        for (j, elem_ty) in elems.iter().enumerate() {
-            if let Some((r, t)) = replacements.get(&j) {
-                new_regs.push(*r);
-                new_tys.push(t.clone());
-            } else {
-                let r = self.emitter.emit_get_tuple_element(
-                    &base_reg, &base_ty, j, elem_ty,
-                );
-                new_regs.push(r);
-                new_tys.push(elem_ty.clone());
-            }
-        }
+        let keys = fields.keys().cloned().collect();
+        let (new_regs, new_tys): (Vec<_>, Vec<_>) = fields.into_values().unzip();
         let (reg, _) = self.emitter.emit_tuple(&new_regs, &new_tys);
-        Ok((reg, StableHLOType::Tuple(new_tys, keys)))
+        Ok((reg, StableHLOType::Tuple(new_tys, Some(keys))))
     }
 
     fn gen_top_k(

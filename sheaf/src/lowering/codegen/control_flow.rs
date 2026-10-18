@@ -169,6 +169,9 @@ impl<'a> CodeGenerator<'a> {
                     result_tys.push(t);
                 }
                 let (reg, _) = self.emitter.emit_tuple_with_keys(&result_regs, &result_tys, keys);
+                if self.list_regs.contains(&tree_regs[0]) {
+                    self.list_regs.insert(reg);
+                }
                 Ok((reg, StableHLOType::Tuple(result_tys, keys.clone())))
             }
             _ => {
