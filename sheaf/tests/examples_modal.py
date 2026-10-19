@@ -177,6 +177,8 @@ def _image_local(binary_url: str) -> modal.Image:
                         remote_path=f"{REMOTE_TESTS_DIR}/examples-manifest.txt")
         .add_local_file(str(HERE / "examples-checks.shf"),
                         remote_path=f"{REMOTE_TESTS_DIR}/examples-checks.shf")
+        .add_local_file(str(HERE / "regressions.shf"),
+                        remote_path=f"{REMOTE_TESTS_DIR}/regressions.shf")
     )
 
 

@@ -125,28 +125,6 @@ validate_hydra () {
         || echo "FAIL: final loss $last_loss >= 0.01 (training did not converge)"
 }
 
-validate_clevr () {
-    local stdout="$1"
-    # Extract the "Accuracy: X/Y" line
-    local acc_line
-    acc_line="$(grep -E '^Accuracy: [0-9]+/[0-9]+ \(' "$stdout" | tail -n1)"
-    if [[ -z "$acc_line" ]]; then
-        echo "FAIL: no 'Accuracy: X/Y (...)' line"; return 0
-    fi
-    # Split out X and Y
-    local n total
-    n="$(echo "$acc_line" | sed -E 's/^Accuracy: ([0-9]+)\/([0-9]+).*/\1/')"
-    total="$(echo "$acc_line" | sed -E 's/^Accuracy: ([0-9]+)\/([0-9]+).*/\2/')"
-    # All 7 queries should pass
-    awk -v n="$n" -v total="$total" '
-        BEGIN {
-            if (n+0 != total+0) { print "FAIL: Accuracy " n "/" total; exit 1 }
-            if (total+0 < 7)    { print "FAIL: " total " queries reported, expected >= 7"; exit 1 }
-            print "PASS"
-        }
-    '
-}
-
 validate_nanoGPT_sample () {
     local stdout="$1" stderr="$2"
     if ! grep -q -- "Generating 500 tokens..." "$stdout"; then
@@ -212,6 +190,12 @@ run_example () {
         # Copy examples-checks.shf into the workdir so `(use examples-checks)`
         # resolves.
         cp "$CHECKS_FILE" "$workdir/"
+        if [[ "$validator" == "clevr" ]]; then
+            cp "$SCRIPT_DIR/regressions.shf" "$workdir/" || {
+                record_fail "could not copy shared CLEVR regression"
+                return
+            }
+        fi
 
         # Copy inputs (comma list of relative paths under examples/<group>/).
         if [[ -n "$inputs" && "$inputs" != "none" ]]; then
@@ -263,9 +247,17 @@ run_example () {
         sheaf_args+=(-v)
     fi
 
+    local -a program_args=("$entry")
+    if [[ "$validator" == "clevr" ]]; then
+        log_info "  using the shared deterministic CLEVR regression"
+        program_args=(-c '(use data) (use model) (use regressions)
+            (check-clevr-params (io "load" "params.pkl"))
+            (print "CLEVR regression passed")')
+    fi
+
     local exit_code
     ( cd "$workdir" && timeout --foreground "$timeout" \
-        "$SHEAF_BIN" "${sheaf_args[@]}" "$entry" \
+        "$SHEAF_BIN" "${sheaf_args[@]}" "${program_args[@]}" \
             >"$stdout_log" 2>"$stderr_log" ) ; exit_code=$?
 
     if [[ $exit_code -eq 124 ]]; then
@@ -298,7 +290,11 @@ run_example () {
         hydra)
             val_out="$(validate_hydra "$stdout_log")" ;;
         clevr)
-            val_out="$(validate_clevr "$stdout_log")" ;;
+            if grep -qx 'CLEVR regression passed' "$stdout_log"; then
+                val_out="PASS"
+            else
+                val_out="FAIL: shared CLEVR regression did not finish"
+            fi ;;
         nanoGPT-sample)
             val_out="$(validate_nanoGPT_sample "$stdout_log" "$stderr_log")" ;;
         nanoGPT-train)
@@ -419,6 +415,11 @@ while IFS= read -r group; do
         pass_count=$((pass_count + 1))
     else
         log_fail "$group/$entry" "$LAST_STATUS"
+        for failure_log in "$ROOT_LOG/${group}_$(basename "$entry" .shf)".*; do
+            [[ -f "$failure_log" ]] || continue
+            printf '\n--- %s ---\n' "$(basename "$failure_log")" >&2
+            tail -n 200 "$failure_log" >&2
+        done
         fail_count=$((fail_count + 1))
         fails+=("$group/$entry: $LAST_STATUS")
     fi
